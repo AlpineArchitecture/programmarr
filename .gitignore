@@ -1,0 +1,8 @@
+config.json
+*.csv
+backup_*.json
+__pycache__/
+*.pyc
+_archive/
+.claude/
+generate_ai.py

@@ -1,0 +1,5 @@
+{
+    "tunarr_url": "http://your-tunarr-server:8000",
+    "plex_url": "http://your-plex-server:32400",
+    "plex_token": "your-plex-token-here"
+}

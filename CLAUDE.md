@@ -1,0 +1,116 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code when working with this repository.
+
+## What This Is
+
+A Python 3 CLI pipeline that exports a Plex library, feeds it to an LLM for channel curation, and creates themed virtual TV channels in [Tunarr](https://github.com/chrisbenincasa/tunarr).
+
+## Workflow
+
+```
+export.py  →  LLM (Gemini/Claude/ChatGPT)  →  create.py
+               or
+export.py  →  generate_no_ai.py  →  create.py
+```
+
+## Running the Scripts
+
+```powershell
+# Step 1 — export Plex library to CSV
+python export.py
+
+# Step 2a — AI path: paste plex_library.csv + PROMPT.md into any LLM, save output as channels.json
+# Step 2b — no-AI path: auto-generate starter channels.json from metadata
+python generate_no_ai.py
+
+# Step 3 — create channels in Tunarr
+python create.py --probe    # dry run first
+python create.py            # apply
+```
+
+## Configuration
+
+All config lives in `config.json` (gitignored — never hardcode credentials):
+
+```json
+{
+    "tunarr_url": "http://your-tunarr:8000",
+    "plex_url":   "http://your-plex:32400",
+    "plex_token": "your-token"
+}
+```
+
+See `config.json.example` for the template.
+
+## Architecture
+
+**`export.py`**
+- Fetches full metadata directly from Plex API (`/library/sections/{key}/all`)
+- Fields: title, year, contentRating, genres, directors, season/episode counts
+- Cross-references against Tunarr to flag unsynced content
+- Output: `plex_library.csv`
+
+**`generate_no_ai.py`** (Option B — no AI required)
+- Reads `plex_library.csv`
+- Auto-generates decade channels (year filtering) and genre channels (genre tag matching)
+- Auto-generates TV marathon channels for shows with 50+ episodes
+- Writes placeholder entries for franchise/themed channels (user fills manually)
+- Output: `channels.json`
+
+**`create.py`**
+- Reads `channels.json`
+- Indexes Tunarr library (exact title matching, case-insensitive)
+- Deletes all existing channels, creates new ones
+- Builds Tunarr random-schedule payloads (30-day rolling window — channels loop forever, no dead air)
+- Output: channels live in Tunarr
+
+## Channel Numbering Scheme
+
+| Block  | Range | Content |
+|--------|-------|---------|
+| TV Marathons | 10–19 | 24/7 single-show loops (50+ episodes) |
+| TV Blocks    | 20–29 | Themed multi-show rotations |
+| Movies       | 30–49 | Genre and decade channels |
+| Franchise    | 50–69 | Ordered series (MCU, Batman, etc.) |
+| Specialty    | 70–79 | Single-movie loops, holiday, niche |
+
+## channels.json Schema
+
+```json
+{
+  "channels": [
+    {
+      "number": 10,
+      "name": "Channel Name",
+      "shuffle": "ordered",
+      "content": ["Exact Title From Plex"]
+    }
+  ],
+  "orphaned": [],
+  "suggested_channels": []
+}
+```
+
+**shuffle values:** `ordered` | `shuffle` | `block`
+
+Content titles must match Plex library names exactly (case-insensitive).
+A title can appear on multiple channels — this is intentional and expected.
+
+## Tunarr API Endpoints Used
+
+- `GET /api/media-sources` — discover Plex source and library IDs
+- `GET /api/media-libraries/{id}/programs` — all episodes/movies in a library
+- `GET /api/transcode_configs` — fetch transcode config ID at runtime
+- `GET /api/channels` — list existing channels
+- `POST /api/channels` — create channel
+- `DELETE /api/channels/{id}` — delete channel
+- `POST /api/channels/{id}/programming` — set rolling schedule (body: `{"type":"random","programs":[...],"schedule":{...}}`; schedule requires `padStyle` and `randomDistribution` as of current Tunarr version)
+
+## Plex API Endpoints Used
+
+- `GET /library/sections` — discover library section keys
+- `GET /library/sections/{key}/all?type=1` — all movies with full metadata
+- `GET /library/sections/{key}/all?type=2` — all TV shows with full metadata
+
+No dependencies beyond the Python standard library.

@@ -1,0 +1,158 @@
+# ChannelMaker
+
+A Python 3 CLI pipeline that turns your Plex library into themed virtual TV channels in [Tunarr](https://github.com/chrisbenincasa/tunarr). Channels loop forever with no dead air — no manual scheduling, no massive static playlists.
+
+Two paths: feed your library to an LLM and let it curate smart channels, or use the no-AI generator to auto-create decade/genre channels from metadata.
+
+## Requirements
+
+- Python 3.8+ (standard library only — no pip installs)
+- [Tunarr](https://github.com/chrisbenincasa/tunarr) running with Plex connected
+- A Plex token (see [Finding your Plex token](#finding-your-plex-token))
+
+## Setup
+
+Copy `config.json.example` to `config.json` and fill in your values:
+
+```json
+{
+    "tunarr_url": "http://your-tunarr-server:8000",
+    "plex_url":   "http://your-plex-server:32400",
+    "plex_token": "your-plex-token"
+}
+```
+
+`config.json` is gitignored — your credentials never leave your machine.
+
+### Finding your Plex token
+
+Open Plex Web, press F12 to open DevTools, go to the Network tab, click any library item, and look for requests to your Plex server URL — the token is in the query string as `X-Plex-Token=...`.
+
+---
+
+## Workflow
+
+```
+export.py  →  LLM (Gemini / Claude / ChatGPT)  →  create.py
+               or
+export.py  →  generate_no_ai.py                →  create.py
+```
+
+### Step 1 — Export your library
+
+```
+python export.py
+```
+
+Queries Plex directly for full metadata and writes `plex_library.csv`:
+
+| Column | Description |
+|--------|-------------|
+| Title | Exact title as it appears in Plex |
+| Year | Release year |
+| Type | Movie or TV |
+| Rating | Content rating (PG, R, TV-MA, etc.) |
+| Genres | Pipe-separated genre tags |
+| Director | Director(s) — movies only |
+| Seasons | Season count — TV only |
+| Episodes | Episode count — TV only |
+| InTunarr | Yes/No — whether Tunarr has this synced |
+
+### Step 2A — AI path (recommended)
+
+Open `PROMPT.md`, set `{TARGET}` to your desired channel count (e.g. `30`), then paste the full prompt **plus** the contents of `plex_library.csv` into any LLM — Gemini, Claude, or ChatGPT all work well.
+
+Save the JSON output as `channels.json`.
+
+The AI will:
+- Create themed channels using only titles that exist in your library
+- Allow the same title on multiple channels (a movie can be on both "80s Movies" and "Action Movies")
+- Suggest channels for content that didn't fit elsewhere
+- Flag orphaned titles it couldn't place
+
+### Step 2B — No-AI path
+
+```
+python generate_no_ai.py
+```
+
+Auto-generates `channels.json` with:
+- Decade channels (80s, 90s, 2000s, etc.) from year metadata
+- Genre channels (Action, Comedy, Horror, etc.) from genre tags
+- TV marathon channels for shows with 50+ episodes
+- Placeholder entries for franchise/themed channels — edit `content` lists manually
+
+### Step 3 — Create channels in Tunarr
+
+Always probe first:
+
+```
+python create.py --probe    # dry run — shows what would be created
+python create.py            # delete existing channels, create all new ones
+```
+
+---
+
+## Channel Numbering Scheme
+
+| Block | Range | Content |
+|-------|-------|---------|
+| TV Marathons | 10–19 | 24/7 single-show loops (50+ episodes) |
+| TV Blocks | 20–29 | Themed multi-show rotations |
+| Movies | 30–49 | Genre and decade channels |
+| Franchise | 50–69 | Ordered series (MCU, Batman, etc.) |
+| Specialty | 70–79 | Single-movie loops, holiday, niche |
+
+---
+
+## channels.json Format
+
+```json
+{
+  "channels": [
+    {
+      "number": 10,
+      "name": "My Show 24/7",
+      "shuffle": "ordered",
+      "content": ["Exact Title From Plex"]
+    }
+  ],
+  "orphaned": [],
+  "suggested_channels": []
+}
+```
+
+**`shuffle` values:**
+
+| Value | Behavior | Best for |
+|-------|----------|----------|
+| `ordered` | Plays in order, loops | Franchises, sequential series |
+| `shuffle` | Random rotation | Genre pools, decade channels |
+| `block` | Round-robin between shows | TV blocks (TGIF, Saturday Morning, etc.) |
+
+Content titles must match Plex library names exactly (case-insensitive). A title can appear on multiple channels — this is intentional.
+
+---
+
+## All Flags
+
+```
+export.py
+  --out FILE          Output CSV path (default: plex_library.csv)
+  --no-crossref       Skip Tunarr sync check
+
+generate_no_ai.py
+  --csv FILE          Input CSV path (default: plex_library.csv)
+  --out FILE          Output JSON path (default: channels.json)
+
+create.py
+  --json FILE         Input channels file (default: channels.json)
+  --probe             Dry run — show what would be created, no changes
+  --no-delete         Create channels without deleting existing ones
+```
+
+---
+
+## How the Endless Loop Works
+
+Tunarr's random schedule type generates a 30-day rolling programming window that rebuilds continuously. There are no static playlists — the channel always has content queued and never goes dark. The `maxDays: 30` window means Tunarr is always planning 30 days ahead, so channels loop smoothly forever.
