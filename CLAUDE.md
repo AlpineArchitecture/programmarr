@@ -65,6 +65,13 @@ See `config.json.example` for the template.
 - Builds Tunarr random-schedule payloads (30-day rolling window — channels loop forever, no dead air)
 - Output: channels live in Tunarr
 
+**`sync_plex.py`**
+- Compares Tunarr's XMLTV channel list against Plex's DVR channel mappings
+- Attempts a soft update (PUT to device endpoint) to add missing channels
+- Verifies the update actually took effect by re-fetching Plex state
+- If auto-sync fails or no DVR is configured, prints the XMLTV URL and manual setup steps
+- Never deletes the Plex DVR — read-then-update only
+
 ## Channel Numbering Scheme
 
 | Block  | Range | Content |

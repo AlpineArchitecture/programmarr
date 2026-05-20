@@ -134,6 +134,20 @@ Content titles must match Plex library names exactly (case-insensitive). A title
 
 ---
 
+## Syncing Channels to Plex
+
+After running `create.py`, Plex may not know about new or changed channels. Run:
+
+```
+python sync_plex.py
+```
+
+This checks what channels Tunarr has vs what Plex has mapped, then attempts to add missing ones automatically. If the auto-sync isn't supported by your Plex version, it prints your XMLTV guide URL and step-by-step manual setup instructions — the URL is the key piece you need for the Plex DVR wizard.
+
+The script never deletes your Plex DVR setup.
+
+---
+
 ## All Flags
 
 ```
@@ -149,6 +163,9 @@ create.py
   --json FILE         Input channels file (default: channels.json)
   --probe             Dry run — show what would be created, no changes
   --no-delete         Create channels without deleting existing ones
+
+sync_plex.py
+  --probe             Show mapping state only, no changes
 ```
 
 ---
