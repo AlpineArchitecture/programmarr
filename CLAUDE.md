@@ -37,9 +37,12 @@ All config lives in `config.json` (gitignored — never hardcode credentials):
 {
     "tunarr_url": "http://your-tunarr:8000",
     "plex_url":   "http://your-plex:32400",
-    "plex_token": "your-token"
+    "plex_token": "your-token",
+    "tmdb_api_key": "your-tmdb-key"
 }
 ```
+
+`tmdb_api_key` is optional — only required for `fetch_images.py`. Get a free key at https://www.themoviedb.org/settings/api
 
 See `config.json.example` for the template.
 
@@ -64,6 +67,16 @@ See `config.json.example` for the template.
 - Deletes all existing channels, creates new ones
 - Builds Tunarr random-schedule payloads (30-day rolling window — channels loop forever, no dead air)
 - Output: channels live in Tunarr
+
+**`fetch_images.py`**
+- Reads `channels.json`, finds channels with exactly one content item (solo TV show or solo movie)
+- Searches TMDB for the title (TV first, then movie), picks the best English clearlogo by vote score
+- Updates the Tunarr channel via `PUT /api/channels/{id}` with `icon.path` set to the TMDB image URL
+- Tunarr then serves that URL in its XMLTV output, so Plex displays the real show/movie logo in the guide
+- Multi-title channels (genre blocks, decade collections, themed rotations) are skipped — handle separately
+- Default is dry run; use `--apply` to commit changes
+- Flags: `--apply`, `--channel <number>`, `--clear` (removes all custom icons)
+- Requires `tmdb_api_key` in `config.json`
 
 **`sync_plex.py`**
 - Compares Tunarr's XMLTV channel list against Plex's DVR channel mappings
@@ -113,6 +126,15 @@ A title can appear on multiple channels — this is intentional and expected.
 - `POST /api/channels` — create channel
 - `DELETE /api/channels/{id}` — delete channel
 - `POST /api/channels/{id}/programming` — set rolling schedule (body: `{"type":"random","programs":[...],"schedule":{...}}`; schedule requires `padStyle` and `randomDistribution` as of current Tunarr version)
+- `PUT /api/channels/{id}` — update channel settings (used by `fetch_images.py` to set `icon.path`)
+
+## TMDB API Endpoints Used
+
+- `GET /3/search/tv?query=...` — search for TV show by title
+- `GET /3/search/movie?query=...` — search for movie by title
+- `GET /3/tv/{id}/images?include_image_language=en,null` — fetch logo images for a TV show
+- `GET /3/movie/{id}/images?include_image_language=en,null` — fetch logo images for a movie
+- Images served from `https://image.tmdb.org/t/p/original/{file_path}`
 
 ## Plex API Endpoints Used
 
@@ -124,14 +146,14 @@ No dependencies beyond the Python standard library.
 
 ## Known Limitations
 
-### Plex Live TV Guide — Channel Names Not Displaying
-Channel names do not appear as text in Plex's Live TV guide channel column. This is **not a bug in ChannelMaker** — do not waste time debugging it.
+### Plex Live TV Guide — Channel Names Not Displaying as Text
+Channel names do not appear as text in Plex's Live TV guide channel column — only the channel icon image is shown. This is **not a bug in ChannelMaker**.
 
-**Root cause:** Tunarr injects its default `tunarr.png` icon into every channel's XMLTV `<channel>` entry. When Plex receives a channel with a custom icon, it renders only the icon in the guide's left column and suppresses any text label entirely. Since all channels share the same generic icon, the guide shows a wall of identical color-bar icons with no names.
+**Root cause:** When Plex receives a channel with any icon in the XMLTV feed, it renders only the icon in the guide's left column and suppresses the text label entirely. Tunarr injects its default `tunarr.png` for every channel, so without custom icons the guide shows a wall of identical color-bar icons with no names.
 
-**What doesn't fix it:** Refreshing the Plex guide, restarting Plex, updating `startTime`, tweaking channel settings.
+**Current state (after `fetch_images.py`):** Solo-title channels (TV marathons ch 10–19, single-movie specialty channels) now display their real TMDB clearlogo in the guide instead of the generic Tunarr icon. Multi-title channels (genre/decade/themed blocks) still show the Tunarr default until a logo strategy is implemented for them.
 
-**What would fix it:** Either (a) a Tunarr option to suppress the default icon in XMLTV output when no custom artwork is set (file a Tunarr feature request), or (b) use an IPTV client other than Plex that treats icons as decoration rather than the sole channel identifier (e.g., Jellyfin, Emby, Channels DVR, TiviMate).
+**What doesn't fix the text-label issue:** Refreshing the Plex guide, restarting Plex, updating `startTime`, tweaking channel settings. The text suppression is a Plex design decision when any icon is present.
 
 **The `startTime` fix (commit c9d52d6):** Channels were being created with `startTime=0` (Unix epoch / Dec 31 1969). This was a real bug — Plex's guide rendered nothing at all in the channel slot until a guide refresh — but fixing it does not make channel names appear. The names issue is a separate Plex design limitation.
 
