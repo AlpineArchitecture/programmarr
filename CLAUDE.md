@@ -122,6 +122,19 @@ A title can appear on multiple channels — this is intentional and expected.
 
 No dependencies beyond the Python standard library.
 
+## Known Limitations
+
+### Plex Live TV Guide — Channel Names Not Displaying
+Channel names do not appear as text in Plex's Live TV guide channel column. This is **not a bug in ChannelMaker** — do not waste time debugging it.
+
+**Root cause:** Tunarr injects its default `tunarr.png` icon into every channel's XMLTV `<channel>` entry. When Plex receives a channel with a custom icon, it renders only the icon in the guide's left column and suppresses any text label entirely. Since all channels share the same generic icon, the guide shows a wall of identical color-bar icons with no names.
+
+**What doesn't fix it:** Refreshing the Plex guide, restarting Plex, updating `startTime`, tweaking channel settings.
+
+**What would fix it:** Either (a) a Tunarr option to suppress the default icon in XMLTV output when no custom artwork is set (file a Tunarr feature request), or (b) use an IPTV client other than Plex that treats icons as decoration rather than the sole channel identifier (e.g., Jellyfin, Emby, Channels DVR, TiviMate).
+
+**The `startTime` fix (commit c9d52d6):** Channels were being created with `startTime=0` (Unix epoch / Dec 31 1969). This was a real bug — Plex's guide rendered nothing at all in the channel slot until a guide refresh — but fixing it does not make channel names appear. The names issue is a separate Plex design limitation.
+
 ## Git Workflow
 
 - Commit messages must be verbose and descriptive — explain what changed and why, not just "fix bug" or "update script".
