@@ -6,3 +6,4 @@ __pycache__/
 _archive/
 .claude/
 generate_ai.py
+PROMPT.personal.md

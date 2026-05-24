@@ -20,9 +20,9 @@ You are a TV channel programmer. I have a self-hosted media server with the libr
 
 Assign channel numbers following this cable TV block structure:
 - **10–19**: TV Marathons — 24/7 single-show loops (needs 50+ episodes to qualify)
-- **20–29**: TV Blocks — themed multi-show rotations (TGIF, Saturday Morning Cartoons, etc.)
+- **20–29**: TV Blocks — themed multi-show rotations (era blocks, genre blocks, etc.)
 - **30–49**: Movie Channels — genre and decade-based pools
-- **50–69**: Franchise & Curated Series — ordered collections (MCU in release order, etc.)
+- **50–69**: Franchise & Curated Series — ordered collections (film series in release order, etc.)
 - **70–79**: Specialty — single-movie loops, holiday, niche themes
 
 Keep numbers sequential within each block. Leave gaps for future additions.
@@ -66,16 +66,6 @@ Output ONLY valid JSON in exactly this schema. No markdown fences, no commentary
   ]
 }
 ```
-
-## My Channel Ideas (use as a starting point, modify freely)
-
-Here are channels I want. Fill them with matching titles from the CSV, reorder them, split or merge them as needed:
-
-- **TV Marathons (10s)**: King of the Hill 24/7, New Girl 24/7, Fresh Prince of Bel-Air 24/7, Superstore 24/7, Roseanne 24/7, Justified 24/7
-- **TV Blocks (20s)**: TGIF (90s family/sitcom block), Saturday Morning Cartoons (animated series block), Batman Animated TV block
-- **Movie Channels (30s)**: Comedy Movies, Action Movies, 80s Movies, 80s Action, 80s Comedy, 90s Movies, 90s Action, 90s Comedy, 2000s Movies, 2000s Action, 2000s Comedy, 2010s Movies, 2010s Action, 2010s Comedy, 2020s Movies, 2020s Action, 2020s Comedy
-- **Franchise (50s)**: Marvel MCU (in release order), Batman Live Action Movies (in order), Batman Animated Movies (in order), The Matrix Quad (in order), Kevin Smith View Askewniverse (in order), Bad Boys Movies (in order), Deadpool Movies (in order), Adam Sandler Movies
-- **Specialty (70s)**: Hackers 24/7 (single movie loop — the 1995 film), Holiday Cheer (Christmas movies)
 
 ## The Library
 
