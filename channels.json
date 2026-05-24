@@ -3127,42 +3127,192 @@
     },
     {
       "number": 80,
-      "name": "IMDb Top 250",
+      "name": "Marvel Cinematic Universe",
       "shuffle": "shuffle",
       "content": [
-        {"collection": "IMDb Top 250"}
+        {
+          "collection": "Marvel Cinematic Universe"
+        }
       ]
     },
     {
       "number": 81,
-      "name": "DC Universe",
+      "name": "The Matrix Quad",
       "shuffle": "shuffle",
       "content": [
-        {"collection": "Trakt DC Movies"}
+        {
+          "collection": "The Matrix Quad"
+        }
       ]
     },
     {
       "number": 82,
-      "name": "Critically Acclaimed",
+      "name": "Bad Boys Franchise",
       "shuffle": "shuffle",
       "content": [
-        {"collection": "TMDb High-Rated Popular"}
+        {
+          "collection": "Bad Boys Franchise"
+        }
       ]
     },
     {
       "number": 83,
-      "name": "So Bad It's Good",
+      "name": "Deadpool Franchise",
       "shuffle": "shuffle",
       "content": [
-        {"collection": "IMDb Lowest Rated"}
+        {
+          "collection": "Deadpool Franchise"
+        }
       ]
     },
     {
       "number": 84,
-      "name": "Recently Added",
+      "name": "Adam Sandler Spotlight",
       "shuffle": "shuffle",
       "content": [
-        {"collection": "Old Movies Just Added"}
+        {
+          "collection": "Adam Sandler Spotlight"
+        }
+      ]
+    },
+    {
+      "number": 85,
+      "name": "View Askewniverse",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "View Askewniverse"
+        }
+      ]
+    },
+    {
+      "number": 86,
+      "name": "90s Movies",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "90s Movies"
+        }
+      ]
+    },
+    {
+      "number": 87,
+      "name": "90s Comedy",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "90s Comedy"
+        }
+      ]
+    },
+    {
+      "number": 88,
+      "name": "New Movie Releases",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "New Movie Releases"
+        }
+      ]
+    },
+    {
+      "number": 89,
+      "name": "90s Action",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "90s Action"
+        }
+      ]
+    },
+    {
+      "number": 90,
+      "name": "Old Movies Just Added",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "Old Movies Just Added"
+        }
+      ]
+    },
+    {
+      "number": 91,
+      "name": "Newly Released",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "Newly Released"
+        }
+      ]
+    },
+    {
+      "number": 92,
+      "name": "IMDb Lowest Rated",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "IMDb Lowest Rated"
+        }
+      ]
+    },
+    {
+      "number": 93,
+      "name": "IMDb Popular",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "IMDb Popular"
+        }
+      ]
+    },
+    {
+      "number": 94,
+      "name": "IMDb Top 250",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "IMDb Top 250"
+        }
+      ]
+    },
+    {
+      "number": 95,
+      "name": "TMDb High-Rated Popular",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "TMDb High-Rated Popular"
+        }
+      ]
+    },
+    {
+      "number": 96,
+      "name": "Trakt DC Movies",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "Trakt DC Movies"
+        }
+      ]
+    },
+    {
+      "number": 97,
+      "name": "TGIF Nostalgia",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "TGIF Nostalgia"
+        }
+      ]
+    },
+    {
+      "number": 98,
+      "name": "Batman Animated TV",
+      "shuffle": "shuffle",
+      "content": [
+        {
+          "collection": "Batman Animated TV"
+        }
       ]
     }
   ],

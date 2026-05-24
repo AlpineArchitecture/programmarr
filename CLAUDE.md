@@ -14,6 +14,13 @@ export.py  →  LLM (Gemini/Claude/ChatGPT)  →  create.py
 export.py  →  generate_no_ai.py  →  create.py
 ```
 
+Plex collections (managed by Kometa/Trakt/Letterboxd) can be turned into
+channels directly without the export/LLM step:
+
+```
+generate_from_collections.py --apply  →  create.py
+```
+
 ## Running the Scripts
 
 ```powershell
@@ -23,6 +30,13 @@ python export.py
 # Step 2a — AI path: paste plex_library.csv + PROMPT.md into any LLM, save output as channels.json
 # Step 2b — no-AI path: auto-generate starter channels.json from metadata
 python generate_no_ai.py
+
+# Step 2c — collection path: generate one channel per Plex collection (80+ block)
+python generate_from_collections.py              # preview
+python generate_from_collections.py --apply      # write to channels.json
+python generate_from_collections.py --condense   # skip collections matching existing channel names
+python generate_from_collections.py --min-items 5  # skip tiny collections
+python generate_from_collections.py --base 90    # start at channel 90 instead of 80
 
 # Step 3 — create channels in Tunarr
 python create.py --probe    # dry run first
@@ -60,6 +74,14 @@ See `config.json.example` for the template.
 - Auto-generates TV marathon channels for shows with 50+ episodes
 - Writes placeholder entries for franchise/themed channels (user fills manually)
 - Output: `channels.json`
+
+**`generate_from_collections.py`** (Option C — Plex collections as channels)
+- Fetches all Plex collections via the Plex API
+- Generates one channel per collection using `{"collection": "Name"}` syntax
+- Manages the collection block (default ch 80+): keeps all channels below `--base`, fully regenerates from `--base` upward
+- Collections with the same name in multiple Plex sections are deduplicated (first section wins)
+- Flags: `--apply`, `--base N`, `--condense` (skip collections matching existing channel names), `--min-items N`
+- Re-run any time Kometa adds/removes collections to keep the block in sync
 
 **`create.py`**
 - Reads `channels.json`
