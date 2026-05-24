@@ -92,7 +92,7 @@ Queries Plex directly for full metadata and writes `plex_library.csv`:
 
 ### Step 2A — AI path (recommended)
 
-If you're using `channelmaker.py` (recommended), the AI path handles this for you — it asks a few questions about your preferences and writes a ready-to-copy `prompt_for_llm.md` with everything filled in.
+If you're using `channelmaker.py` (recommended), the AI path copies `PROMPT.md` to `prompt_for_llm.md` — a ready-to-paste file for your LLM.
 
 If running manually: open `PROMPT.md`, set `{TARGET}` to your desired channel count, then send it to any LLM (Claude Opus, Gemini Pro, GPT-4o) along with `plex_library.csv` — either as a file attachment or pasted inline.
 
