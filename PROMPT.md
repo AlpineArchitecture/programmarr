@@ -1,7 +1,25 @@
 # ChannelMaker — LLM Prompt
 
-Copy everything below the line and paste it into your LLM (Gemini, Claude, ChatGPT, etc.)
-followed by the full contents of `plex_library.csv`.
+Copy everything below the line and paste it into your LLM (Gemini, Claude, ChatGPT, etc.).
+
+**Model recommendation:** Use the largest, most capable model available — Claude Opus,
+Gemini Pro/Ultra, GPT-4o, etc. Speed-optimized models (Flash, Mini, Lite variants)
+tend to hit output limits or produce incomplete results on a task this large. This is
+one of those cases where the bigger model is worth it.
+
+**Set {TARGET} before you paste.** Replace `{TARGET}` in the Rules section below with
+your desired channel count (e.g. `40`). Too low and the LLM underfills the number
+blocks; too high and it pads with thin channels. A good rule of thumb: ~1 channel per
+15–20 titles in your library.
+
+**Option A — File attachment (recommended if your LLM supports it):**
+Paste the prompt, then attach `plex_library.csv` as a file. The LLM reads the
+CSV as structured data rather than raw text, which produces more accurate results
+and uses the context window more efficiently.
+
+**Option B — Single paste (works everywhere):**
+Paste the prompt, then paste the full contents of `plex_library.csv` directly
+after it. Works with any LLM or interface that doesn't support file uploads.
 
 ---
 
@@ -69,4 +87,5 @@ Output ONLY valid JSON in exactly this schema. No markdown fences, no commentary
 
 ## The Library
 
-(Paste the full contents of plex_library.csv here)
+(Option A: attach plex_library.csv as a file and delete this section)
+(Option B: paste the full contents of plex_library.csv here)

@@ -147,11 +147,19 @@ def workflow_ai():
 
   1. Open {CYAN}{prompt_path}{RESET}
      Set {{TARGET}} to your desired channel count, then copy the full prompt.
+     Tip: aim for ~1 channel per 15-20 titles in your library.
 
-  2. Open {CYAN}{csv_path}{RESET}
-     Copy the entire contents and append it after the prompt.
+  2. Use the largest model available - Claude Opus, Gemini Pro/Ultra, GPT-4o.
+     Speed-optimized models (Flash, Mini, Lite) tend to produce incomplete results
+     on a task this size.
 
-  3. Paste into any LLM - Claude, Gemini, ChatGPT, etc.
+  3. Send using one of:
+
+     {BOLD}Option A (recommended):{RESET} attach {CYAN}{csv_path}{RESET} as a file.
+     The LLM reads it as structured data - more accurate, uses less context.
+
+     {BOLD}Option B (works everywhere):{RESET} paste the full contents of the CSV
+     directly after the prompt.
 
   4. Save the JSON output as:
      {CYAN}{channels_path}{RESET}
