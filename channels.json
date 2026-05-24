@@ -3124,6 +3124,46 @@
         "Trevor Noah: Son of Patricia",
         "Andrew Santino: Home Field Advantage"
       ]
+    },
+    {
+      "number": 80,
+      "name": "IMDb Top 250",
+      "shuffle": "shuffle",
+      "content": [
+        {"collection": "IMDb Top 250"}
+      ]
+    },
+    {
+      "number": 81,
+      "name": "DC Universe",
+      "shuffle": "shuffle",
+      "content": [
+        {"collection": "Trakt DC Movies"}
+      ]
+    },
+    {
+      "number": 82,
+      "name": "Critically Acclaimed",
+      "shuffle": "shuffle",
+      "content": [
+        {"collection": "TMDb High-Rated Popular"}
+      ]
+    },
+    {
+      "number": 83,
+      "name": "So Bad It's Good",
+      "shuffle": "shuffle",
+      "content": [
+        {"collection": "IMDb Lowest Rated"}
+      ]
+    },
+    {
+      "number": 84,
+      "name": "Recently Added",
+      "shuffle": "shuffle",
+      "content": [
+        {"collection": "Old Movies Just Added"}
+      ]
     }
   ],
   "orphaned": [

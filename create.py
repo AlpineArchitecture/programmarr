@@ -42,7 +42,22 @@ def load_config():
         sys.exit(1)
 
 
-# ── HTTP helper ────────────────────────────────────────────────────────────────
+# ── HTTP helpers ───────────────────────────────────────────────────────────────
+
+def plex_get(base_url, token, path, timeout=60):
+    sep = "&" if "?" in path else "?"
+    url = base_url + path + sep + f"X-Plex-Token={token}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        print(f"  ! Plex HTTP {e.code} [{path[:60]}]")
+        return None
+    except Exception as e:
+        print(f"  ! Plex error [{path[:60]}]: {e}")
+        return None
+
 
 def api(tunarr_url, method, path, body=None, timeout=60):
     url = tunarr_url + path
@@ -129,6 +144,50 @@ def resolve_title(title, movie_map, show_map):
         s = show_map[key]
         return {"type": "TV", "title": s["title"], "showId": s["showId"], "programs": s["programs"]}
     return None
+
+
+# ── Plex collection resolution ─────────────────────────────────────────────────
+
+def get_plex_sections(plex_url, token):
+    data = plex_get(plex_url, token, "/library/sections")
+    if not data:
+        return []
+    return data["MediaContainer"].get("Directory", [])
+
+
+def resolve_collection(plex_url, token, name, sections, cache):
+    """Return a list of titles from a named Plex collection (cached)."""
+    key = name.lower().strip()
+    if key in cache:
+        return cache[key]
+
+    titles = []
+    for section in sections:
+        section_key = section.get("key")
+        data = plex_get(plex_url, token, f"/library/sections/{section_key}/collections")
+        if not data:
+            continue
+        collections = data["MediaContainer"].get("Metadata", [])
+        match = next((c for c in collections if c.get("title", "").lower().strip() == key), None)
+        if match:
+            rating_key = match["ratingKey"]
+            # Some Plex collection types (e.g. Kometa smart collections) return
+            # size=0 from /library/metadata/{id}/children but work correctly via
+            # /library/collections/{id}/children — try collections endpoint first.
+            for children_path in (
+                f"/library/collections/{rating_key}/children",
+                f"/library/metadata/{rating_key}/children",
+            ):
+                items_data = plex_get(plex_url, token, children_path)
+                if items_data:
+                    items = items_data["MediaContainer"].get("Metadata", [])
+                    titles = [item["title"] for item in items if item.get("title")]
+                    if titles:
+                        break
+            break
+
+    cache[key] = titles
+    return titles
 
 
 # ── Schedule builder ───────────────────────────────────────────────────────────
@@ -259,6 +318,8 @@ def main():
 
     cfg = load_config()
     tunarr_url = cfg["tunarr_url"].rstrip("/")
+    plex_url = cfg.get("plex_url", "").rstrip("/")
+    plex_token = cfg.get("plex_token", "")
 
     # ── Load channel definitions ───────────────────────────────────────────────
     try:
@@ -275,6 +336,22 @@ def main():
 
     channels.sort(key=lambda c: c.get("number", 999))
     print(f"Loaded {len(channels)} channels from {args.json}")
+
+    # ── Set up Plex collection lookup if needed ────────────────────────────────
+    uses_collections = any(
+        isinstance(item, dict) and "collection" in item
+        for ch in channels
+        for item in ch.get("content", [])
+    )
+    plex_sections = []
+    collection_cache = {}
+    if uses_collections:
+        if not plex_url or not plex_token:
+            print("ERROR: plex_url and plex_token required in config.json for collection support")
+            sys.exit(1)
+        print("\nDiscovering Plex sections for collection lookup...")
+        plex_sections = get_plex_sections(plex_url, plex_token)
+        print(f"  Found {len(plex_sections)} sections")
 
     # ── Build library index ────────────────────────────────────────────────────
     print("\nIndexing Tunarr library...")
@@ -300,9 +377,24 @@ def main():
         shuffle = SHUFFLE_MAP.get(ch.get("shuffle", "shuffle"), "shuffle")
         content_list = ch.get("content", [])
 
-        resolved = []
+        # Expand any {"collection": "Name"} entries to their member titles
+        expanded_titles = []
         missing = []
-        for title in content_list:
+        for entry in content_list:
+            if isinstance(entry, dict) and "collection" in entry:
+                col_name = entry["collection"]
+                col_titles = resolve_collection(plex_url, plex_token, col_name, plex_sections, collection_cache)
+                if col_titles:
+                    expanded_titles.extend(col_titles)
+                    print(f"    Collection '{col_name}': {len(col_titles)} titles")
+                else:
+                    print(f"    WARNING: Collection '{col_name}' not found in Plex")
+                    missing.append(f"[collection:{col_name}]")
+            else:
+                expanded_titles.append(entry)
+
+        resolved = []
+        for title in expanded_titles:
             item = resolve_title(title, movie_map, show_map)
             if item:
                 resolved.append(item)

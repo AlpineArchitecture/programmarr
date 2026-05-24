@@ -114,7 +114,18 @@ See `config.json.example` for the template.
 
 **shuffle values:** `ordered` | `shuffle` | `block`
 
-Content titles must match Plex library names exactly (case-insensitive).
+Content items can be plain title strings **or** Plex collection references:
+
+```json
+"content": [
+  "Breaking Bad",
+  {"collection": "Criterion Collection"}
+]
+```
+
+Collection references are expanded to their member titles at deploy time via the Plex API. Plain strings and collection objects can be freely mixed in the same channel. If a named collection is not found in Plex, a warning is printed and the entry is skipped.
+
+Plain title strings must match Plex library names exactly (case-insensitive).
 A title can appear on multiple channels — this is intentional and expected.
 
 ## Tunarr API Endpoints Used
