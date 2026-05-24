@@ -12,21 +12,53 @@ Two paths: feed your library to an LLM and let it curate smart channels, or use 
 
 ## Setup
 
-Copy `config.json.example` to `config.json` and fill in your values:
-
-```json
-{
-    "tunarr_url": "http://your-tunarr-server:8000",
-    "plex_url":   "http://your-plex-server:32400",
-    "plex_token": "your-plex-token"
-}
+```
+python channelmaker.py
 ```
 
-`config.json` is gitignored — your credentials never leave your machine.
+That's it. On first run, `channelmaker.py` detects that `config.json` is missing and walks you through setting it up interactively:
+
+```
+No config.json found. Let's set one up.
+
+Tunarr URL (e.g. http://192.168.1.10:8000):
+Plex URL (e.g. http://192.168.1.10:32400):
+Plex token:
+TMDB API key (optional - for channel logos, press Enter to skip):
+
+[ok] Config saved to config.json.
+```
+
+Your credentials are stored in `config.json` (gitignored — never leave your machine).
 
 ### Finding your Plex token
 
 Open Plex Web, press F12 to open DevTools, go to the Network tab, click any library item, and look for requests to your Plex server URL — the token is in the query string as `X-Plex-Token=...`.
+
+---
+
+## Quick start
+
+```
+python channelmaker.py
+```
+
+The main menu offers three workflow paths:
+
+```
+----------------------------------------------------
+  ChannelMaker
+----------------------------------------------------
+
+  1) AI path         - export -> paste into LLM -> deploy
+  2) No-AI path      - auto-generate from metadata -> deploy
+  3) Collections     - sync Plex collections -> deploy
+
+  u) Utilities
+  q) Quit
+```
+
+Pick a path, follow the prompts. The wrapper always runs a dry-run probe and asks for confirmation before touching Tunarr.
 
 ---
 
@@ -151,6 +183,9 @@ The script never deletes your Plex DVR setup.
 ## All Flags
 
 ```
+channelmaker.py
+  (no flags — fully interactive)
+
 export.py
   --out FILE          Output CSV path (default: plex_library.csv)
   --no-crossref       Skip Tunarr sync check

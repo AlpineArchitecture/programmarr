@@ -6,22 +6,33 @@ This file provides guidance to Claude Code when working with this repository.
 
 A Python 3 CLI pipeline that exports a Plex library, feeds it to an LLM for channel curation, and creates themed virtual TV channels in [Tunarr](https://github.com/chrisbenincasa/tunarr).
 
+## Recommended Entry Point
+
+```powershell
+python channelmaker.py
+```
+
+`channelmaker.py` is the interactive CLI wrapper. It handles first-time config setup,
+walks through the full workflow for whichever path the user picks, always runs a probe
+before deploying, and offers Plex sync at the end. Most users should never need to run
+the individual scripts directly.
+
 ## Workflow
 
 ```
-export.py  →  LLM (Gemini/Claude/ChatGPT)  →  create.py
+export.py  ->  LLM (Gemini/Claude/ChatGPT)  ->  create.py
                or
-export.py  →  generate_no_ai.py  →  create.py
+export.py  ->  generate_no_ai.py  ->  create.py
 ```
 
 Plex collections (managed by Kometa/Trakt/Letterboxd) can be turned into
 channels directly without the export/LLM step:
 
 ```
-generate_from_collections.py --apply  →  create.py
+generate_from_collections.py --apply  ->  create.py
 ```
 
-## Running the Scripts
+## Running the Scripts (advanced / direct use)
 
 ```powershell
 # Step 1 — export Plex library to CSV
@@ -61,6 +72,14 @@ All config lives in `config.json` (gitignored — never hardcode credentials):
 See `config.json.example` for the template.
 
 ## Architecture
+
+**`channelmaker.py`** (main entry point)
+- Interactive CLI menu with three workflow paths: AI, No-AI, Collections
+- Detects missing `config.json` on first run and walks through interactive setup
+- Always runs `create.py --probe` before deploying; asks confirmation before applying
+- Offers Plex sync after every successful deploy
+- Collections path reads `channels.json` to compute a smart default for `--base`
+- Utilities submenu: fetch images (dry run then confirm), sync Plex
 
 **`export.py`**
 - Fetches full metadata directly from Plex API (`/library/sections/{key}/all`)
