@@ -105,7 +105,7 @@ See `config.json.example` for the template.
 **`create.py`**
 - Reads `channels.json`
 - Indexes Tunarr library (exact title matching, case-insensitive)
-- Deletes all existing channels, creates new ones
+- Deletes all existing channels then creates new ones (use `--from N` to scope to channels >= N, preserving lower channels and their custom images)
 - Builds Tunarr random-schedule payloads (30-day rolling window — channels loop forever, no dead air)
 - Output: channels live in Tunarr
 

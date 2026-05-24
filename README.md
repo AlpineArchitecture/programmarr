@@ -198,6 +198,7 @@ create.py
   --json FILE         Input channels file (default: channels.json)
   --probe             Dry run — show what would be created, no changes
   --no-delete         Create channels without deleting existing ones
+  --from N            Only operate on channels numbered N and above (preserves lower channels and their custom images)
 
 sync_plex.py
   --probe             Show mapping state only, no changes

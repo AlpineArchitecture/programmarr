@@ -98,10 +98,11 @@ def load_channels_json():
         return None
 
 
-def probe_and_deploy():
+def probe_and_deploy(extra_args=None):
     """Run probe, print output, ask confirmation, deploy if yes. Returns True on success."""
+    extra = extra_args or []
     step("Running probe (dry run)...")
-    result = run(["create.py", "--probe"])
+    result = run(["create.py", "--probe"] + extra)
     if result.returncode != 0:
         error("Probe failed - fix the errors above before deploying.")
         return False
@@ -112,7 +113,7 @@ def probe_and_deploy():
         return False
 
     step("Deploying channels...")
-    result = run(["create.py"])
+    result = run(["create.py"] + extra)
     if result.returncode != 0:
         error("Deploy failed.")
         return False
@@ -127,6 +128,89 @@ def offer_plex_sync():
         run(["sync_plex.py"])
 
 
+# ── Prompt generator ──────────────────────────────────────────────────────────
+
+def ask_choice(prompt, options, default=None):
+    """Present a numbered list and return the selected value."""
+    for i, (label, _) in enumerate(options, 1):
+        marker = f"{BOLD}*{RESET}" if default and options[i-1][0] == default else " "
+        print(f"  {marker} {i}) {label}")
+    while True:
+        val = input(f"{prompt} [{default or 1}]: ").strip()
+        if not val:
+            return options[0][1] if not default else next(v for l, v in options if l == default)
+        try:
+            idx = int(val) - 1
+            if 0 <= idx < len(options):
+                return options[idx][1]
+        except ValueError:
+            pass
+        warn("Enter a number from the list.")
+
+
+def generate_prompt():
+    """Ask preference questions and write a tailored prompt to prompt_for_llm.md."""
+    header("Customize Your Prompt")
+    print(f"Answer a few questions to shape the LLM's output.")
+    print(f"{DIM}Press Enter to accept the default for any question.{RESET}\n")
+
+    # 1. Channel count
+    target = ask("How many channels do you want", "40")
+    print(f"  {DIM}Tip: ~1 channel per 15-20 titles in your library{RESET}\n")
+
+    # 2. Era focus
+    print("What era dominates your library?")
+    era = ask_choice("Era", [
+        ("All eras equally",         "all eras equally"),
+        ("Heavy 80s/90s nostalgia",  "heavy 80s and 90s nostalgia"),
+        ("2000s-2010s",              "2000s and 2010s content"),
+        ("Modern (2020s+)",          "modern 2020s content"),
+    ])
+    print()
+
+    # 3. TV style
+    print("What TV channel style do you prefer?")
+    tv_style = ask_choice("TV style", [
+        ("Both marathons and themed blocks",  "both 24/7 single-show marathons and themed multi-show blocks"),
+        ("Single-show marathons only",        "single-show 24/7 marathons; avoid multi-show blocks"),
+        ("Themed multi-show blocks only",     "themed multi-show blocks; avoid single-show marathons"),
+    ])
+    print()
+
+    # 4. Franchises
+    franchises = ask("Any franchises you definitely want channels for? (e.g. MCU, Batman, John Wick)", "").strip()
+    print()
+
+    # 5. Skip anything?
+    exclude = ask("Anything to deprioritize or skip entirely? (e.g. documentaries, kids content)", "").strip()
+    print()
+
+    # Build preferences section
+    prefs = ["## My Preferences", ""]
+    prefs.append(f"- **Era focus**: {era}")
+    prefs.append(f"- **TV channel style**: {tv_style}")
+    if franchises:
+        prefs.append(f"- **Priority franchises**: {franchises} — make sure these get dedicated channels")
+    if exclude:
+        prefs.append(f"- **Deprioritize**: {exclude}")
+    prefs_text = "\n".join(prefs)
+
+    # Read base prompt, fill TARGET, inject preferences before ## The Library
+    prompt_path = os.path.join(SCRIPT_DIR, "PROMPT.md")
+    with open(prompt_path, encoding="utf-8") as f:
+        base = f.read()
+
+    base = base.replace("{TARGET}", target)
+    base = base.replace("## The Library", prefs_text + "\n\n## The Library")
+
+    out_path = os.path.join(SCRIPT_DIR, "prompt_for_llm.md")
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(base)
+
+    success(f"Prompt written to prompt_for_llm.md")
+    return out_path
+
+
 # ── Workflows ─────────────────────────────────────────────────────────────────
 
 def workflow_ai():
@@ -138,16 +222,17 @@ def workflow_ai():
         error("Export failed.")
         return
 
-    csv_path     = os.path.join(SCRIPT_DIR, "plex_library.csv")
-    prompt_path  = os.path.join(SCRIPT_DIR, "PROMPT.md")
+    print()
+    generated_path = generate_prompt()
+
+    csv_path      = os.path.join(SCRIPT_DIR, "plex_library.csv")
     channels_path = os.path.join(SCRIPT_DIR, "channels.json")
 
     print(f"""
 {BOLD}Manual step - paste into your LLM{RESET}
 
-  1. Open {CYAN}{prompt_path}{RESET}
-     Set {{TARGET}} to your desired channel count, then copy the full prompt.
-     Tip: aim for ~1 channel per 15-20 titles in your library.
+  1. Open {CYAN}{generated_path}{RESET}
+     Your preferences are already filled in - just copy the whole file.
 
   2. Use the largest model available - Claude Opus, Gemini Pro/Ultra, GPT-4o.
      Speed-optimized models (Flash, Mini, Lite) tend to produce incomplete results
@@ -229,7 +314,7 @@ def workflow_collections():
         error("Collection generation failed.")
         return
 
-    if probe_and_deploy():
+    if probe_and_deploy(extra_args=["--from", base]):
         offer_plex_sync()
 
 

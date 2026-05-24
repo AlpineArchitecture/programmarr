@@ -7,3 +7,4 @@ _archive/
 .claude/
 generate_ai.py
 PROMPT.personal.md
+prompt_for_llm.md

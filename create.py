@@ -246,13 +246,18 @@ def build_schedule(shuffle_type, resolved_items):
 
 # ── Channel operations ─────────────────────────────────────────────────────────
 
-def delete_all_channels(tunarr_url, probe):
+def delete_channels(tunarr_url, probe, from_ch=None):
     existing = api(tunarr_url, "GET", "/api/channels") or []
     if not existing:
         print("  No existing channels to delete")
         return
-    print(f"  Deleting {len(existing)} existing channels...")
-    for ch in existing:
+    targets = [ch for ch in existing if from_ch is None or ch.get("number", 0) >= from_ch]
+    if not targets:
+        print(f"  No channels >= {from_ch} to delete")
+        return
+    scope = f">= #{from_ch}" if from_ch is not None else "all"
+    print(f"  Deleting {len(targets)} channels ({scope})...")
+    for ch in targets:
         if probe:
             print(f"    [PROBE] Would delete #{ch['number']} {ch['name']}")
         else:
@@ -314,6 +319,8 @@ def main():
     parser.add_argument("--json", default=DEFAULT_CHANNELS_FILE, help="Channel definition JSON file")
     parser.add_argument("--probe", action="store_true", help="Dry run — show what would be created")
     parser.add_argument("--no-delete", action="store_true", help="Skip deleting existing channels")
+    parser.add_argument("--from", dest="from_ch", type=int, default=None, metavar="N",
+                        help="Only operate on channels numbered N and above (preserves lower channels)")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -335,7 +342,11 @@ def main():
         sys.exit(1)
 
     channels.sort(key=lambda c: c.get("number", 999))
-    print(f"Loaded {len(channels)} channels from {args.json}")
+    if args.from_ch is not None:
+        channels = [c for c in channels if c.get("number", 0) >= args.from_ch]
+        print(f"Loaded {len(channels)} channels from {args.json} (filtered to #{args.from_ch}+)")
+    else:
+        print(f"Loaded {len(channels)} channels from {args.json}")
 
     # ── Set up Plex collection lookup if needed ────────────────────────────────
     uses_collections = any(
@@ -365,7 +376,7 @@ def main():
     # ── Delete existing channels ───────────────────────────────────────────────
     if not args.no_delete:
         print("\nDeleting existing channels...")
-        delete_all_channels(tunarr_url, args.probe)
+        delete_channels(tunarr_url, args.probe, from_ch=args.from_ch)
 
     # ── Create channels ────────────────────────────────────────────────────────
     print(f"\n{'[PROBE] ' if args.probe else ''}Creating {len(channels)} channels...")
