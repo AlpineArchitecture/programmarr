@@ -9,10 +9,10 @@ A Python 3 CLI pipeline that exports a Plex library, feeds it to an LLM for chan
 ## Recommended Entry Point
 
 ```powershell
-python channelmaker.py
+python programmarr.py
 ```
 
-`channelmaker.py` is the interactive CLI wrapper. It handles first-time config setup,
+`programmarr.py` is the interactive CLI wrapper. It handles first-time config setup,
 walks through the full workflow for whichever path the user picks, always runs a probe
 before deploying, and offers Plex sync at the end. Most users should never need to run
 the individual scripts directly.
@@ -73,7 +73,7 @@ See `config.json.example` for the template.
 
 ## Architecture
 
-**`channelmaker.py`** (main entry point)
+**`programmarr.py`** (main entry point)
 - Interactive CLI menu with three workflow paths: AI, No-AI, Collections
 - Detects missing `config.json` on first run and walks through interactive setup
 - Always runs `create.py --probe` before deploying; asks confirmation before applying
@@ -200,7 +200,7 @@ No dependencies beyond the Python standard library.
 ## Known Limitations
 
 ### Plex Live TV Guide — Channel Names Not Displaying as Text
-Channel names do not appear as text in Plex's Live TV guide channel column — only the channel icon image is shown. This is **not a bug in ChannelMaker**.
+Channel names do not appear as text in Plex's Live TV guide channel column — only the channel icon image is shown. This is **not a bug in Programmarr**.
 
 **Root cause:** When Plex receives a channel with any icon in the XMLTV feed, it renders only the icon in the guide's left column and suppresses the text label entirely. Tunarr injects its default `tunarr.png` for every channel, so without custom icons the guide shows a wall of identical color-bar icons with no names.
 

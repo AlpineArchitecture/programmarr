@@ -50,7 +50,7 @@ def load_config():
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
 
 def http_get(url, timeout=15):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "ChannelMaker/1.0"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Programmarr/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())

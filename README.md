@@ -1,4 +1,4 @@
-# ChannelMaker
+# Programmarr
 
 A Python 3 CLI pipeline that turns your Plex library into themed virtual TV channels in [Tunarr](https://github.com/chrisbenincasa/tunarr). Channels loop forever with no dead air — no manual scheduling, no massive static playlists.
 
@@ -13,10 +13,10 @@ Two paths: feed your library to an LLM and let it curate smart channels, or use 
 ## Setup
 
 ```
-python channelmaker.py
+python programmarr.py
 ```
 
-That's it. On first run, `channelmaker.py` detects that `config.json` is missing and walks you through setting it up interactively:
+That's it. On first run, `programmarr.py` detects that `config.json` is missing and walks you through setting it up interactively:
 
 ```
 No config.json found. Let's set one up.
@@ -40,14 +40,14 @@ Open Plex Web, press F12 to open DevTools, go to the Network tab, click any libr
 ## Quick start
 
 ```
-python channelmaker.py
+python programmarr.py
 ```
 
 The main menu offers three workflow paths:
 
 ```
 ----------------------------------------------------
-  ChannelMaker
+  Programmarr
 ----------------------------------------------------
 
   1) AI path         - export -> paste into LLM -> deploy
@@ -92,7 +92,7 @@ Queries Plex directly for full metadata and writes `plex_library.csv`:
 
 ### Step 2A — AI path (recommended)
 
-If you're using `channelmaker.py` (recommended), the AI path copies `PROMPT.md` to `prompt_for_llm.md` — a ready-to-paste file for your LLM.
+If you're using `programmarr.py` (recommended), the AI path copies `PROMPT.md` to `prompt_for_llm.md` — a ready-to-paste file for your LLM.
 
 If running manually: open `PROMPT.md`, set `{TARGET}` to your desired channel count, then send it to any LLM (Claude Opus, Gemini Pro, GPT-4o) along with `plex_library.csv` — either as a file attachment or pasted inline.
 
@@ -189,7 +189,7 @@ The script never deletes your Plex DVR setup.
 ## All Flags
 
 ```
-channelmaker.py
+programmarr.py
   (no flags — fully interactive)
 
 export.py

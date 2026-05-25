@@ -158,13 +158,10 @@ def main():
     print("\nAdding franchise placeholder channels (edit content manually)...")
     placeholders = [
         (50, "Marvel MCU",                  "ordered",  []),
-        (51, "Batman Live Action Movies",   "ordered",  []),
-        (52, "Batman Animated Movies",      "ordered",  []),
-        (53, "The Matrix Quad",             "ordered",  []),
-        (54, "Kevin Smith View Askewniverse", "ordered", []),
-        (55, "Bad Boys Movies",             "ordered",  []),
-        (56, "Deadpool Movies",             "ordered",  []),
-        (57, "Adam Sandler Movies",         "shuffle",  []),
+        (51, "Star Wars",                   "ordered",  []),
+        (52, "Indiana Jones",               "ordered",  []),
+        (53, "James Bond",                  "ordered",  []),
+        (54, "The Matrix",                  "ordered",  []),
     ]
     for num, name, shuffle, content in placeholders:
         channels.append({
@@ -181,7 +178,7 @@ def main():
     tv_placeholders = [
         (20, "TGIF",                     "block",   []),
         (21, "Saturday Morning Cartoons", "block",  []),
-        (22, "Batman Animated TV",        "block",  []),
+        (22, "Animated TV Block",         "block",  []),
     ]
     for num, name, shuffle, content in tv_placeholders:
         channels.append({

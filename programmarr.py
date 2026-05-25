@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""channelmaker.py - Interactive CLI for the ChannelMaker pipeline."""
+"""programmarr.py - Interactive CLI for the Programmarr pipeline."""
 
 import json
 import os
@@ -286,7 +286,7 @@ def utilities_menu():
 
 def main_menu():
     while True:
-        header("ChannelMaker")
+        header("Programmarr")
         print("  1) AI path         - export -> paste into LLM -> deploy")
         print("  2) No-AI path      - auto-generate from metadata -> deploy")
         print("  3) Collections     - sync Plex collections -> deploy")

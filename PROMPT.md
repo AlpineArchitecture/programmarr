@@ -1,4 +1,4 @@
-# ChannelMaker — LLM Prompt
+# Programmarr — LLM Prompt
 
 Copy everything below the line and paste it into your LLM (Gemini, Claude, ChatGPT, etc.).
 

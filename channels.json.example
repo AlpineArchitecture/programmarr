@@ -2,9 +2,60 @@
   "channels": [
     {
       "number": 10,
-      "name": "My Show 24/7",
+      "name": "Breaking Bad 24/7",
       "shuffle": "ordered",
-      "content": ["Exact Title From Plex"]
+      "content": ["Breaking Bad"]
+    },
+    {
+      "number": 11,
+      "name": "The Office Marathon",
+      "shuffle": "ordered",
+      "content": ["The Office (US)"]
+    },
+    {
+      "number": 20,
+      "name": "Crime TV",
+      "shuffle": "shuffle",
+      "content": ["Breaking Bad", "The Wire", "Ozark", "Mindhunter", "True Detective"]
+    },
+    {
+      "number": 21,
+      "name": "Comedy Block",
+      "shuffle": "shuffle",
+      "content": ["The Office (US)", "Parks and Recreation", "Seinfeld", "It's Always Sunny in Philadelphia"]
+    },
+    {
+      "number": 30,
+      "name": "Action Movies",
+      "shuffle": "shuffle",
+      "content": ["Die Hard", "Mad Max: Fury Road", "John Wick", "The Dark Knight", "Aliens"]
+    },
+    {
+      "number": 31,
+      "name": "90s Movies",
+      "shuffle": "shuffle",
+      "content": ["Pulp Fiction", "The Shawshank Redemption", "Goodfellas", "Fargo", "Heat"]
+    },
+    {
+      "number": 50,
+      "name": "Alien Franchise",
+      "shuffle": "ordered",
+      "content": ["Alien", "Aliens", "Alien 3", "Alien Resurrection", "Prometheus", "Alien: Covenant"]
+    },
+    {
+      "number": 80,
+      "name": "Criterion Collection",
+      "shuffle": "shuffle",
+      "content": [{"collection": "Criterion Collection"}]
+    },
+    {
+      "number": 81,
+      "name": "Staff Picks",
+      "shuffle": "shuffle",
+      "content": [
+        "Parasite",
+        {"collection": "A24 Films"}
+      ]
     }
   ],
   "orphaned": [],
