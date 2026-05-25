@@ -463,72 +463,80 @@ function CollectionsStep({ onDone }: { onDone: () => void }) {
 
   return (
     <Stack gap="md">
-      <Group justify="space-between">
-        <Text size="sm" c="dimmed">{collections.length} collections found — select which to include as channels.</Text>
-        <Group gap="xs">
-          <Button size="xs" variant="subtle" onClick={() => setSelections(s => s.map(x => ({ ...x, include: true })))}>
-            All
+      <Group justify="space-between" wrap="nowrap">
+        <Text size="sm" c="dimmed">{collections.length} collections — select which to include as channels.</Text>
+        <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+          <Button size="xs" variant="subtle" onClick={() => setSelections(s => s.map(x => ({ ...x, include: true })))}>All</Button>
+          <Button size="xs" variant="subtle" onClick={() => setSelections(s => s.map(x => ({ ...x, include: false })))}>None</Button>
+          <Button
+            size="sm" color="orange"
+            onClick={apply} loading={applying} disabled={includedCount === 0}
+            rightSection={<IconArrowRight size={13} />}
+          >
+            Add {includedCount}
           </Button>
-          <Button size="xs" variant="subtle" onClick={() => setSelections(s => s.map(x => ({ ...x, include: false })))}>
-            None
-          </Button>
+          <Button variant="subtle" color="gray" size="sm" onClick={onDone}>Skip</Button>
         </Group>
       </Group>
 
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+      <Stack gap={0} style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 8, overflow: 'hidden' }}>
         {collections.map((col, idx) => {
           const sel = selections[idx];
           if (!sel) return null;
           return (
-            <Card key={col.id} withBorder p="md" style={{ opacity: sel.include ? 1 : 0.45, transition: 'opacity 0.15s' }}>
-              <Group gap="md" align="flex-start" wrap="nowrap">
-                <Image
-                  src={`/api/pipeline/collections/${col.id}/poster`}
-                  w={56} h={80}
-                  radius="sm"
-                  fit="cover"
-                  style={{ flexShrink: 0 }}
-                  fallbackSrc="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='80'%3E%3Crect width='56' height='80' fill='%23333'/%3E%3Ctext x='28' y='44' font-size='20' text-anchor='middle' fill='%23666'%3E%F0%9F%93%BA%3C/text%3E%3C/svg%3E"
-                />
-                <Stack gap="xs" style={{ flex: 1, minWidth: 0 }}>
-                  <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
-                    <Text fw={700} size="sm" lineClamp={2} style={{ flex: 1 }}>{col.name}</Text>
-                    <Checkbox
-                      checked={sel.include}
-                      onChange={(e) => updateSel(idx, { include: e.currentTarget.checked })}
-                      style={{ flexShrink: 0 }}
-                    />
-                  </Group>
-                  <Text size="xs" c="dimmed">{col.section} · {col.count} items</Text>
-                  {col.summary && (
-                    <Text size="xs" c="dimmed" lineClamp={2}>{col.summary}</Text>
-                  )}
-                  <NumberInput
-                    label="Channel #"
-                    value={sel.channel_number}
-                    onChange={(v) => {
-                      const n = typeof v === 'number' ? v : parseInt(String(v));
-                      if (!isNaN(n)) updateSel(idx, { channel_number: n });
-                    }}
-                    min={1} max={999} size="xs" w={90}
-                    disabled={!sel.include}
-                  />
-                </Stack>
-              </Group>
-            </Card>
+            <Group
+              key={col.id}
+              gap="sm"
+              wrap="nowrap"
+              px="md"
+              py={6}
+              style={{
+                borderBottom: idx < collections.length - 1 ? '1px solid var(--mantine-color-dark-6)' : undefined,
+                opacity: sel.include ? 1 : 0.4,
+                transition: 'opacity 0.15s',
+              }}
+            >
+              <Checkbox
+                checked={sel.include}
+                onChange={(e) => updateSel(idx, { include: e.currentTarget.checked })}
+                style={{ flexShrink: 0 }}
+              />
+              <Image
+                src={`/api/pipeline/collections/${col.id}/poster`}
+                w={28} h={42}
+                radius="sm"
+                fit="cover"
+                style={{ flexShrink: 0 }}
+                fallbackSrc="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='42'%3E%3Crect width='28' height='42' fill='%23333'/%3E%3C/svg%3E"
+              />
+              <NumberInput
+                value={sel.channel_number}
+                onChange={(v) => {
+                  const n = typeof v === 'number' ? v : parseInt(String(v));
+                  if (!isNaN(n)) updateSel(idx, { channel_number: n });
+                }}
+                min={1} max={999} size="xs" w={68}
+                disabled={!sel.include}
+                styles={{ input: { textAlign: 'center', paddingInline: 4 } }}
+              />
+              <Box style={{ flex: 1, minWidth: 0 }}>
+                <Text fw={600} size="sm" lineClamp={1}>{col.name}</Text>
+                <Text size="xs" c="dimmed">{col.section} · {col.count} items</Text>
+              </Box>
+            </Group>
           );
         })}
-      </SimpleGrid>
+      </Stack>
 
-      <Group mt="sm">
+      <Group>
         <Button
           color="orange"
           onClick={apply}
           loading={applying}
           disabled={includedCount === 0}
-          leftSection={<IconCheck size={15} />}
+          rightSection={<IconArrowRight size={15} />}
         >
-          Add {includedCount} Collection{includedCount !== 1 ? 's' : ''} →
+          Add {includedCount} Collection{includedCount !== 1 ? 's' : ''}
         </Button>
         <Button variant="subtle" color="gray" onClick={onDone}>Skip Collections</Button>
       </Group>
@@ -748,11 +756,14 @@ function DeployStep({ onDone, onSkipToSync }: { onDone: () => void; onSkipToSync
             title={`${deployStats.created ?? '?'} channels are live in Tunarr`}
             subtitle="Your lineup has been pushed"
           >
-            <SimpleGrid cols={{ base: 2, sm: 3 }} mb="md">
+            <Group gap="xl" mb="md">
               <StatBox label="Channels Created" value={deployStats.created ?? '—'} />
               <StatBox label="Channels Skipped" value={deployStats.skipped ?? '—'} />
-              {tunarrUrl && (
-                <Box p="sm" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            </Group>
+
+            {(tunarrUrl || plexLiveTvUrl) && (
+              <Group mb="md" gap="sm">
+                {tunarrUrl && (
                   <Button
                     component="a" href={tunarrUrl} target="_blank" rel="noreferrer"
                     variant="light" color="blue" size="sm"
@@ -760,19 +771,16 @@ function DeployStep({ onDone, onSkipToSync }: { onDone: () => void; onSkipToSync
                   >
                     Open Tunarr
                   </Button>
-                </Box>
-              )}
-            </SimpleGrid>
-
-            {plexLiveTvUrl && (
-              <Group mb="md">
-                <Button
-                  component="a" href={plexLiveTvUrl} target="_blank" rel="noreferrer"
-                  variant="light" color="grape" size="sm"
-                  leftSection={<IconExternalLink size={14} />}
-                >
-                  Open Plex Live TV &amp; DVR Settings
-                </Button>
+                )}
+                {plexLiveTvUrl && (
+                  <Button
+                    component="a" href={plexLiveTvUrl} target="_blank" rel="noreferrer"
+                    variant="light" color="grape" size="sm"
+                    leftSection={<IconExternalLink size={14} />}
+                  >
+                    Open Plex Live TV
+                  </Button>
+                )}
               </Group>
             )}
 
