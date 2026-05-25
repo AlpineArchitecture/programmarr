@@ -21,13 +21,13 @@ Programmarr is a self-hosted web app that exports your Plex library, lets you fe
 
 ## Quick Start
 
-### 1. Clone and start
+### 1. Pull and start
 
 ```bash
-git clone https://github.com/AlpineArchitecture/programmarr.git
-cd programmarr
-docker compose up -d --build
+docker compose up -d
 ```
+
+That's it — the image is pre-built on [GHCR](https://github.com/AlpineArchitecture/programmarr/pkgs/container/programmarr) and pulls automatically. No local build step needed.
 
 ### 2. Open the UI
 
@@ -37,6 +37,16 @@ http://<your-server-ip>:7979
 
 First run shows an onboarding wizard — create a login, enter your Tunarr and Plex URLs, done.
 
+### Updates
+
+The image is rebuilt and pushed automatically on every commit. To update:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Or use the **Update** button in Portainer / TrueNAS Apps if you're using the `image:` reference below.
+
 ### TrueNAS (Custom App UI)
 
 Paste this as a complete compose file in Apps → Custom App:
@@ -44,7 +54,7 @@ Paste this as a complete compose file in Apps → Custom App:
 ```yaml
 services:
   programmarr:
-    build: https://github.com/AlpineArchitecture/programmarr.git
+    image: ghcr.io/alpinearchitecture/programmarr:latest
     container_name: programmarr
     restart: unless-stopped
     ports:
@@ -53,7 +63,7 @@ services:
       - /mnt/YourPool/AppData/programmarr/data:/data
 ```
 
-Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your TrueNAS pool.
+Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your TrueNAS pool. TrueNAS will show an **Update** button whenever a new image is pushed.
 
 ---
 

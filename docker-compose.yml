@@ -1,7 +1,7 @@
 services:
   programmarr:
-    image: programmarr:latest   # use 'build: .' if building locally
-    build: .
+    image: ghcr.io/alpinearchitecture/programmarr:latest
+    # build: .   # uncomment to build from source instead
     container_name: programmarr
     restart: unless-stopped
     ports:
