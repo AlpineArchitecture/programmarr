@@ -1,6 +1,6 @@
 import {
-  Alert, Box, Button, Card, Collapse, Divider, Group,
-  NumberInput, ScrollArea, Stack, Stepper, Switch,
+  Alert, Box, Button, Card, Divider, Group,
+  NumberInput, ScrollArea, SimpleGrid, Stack, Stepper, Switch,
   Tabs, Text, Textarea, TextInput, Title,
 } from '@mantine/core';
 import { Dropzone } from '@mantine/dropzone';
@@ -76,15 +76,16 @@ function RunStep({
 // ── LLM Handoff step ───────────────────────────────────────────────────────────
 
 function LLMHandoff({ onDone }: { onDone: (ok: boolean) => void }) {
-  const [target, setTarget] = useState('');
+  const [target, setTarget] = useState<number | string>(30);
   const [prefs, setPrefs] = useState('');
   const [prompt, setPrompt] = useState('');
   const [csvInfo, setCsvInfo] = useState<any>(null);
-  const [promptOpen, setPromptOpen] = useState(true);
-  const [csvOpen, setCsvOpen] = useState(true);
   const [pasteText, setPasteText] = useState('');
   const [validating, setValidating] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; count?: number; error?: string } | null>(null);
+
+  const PREFS_MAX = 200;
+  const charsLeft = PREFS_MAX - prefs.length;
 
   useEffect(() => {
     api.getCsvInfo().then(setCsvInfo);
@@ -93,7 +94,7 @@ function LLMHandoff({ onDone }: { onDone: (ok: boolean) => void }) {
 
   async function loadPrompt() {
     try {
-      const p = await api.getPrompt(target, prefs);
+      const p = await api.getPrompt(String(target), prefs);
       setPrompt(p.content);
     } catch { /* ignore */ }
   }
@@ -122,67 +123,65 @@ function LLMHandoff({ onDone }: { onDone: (ok: boolean) => void }) {
 
   return (
     <Stack gap="lg">
-      {/* Prompt panel */}
-      <Card p="md">
-        <Group justify="space-between" mb="sm">
-          <Text fw={700}>Prompt</Text>
-          <Button variant="subtle" size="xs" onClick={() => setPromptOpen((v) => !v)}>
-            {promptOpen ? 'Collapse' : 'Expand'}
-          </Button>
-        </Group>
-        <Collapse in={promptOpen}>
-          <Stack gap="sm">
-            <Group grow>
-              <TextInput
-                label="Target channel count"
-                placeholder="e.g. 30"
-                value={target}
-                onChange={(e) => setTarget(e.currentTarget.value)}
-                onBlur={loadPrompt}
-                size="sm"
-              />
-              <TextInput
-                label="Theme preferences (optional)"
-                placeholder="e.g. Batman, 90s cartoons, Documentaries"
-                value={prefs}
-                onChange={(e) => setPrefs(e.currentTarget.value)}
-                onBlur={loadPrompt}
-                size="sm"
-              />
-            </Group>
-            <Box style={{ position: 'relative' }}>
-              <ScrollArea h={240} style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--mantine-color-dark-4)' }}>
-                <Box p="sm">
-                  <Text size="xs" style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', color: '#d4d4d4' }}>
-                    {prompt || 'Generating prompt…'}
-                  </Text>
-                </Box>
-              </ScrollArea>
-              <Button
-                size="xs"
-                variant="filled"
-                color="dark"
-                leftSection={<IconCopy size={13} />}
-                style={{ position: 'absolute', top: 8, right: 8 }}
-                onClick={copyPrompt}
-                disabled={!prompt}
-              >
-                Copy
-              </Button>
-            </Box>
-          </Stack>
-        </Collapse>
-      </Card>
+      {/* Inputs row */}
+      <Group grow align="flex-end">
+        <NumberInput
+          label="Target channel count"
+          placeholder="e.g. 30"
+          value={target}
+          onChange={setTarget}
+          onBlur={loadPrompt}
+          min={1}
+          max={500}
+          step={1}
+          size="sm"
+        />
+        <TextInput
+          label="Theme preferences (optional)"
+          placeholder="e.g. Batman, 90s cartoons, Documentaries"
+          value={prefs}
+          onChange={(e) => setPrefs(e.currentTarget.value)}
+          onBlur={loadPrompt}
+          maxLength={PREFS_MAX}
+          rightSection={
+            <Text size="xs" c={charsLeft < 20 ? 'red.4' : 'dimmed'} fw={500} style={{ userSelect: 'none' }}>
+              {charsLeft}
+            </Text>
+          }
+          rightSectionWidth={40}
+          size="sm"
+        />
+      </Group>
 
-      {/* CSV panel */}
-      <Card p="md">
-        <Group justify="space-between" mb="sm">
-          <Text fw={700}>Plex Library CSV</Text>
-          <Button variant="subtle" size="xs" onClick={() => setCsvOpen((v) => !v)}>
-            {csvOpen ? 'Collapse' : 'Expand'}
-          </Button>
-        </Group>
-        <Collapse in={csvOpen}>
+      {/* Prompt + CSV side by side */}
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+        {/* Prompt card */}
+        <Card p="md">
+          <Group justify="space-between" mb="sm">
+            <Text fw={700}>Prompt</Text>
+            <Button
+              size="xs"
+              variant="light"
+              color="orange"
+              leftSection={<IconCopy size={13} />}
+              onClick={copyPrompt}
+              disabled={!prompt}
+            >
+              Copy
+            </Button>
+          </Group>
+          <ScrollArea h={240} style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--mantine-color-dark-4)' }}>
+            <Box p="sm">
+              <Text size="xs" style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', color: '#d4d4d4' }}>
+                {prompt || 'Generating prompt…'}
+              </Text>
+            </Box>
+          </ScrollArea>
+        </Card>
+
+        {/* CSV card */}
+        <Card p="md">
+          <Text fw={700} mb="sm">Plex Library CSV</Text>
           {csvInfo?.exists ? (
             <Stack gap="sm">
               <Group gap="lg">
@@ -216,10 +215,10 @@ function LLMHandoff({ onDone }: { onDone: (ok: boolean) => void }) {
               Run Export first to generate plex_library.csv
             </Alert>
           )}
-        </Collapse>
-      </Card>
+        </Card>
+      </SimpleGrid>
 
-      {/* Result panel */}
+      {/* Result panel — full width */}
       <Card p="md">
         <Text fw={700} mb="sm">LLM Result</Text>
         <Text size="sm" c="dimmed" mb="md">
