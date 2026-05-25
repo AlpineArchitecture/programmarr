@@ -1,12 +1,16 @@
-import { AppShell, Box, Divider, Group, NavLink, Text } from '@mantine/core';
+import { ActionIcon, AppShell, Box, Divider, Group, NavLink, Text, Tooltip } from '@mantine/core';
+import { useMantineColorScheme } from '@mantine/core';
 import { version } from '../../package.json';
 import {
   IconBroadcast,
+  IconDeviceDesktop,
   IconFileText,
   IconLayoutDashboard,
   IconList,
+  IconMoon,
   IconPlayerPlay,
   IconSettings,
+  IconSun,
 } from '@tabler/icons-react';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -20,6 +24,7 @@ const NAV = [
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const loc = useLocation();
+  const { colorScheme, setColorScheme } = useMantineColorScheme();
 
   return (
     <AppShell navbar={{ width: 220, breakpoint: 'sm' }} padding="md">
@@ -50,7 +55,35 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         ))}
 
         <Box mt="auto" px="sm" pb="sm">
-          <Text size="xs" c="dimmed">v{version}</Text>
+          <Group justify="space-between" align="center">
+            <Text size="xs" c="dimmed">v{version}</Text>
+            <Group gap={4}>
+              <Tooltip label="Dark" withArrow position="top" openDelay={400}>
+                <ActionIcon
+                  size="sm" variant={colorScheme === 'dark' ? 'filled' : 'subtle'}
+                  color="orange" onClick={() => setColorScheme('dark')}
+                >
+                  <IconMoon size={13} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Light" withArrow position="top" openDelay={400}>
+                <ActionIcon
+                  size="sm" variant={colorScheme === 'light' ? 'filled' : 'subtle'}
+                  color="orange" onClick={() => setColorScheme('light')}
+                >
+                  <IconSun size={13} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label="Auto" withArrow position="top" openDelay={400}>
+                <ActionIcon
+                  size="sm" variant={colorScheme === 'auto' ? 'filled' : 'subtle'}
+                  color="orange" onClick={() => setColorScheme('auto')}
+                >
+                  <IconDeviceDesktop size={13} />
+                </ActionIcon>
+              </Tooltip>
+            </Group>
+          </Group>
         </Box>
       </AppShell.Navbar>
 

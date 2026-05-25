@@ -5,6 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Programmarr</title>
+    <script>
+      (function () {
+        var stored = localStorage.getItem('programmarr-color-scheme');
+        var scheme = stored === 'dark' || stored === 'light' ? stored
+          : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-mantine-color-scheme', scheme);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

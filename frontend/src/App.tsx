@@ -1,4 +1,4 @@
-import { MantineProvider } from '@mantine/core';
+import { localStorageColorSchemeManager, MantineProvider } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
@@ -49,9 +49,11 @@ function AppRoutes() {
   );
 }
 
+const colorSchemeManager = localStorageColorSchemeManager({ key: 'programmarr-color-scheme' });
+
 export default function App() {
   return (
-    <MantineProvider theme={theme} defaultColorScheme="dark">
+    <MantineProvider theme={theme} colorSchemeManager={colorSchemeManager} defaultColorScheme="dark">
       <Notifications position="top-right" />
       <BrowserRouter>
         <AppRoutes />
