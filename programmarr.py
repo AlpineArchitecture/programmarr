@@ -135,8 +135,52 @@ def probe_and_deploy(extra_args=None):
     return True
 
 
+def offer_collections_pipeline():
+    """Offer to append Plex collections to channels.json inside the AI/No-AI pipeline."""
+    if not ask_yn("\nInclude Plex collections as channels?", default="n"):
+        return
+
+    data = load_channels_json()
+    max_ch = 0
+    channel_count = 0
+    if data and "channels" in data:
+        nums = [ch.get("number", 0) for ch in data["channels"]]
+        max_ch = max(nums) if nums else 0
+        channel_count = len(nums)
+
+    if max_ch:
+        suggested_base = ((max_ch // 10) + 1) * 10
+        suggested_base = max(suggested_base, 80)
+        print(f"{DIM}Current channels.json: {channel_count} channels, highest #{max_ch}{RESET}\n")
+    else:
+        suggested_base = 80
+
+    base      = ask("Start collection channels at number", str(suggested_base))
+    min_items = ask("Skip collections with fewer than N items", "3")
+    condense  = ask_yn(
+        "Skip collections whose name already matches an existing channel? (--condense)",
+        default="n",
+    )
+
+    cmd = ["generate_from_collections.py", "--apply", "--base", base, "--min-items", min_items]
+    if condense:
+        cmd.append("--condense")
+
+    step("Fetching collections from Plex...")
+    result = run(cmd)
+    if result.returncode != 0:
+        error("Collection generation failed — continuing without collections.")
+
+
+def offer_images_pipeline():
+    """Offer to fetch images post-deploy — applies directly, no dry-run preview."""
+    if ask_yn("\nFetch channel images from TMDB?", default="n"):
+        step("Fetching images...")
+        run(["fetch_images.py", "--apply"])
+
+
 def offer_plex_sync():
-    if ask_yn("\nSync new channels to Plex DVR?", default="y"):
+    if ask_yn("\nSync channels to Plex DVR?", default="y"):
         step("Syncing Plex...")
         run(["sync_plex.py"])
 
@@ -201,7 +245,10 @@ def workflow_ai():
         error("channels.json not found - aborting.")
         return
 
+    offer_collections_pipeline()
+
     if probe_and_deploy():
+        offer_images_pipeline()
         offer_plex_sync()
 
 
@@ -220,7 +267,10 @@ def workflow_no_ai():
         error("Generation failed.")
         return
 
+    offer_collections_pipeline()
+
     if probe_and_deploy():
+        offer_images_pipeline()
         offer_plex_sync()
 
 
@@ -260,39 +310,20 @@ def workflow_collections():
         return
 
     if probe_and_deploy(extra_args=["--from", base]):
+        offer_images_pipeline()
         offer_plex_sync()
 
 
-# ── Utilities submenu ─────────────────────────────────────────────────────────
-
-def utilities_menu():
-    while True:
-        header("Utilities")
-        print("  f) Fetch channel images from TMDB")
-        print("  s) Sync channels to Plex DVR")
-        print(f"\n  {DIM}b) Back{RESET}\n")
-
-        choice = input("Choice: ").strip().lower()
-
-        if choice == "f":
-            step("Previewing image changes (dry run)...")
-            result = run(["fetch_images.py"])
-            if result.returncode != 0:
-                error("Fetch failed.")
-                continue
-            print()
-            if ask_yn("Apply image updates to Tunarr?", default="n"):
-                run(["fetch_images.py", "--apply"])
-
-        elif choice == "s":
-            step("Syncing Plex...")
-            run(["sync_plex.py"])
-
-        elif choice in ("b", ""):
-            break
-
-        else:
-            warn("Unknown option.")
+def fetch_images_standalone():
+    """Standalone image fetch — dry run preview then confirm."""
+    step("Previewing image changes (dry run)...")
+    result = run(["fetch_images.py"])
+    if result.returncode != 0:
+        error("Fetch failed.")
+        return
+    print()
+    if ask_yn("Apply image updates to Tunarr?", default="n"):
+        run(["fetch_images.py", "--apply"])
 
 
 # ── Main menu ─────────────────────────────────────────────────────────────────
@@ -300,11 +331,13 @@ def utilities_menu():
 def main_menu():
     while True:
         header("Main Menu")
-        print("  1) AI path         - export -> paste into LLM -> deploy")
-        print("  2) No-AI path      - auto-generate from metadata -> deploy")
-        print("  3) Collections     - sync Plex collections -> deploy")
-        print(f"\n  u) Utilities")
-        print(f"  {DIM}q) Quit{RESET}\n")
+        print("  1) AI path         — export → LLM → deploy")
+        print("  2) No-AI path      — auto-generate → deploy")
+        print("  3) Collections     — sync Plex collections → deploy")
+        print()
+        print("  i) Fetch channel images from TMDB")
+        print("  s) Sync channels to Plex DVR")
+        print(f"\n  {DIM}q) Quit{RESET}\n")
 
         choice = input("Choice: ").strip().lower()
 
@@ -314,8 +347,11 @@ def main_menu():
             workflow_no_ai()
         elif choice == "3":
             workflow_collections()
-        elif choice == "u":
-            utilities_menu()
+        elif choice == "i":
+            fetch_images_standalone()
+        elif choice == "s":
+            step("Syncing Plex...")
+            run(["sync_plex.py"])
         elif choice in ("q", ""):
             print(f"\n{DIM}Bye.{RESET}\n")
             sys.exit(0)

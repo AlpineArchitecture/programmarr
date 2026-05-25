@@ -74,13 +74,13 @@ See `config.json.example` for the template.
 ## Architecture
 
 **`programmarr.py`** (main entry point)
-- Interactive CLI menu with three workflow paths: AI, No-AI, Collections
+- Flat main menu: `1` AI path, `2` No-AI path, `3` Collections, `i` fetch images, `s` sync Plex, `q` quit — no submenus
 - Detects missing `config.json` on first run and walks through interactive setup
 - Always runs `create.py --probe` before deploying; asks confirmation before applying
-- Offers Plex sync after every successful deploy
-- Collections path reads `channels.json` to compute a smart default for `--base`; passes `--from <base>` to create.py so only collection-block channels are touched (preserves images on lower channels)
+- **Full pipeline (options 1 & 2):** build `channels.json` → optionally append collections (same base/min-items/condense prompts, smart base computed from just-written `channels.json`) → probe → deploy (full deploy, no `--from`) → optionally fetch images (`--apply` directly, no dry-run) → sync Plex
+- **Collections standalone (option 3):** generates collection block → probe → deploy (`--from <base>`, preserves lower channels and their images) → optionally fetch images → sync Plex
+- **Image fetch standalone (`i`):** dry-run preview → confirm → apply
 - AI path copies `PROMPT.md` to `prompt_for_llm.md` (gitignored) for the user to paste into their LLM; preference-question injection is stubbed for future implementation
-- Utilities submenu: fetch images (dry run then confirm), sync Plex
 
 **`export.py`**
 - Fetches full metadata directly from Plex API (`/library/sections/{key}/all`)
