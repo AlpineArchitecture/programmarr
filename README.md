@@ -147,6 +147,7 @@ All three paths end with a probe (dry run) → deploy to Tunarr. The app streams
 
 ### Also included
 
+- **Library picker** — choose which Plex libraries to scan (Movies, 4K Movies, Kids TV, etc.) before each export; supports mixing multiple libraries of the same type
 - **Channel logo fetching** — pulls TMDB clearlogos for single-show/movie channels
 - **Plex DVR sync** — maps new channels into the Plex Live TV guide automatically
 - **Channel editor** — edit names, numbers, shuffle mode, and content lists in the browser

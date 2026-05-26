@@ -163,6 +163,8 @@ def main():
     parser = argparse.ArgumentParser(description="Export Plex library to CSV")
     parser.add_argument("--out", default=OUTPUT_FILE, help="Output CSV path")
     parser.add_argument("--no-crossref", action="store_true", help="Skip Tunarr sync check")
+    parser.add_argument("--movie-sections", default=None, help="Comma-separated section keys for movies (auto-detect if omitted, empty string = skip)")
+    parser.add_argument("--tv-sections", default=None, help="Comma-separated section keys for TV shows (auto-detect if omitted, empty string = skip)")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -177,23 +179,49 @@ def main():
         print("ERROR: Could not reach Plex or no sections found")
         sys.exit(1)
 
-    movie_section = next((s for s in sections if s.get("type") == "movie"), None)
-    tv_section = next((s for s in sections if s.get("type") == "show"), None)
+    if args.movie_sections is not None:
+        keys = {k.strip() for k in args.movie_sections.split(",") if k.strip()}
+        movie_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "movie"]
+    else:
+        first = next((s for s in sections if s.get("type") == "movie"), None)
+        movie_sections = [first] if first else []
 
-    if not movie_section:
-        print("ERROR: No movie library found in Plex")
-        sys.exit(1)
-    if not tv_section:
-        print("ERROR: No TV show library found in Plex")
+    if args.tv_sections is not None:
+        keys = {k.strip() for k in args.tv_sections.split(",") if k.strip()}
+        tv_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "show"]
+    else:
+        first = next((s for s in sections if s.get("type") == "show"), None)
+        tv_sections = [first] if first else []
+
+    if not movie_sections and not tv_sections:
+        print("ERROR: No movie or TV library sections found or selected")
         sys.exit(1)
 
-    print(f"  Movie section: [{movie_section['key']}] {movie_section['title']}")
-    print(f"  TV section:    [{tv_section['key']}] {tv_section['title']}")
+    for s in movie_sections:
+        print(f"  Movie section: [{s['key']}] {s['title']}")
+    for s in tv_sections:
+        print(f"  TV section:    [{s['key']}] {s['title']}")
 
     # ── Fetch Plex content ─────────────────────────────────────────────────────
     print("\n[2/4] Fetching Plex content...")
-    plex_movies = fetch_plex_movies(plex_url, plex_token, movie_section["key"])
-    plex_shows = fetch_plex_shows(plex_url, plex_token, tv_section["key"])
+
+    plex_movies: list = []
+    seen_movie_titles: set = set()
+    for sec in movie_sections:
+        for item in fetch_plex_movies(plex_url, plex_token, sec["key"]):
+            t = item.get("title", "").lower().strip()
+            if t not in seen_movie_titles:
+                seen_movie_titles.add(t)
+                plex_movies.append(item)
+
+    plex_shows: list = []
+    seen_show_titles: set = set()
+    for sec in tv_sections:
+        for item in fetch_plex_shows(plex_url, plex_token, sec["key"]):
+            t = item.get("title", "").lower().strip()
+            if t not in seen_show_titles:
+                seen_show_titles.add(t)
+                plex_shows.append(item)
 
     # ── Cross-reference with Tunarr ────────────────────────────────────────────
     tunarr_movies = None

@@ -158,6 +158,7 @@ See `config.json.example` for the template.
 - Fetches full metadata directly from Plex API (`/library/sections/{key}/all`)
 - Fields: title, year, contentRating, genres, directors, season/episode counts
 - Cross-references against Tunarr to flag unsynced content
+- Supports multiple sections per type: `--movie-sections KEY1,KEY2` and `--tv-sections KEY1,KEY2` (comma-separated Plex section keys). Deduplicates titles across sections. Omit flags to auto-detect (first movie + first TV section).
 - Output: `plex_library.csv` + `export_summary.json` (movies/tv_shows/skipped counts for the UI stats card)
 
 **`generate_no_ai.py`** (Option B — no AI required)
@@ -265,7 +266,8 @@ A title can appear on multiple channels — this is intentional and expected.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/pipeline/export` | SSE-stream `export.py`; optional JSON body `{"no_crossref": true}` passes `--no-crossref` to skip Tunarr title matching |
+| GET | `/api/pipeline/libraries` | List Plex library sections filtered to `movie` and `show` types (`{key, title, type}`) |
+| POST | `/api/pipeline/export` | SSE-stream `export.py`; JSON body `{"no_crossref": bool, "movie_sections": ["1","2"], "tv_sections": ["3"]}` — sections are Plex section keys; `null` = auto-detect, `[]` = skip that type |
 | GET | `/api/pipeline/csv` | Download `plex_library.csv` |
 | GET | `/api/pipeline/csv/info` | Stats: rows, movies, tv_shows, skipped counts, preview lines |
 | GET | `/api/pipeline/prompt` | Fetch `PROMPT.md` with `{TARGET}` and preferences injected |
@@ -290,14 +292,14 @@ A title can appear on multiple channels — this is intentional and expected.
 - Stepper navigation is locked: only completed steps are clickable, future steps are grayed out
 
 **AI Path (6 steps):**
-1. **Export** — runs `export.py`, shows compact stats card (movies / TV shows / skipped / size) above terminal; manual Continue
+1. **Export** — fetches Plex library list on mount; shows "Libraries to scan" card with checkboxes grouped by Movies / TV Shows (all checked by default, supports multi-select across libraries of the same type); runs `export.py` with selected section keys; shows compact stats card on success; manual Continue
 2. **LLM Handoff** — config card (channel count NumberInput + theme Textarea); side-by-side prompt copy + CSV download; paste/upload LLM output; post-validate results card showing channel breakdown; "Add Plex Collections" or "Skip to Deploy" buttons
 3. **Add Plex Collections** — fetches collections on mount; 2-column grid with poster, name, count, editable channel number, checkbox (all checked by default); applies selections to `channels.json`
 4. **Deploy** — probe explainer card; runs probe; after probe completes: 2-column layout [terminal | scrollable channel review card with checkboxes + editable channel numbers]; selective deploy via `/pipeline/deploy-selective`
 5. **Fetch Images** — skippable step; runs `fetch_images.py --apply`
 6. **Sync Plex** — skippable step; runs `sync_plex.py`; post-deploy stats + links to Tunarr and Plex Live TV
 
-**No-AI Path (6 steps):** Same as AI but step 2 runs `generate_no_ai.py` instead of LLM handoff.
+**No-AI Path (6 steps):** Same as AI but step 2 runs `generate_no_ai.py` instead of LLM handoff. Step 1 (Export) has the same library picker.
 
 **Collections Path (4 steps):** Collections → Deploy → Fetch Images → Sync Plex (no export or LLM).
 

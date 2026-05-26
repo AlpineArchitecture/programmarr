@@ -52,6 +52,7 @@ export const api = {
   getLogs: () => req<LogEntry[]>('/logs'),
   getLog: (name: string) => req<{ name: string; content: string }>(`/logs/${name}`),
 
+  getLibraries: () => req<PlexLibrary[]>('/pipeline/libraries'),
   getCollections: () => req<PlexCollection[]>('/pipeline/collections'),
   applyCollections: (selections: CollectionSelection[]) =>
     req<{ ok: boolean; added: number }>('/pipeline/collections/apply', {
@@ -83,6 +84,7 @@ export interface CsvInfo {
   skipped_shows?: number;
 }
 export interface ValidateResult { ok: boolean; count?: number; error?: string; channels?: Channel[] }
+export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show' }
 export interface PlexCollection { id: string; name: string; count: number; section: string; summary: string; has_poster: boolean }
 export interface CollectionSelection { name: string; channel_number: number; include: boolean }
 export interface LogEntry { name: string; size: number; modified: number }

@@ -10,7 +10,7 @@ import {
   IconExternalLink, IconPlayerPlay, IconUpload, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
-import { api, streamPipeline, StreamEvent, PlexCollection, CollectionSelection } from '../api/client';
+import { api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection } from '../api/client';
 import type { Channel } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -63,6 +63,11 @@ function parseRunStats(lines: string[]) {
 // ── Step: Export ───────────────────────────────────────────────────────────────
 
 function ExportStep({ onDone }: { onDone: () => void }) {
+  const [libraries, setLibraries] = useState<PlexLibrary[]>([]);
+  const [libSels, setLibSels] = useState<Record<string, boolean>>({});
+  const [libLoading, setLibLoading] = useState(true);
+  const [libError, setLibError] = useState<string | null>(null);
+
   const [lines, setLines] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
@@ -70,12 +75,28 @@ function ExportStep({ onDone }: { onDone: () => void }) {
   const [summary, setSummary] = useState<Awaited<ReturnType<typeof api.getCsvInfo>> | null>(null);
   const [noCrossref, setNoCrossref] = useState(false);
 
+  useEffect(() => {
+    api.getLibraries()
+      .then(libs => {
+        setLibraries(libs);
+        setLibSels(Object.fromEntries(libs.map(l => [l.key, true])));
+      })
+      .catch(err => setLibError(err.message))
+      .finally(() => setLibLoading(false));
+  }, []);
+
+  const movieLibs = libraries.filter(l => l.type === 'movie');
+  const tvLibs = libraries.filter(l => l.type === 'show');
+  const selectedCount = Object.values(libSels).filter(Boolean).length;
+
   async function run() {
+    const movieSections = movieLibs.filter(l => libSels[l.key]).map(l => l.key);
+    const tvSections = tvLibs.filter(l => libSels[l.key]).map(l => l.key);
     setLines([]); setDone(false); setSummary(null); setRunning(true);
     try {
       const code = await streamPipeline('/pipeline/export', {}, (ev: StreamEvent) => {
         if (ev.type === 'line') setLines(l => [...l, ev.text]);
-      }, noCrossref ? { no_crossref: true } : undefined);
+      }, { no_crossref: noCrossref, movie_sections: movieSections, tv_sections: tvSections });
       const ok = code === 0;
       setSuccess(ok); setDone(true);
       if (ok) setSummary(await api.getCsvInfo());
@@ -91,8 +112,64 @@ function ExportStep({ onDone }: { onDone: () => void }) {
 
   return (
     <Stack gap="md">
+      {/* Library picker */}
+      <Card withBorder p="md">
+        <Text fw={700} mb="sm">Libraries to scan</Text>
+        {libLoading && (
+          <Group gap="sm">
+            <Loader size="xs" color="orange" />
+            <Text size="sm" c="dimmed">Fetching Plex libraries…</Text>
+          </Group>
+        )}
+        {!libLoading && libError && (
+          <Alert color="yellow" variant="light" icon={<IconAlertCircle size={16} />}>
+            Could not load libraries — export will auto-detect: {libError}
+          </Alert>
+        )}
+        {!libLoading && !libError && libraries.length > 0 && (
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+            {movieLibs.length > 0 && (
+              <Stack gap={6}>
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase">Movies</Text>
+                {movieLibs.map(lib => (
+                  <Checkbox
+                    key={lib.key}
+                    label={lib.title}
+                    checked={libSels[lib.key] ?? true}
+                    onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                    size="sm"
+                    disabled={running}
+                  />
+                ))}
+              </Stack>
+            )}
+            {tvLibs.length > 0 && (
+              <Stack gap={6}>
+                <Text size="xs" fw={600} c="dimmed" tt="uppercase">TV Shows</Text>
+                {tvLibs.map(lib => (
+                  <Checkbox
+                    key={lib.key}
+                    label={lib.title}
+                    checked={libSels[lib.key] ?? true}
+                    onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                    size="sm"
+                    disabled={running}
+                  />
+                ))}
+              </Stack>
+            )}
+          </SimpleGrid>
+        )}
+      </Card>
+
       <Group align="center">
-        <Button leftSection={<IconPlayerPlay size={15} />} color="orange" onClick={run} loading={running}>
+        <Button
+          leftSection={<IconPlayerPlay size={15} />}
+          color="orange"
+          onClick={run}
+          loading={running}
+          disabled={!libLoading && !libError && selectedCount === 0}
+        >
           {running ? 'Exporting…' : done ? 'Re-run Export' : 'Run Export'}
         </Button>
         {done && !success && <Button variant="subtle" color="red" onClick={run}>Retry</Button>}

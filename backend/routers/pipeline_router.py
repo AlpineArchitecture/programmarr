@@ -93,10 +93,38 @@ def _sse(gen: AsyncGenerator[str, None]) -> StreamingResponse:
 
 class ExportOptions(BaseModel):
     no_crossref: bool = False
+    movie_sections: Optional[list[str]] = None  # None = auto-detect; [] = skip type entirely
+    tv_sections: Optional[list[str]] = None
+
+
+@router.get("/pipeline/libraries")
+def list_libraries():
+    cfg = _load_config()
+    plex_url = cfg.get("plex_url", "").rstrip("/")
+    plex_token = cfg.get("plex_token", "")
+    if not plex_url or not plex_token:
+        raise HTTPException(400, "Plex not configured")
+    try:
+        data = _plex_get(plex_url, plex_token, "/library/sections")
+        sections = data["MediaContainer"].get("Directory", [])
+    except Exception as e:
+        raise HTTPException(502, f"Could not reach Plex: {e}")
+    return [
+        {"key": s["key"], "title": s["title"], "type": s["type"]}
+        for s in sections
+        if s.get("type") in ("movie", "show")
+    ]
+
 
 @router.post("/pipeline/export")
 async def run_export(opts: ExportOptions = ExportOptions()):
-    args = ["--no-crossref"] if opts.no_crossref else []
+    args = []
+    if opts.no_crossref:
+        args.append("--no-crossref")
+    if opts.movie_sections is not None:
+        args += ["--movie-sections", ",".join(opts.movie_sections)]
+    if opts.tv_sections is not None:
+        args += ["--tv-sections", ",".join(opts.tv_sections)]
     return _sse(_stream("export.py", args, "export"))
 
 
