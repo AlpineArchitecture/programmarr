@@ -8,7 +8,7 @@ import { notifications } from '@mantine/notifications';
 import {
   IconCheck, IconEdit, IconPlus, IconRepeat, IconTag, IconTrash, IconX,
 } from '@tabler/icons-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, Channel, ContentItem, isMatchRef, RecipeMatch } from '../api/client';
 
@@ -434,18 +434,22 @@ export default function Channels() {
 
   async function load() {
     const data = await api.getChannels();
-    const sorted = [...data.channels].sort((a, b) => a.number - b.number);
-    setChannels(sorted);
+    setChannels([...data.channels].sort((a, b) => a.number - b.number));
     setLoading(false);
-
-    // Deep-link: if URL has a channel number, open that channel for editing
-    if (number) {
-      const ch = sorted.find((c) => c.number === Number(number));
-      if (ch) { setEditing(ch); open(); }
-    }
   }
 
   useEffect(() => { load(); }, []);
+
+  // Deep-link: open the channel named in the URL once the list has loaded.
+  // The ref guard ensures a list reload (e.g. after Save) never re-opens a
+  // modal the user just closed — fixing the "save bounces the window" bug.
+  const openedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!number) { openedFor.current = null; return; }
+    if (openedFor.current === number || channels.length === 0) return;
+    const ch = channels.find((c) => c.number === Number(number));
+    if (ch) { setEditing(ch); openedFor.current = number; open(); }
+  }, [number, channels]);
 
   function edit(ch: Channel) {
     setEditing(ch);
