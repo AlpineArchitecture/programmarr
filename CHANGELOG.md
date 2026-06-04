@@ -4,6 +4,38 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.3] — 2026-06-04
+
+Follow-up to the Live Channels release: per-channel visibility and control that the
+original plan called for but v0.2.2 only partly delivered.
+
+### Added
+
+- **Per-channel "last synced" badge.** Each live channel row on the Channels page
+  shows when it was last checked ("synced 2h ago" / "never"). Backed by a new
+  cosmetic `data/recipe_state.json` — written by the scheduler, read by the UI. It
+  is **not** correctness state (the change-detection diff still reads live Tunarr);
+  it lives in its own file so it never races with `channels.json` edits or deploys.
+- **Per-channel "Save & Sync now".** The channel editor (for live channels) gains a
+  button that saves the channel and immediately runs a scheduler cycle scoped to
+  just that channel (`/api/recipes/run?only=N`), applying the recipe to Tunarr in
+  place without leaving the editor.
+- **"Next run" on the Dashboard.** The Auto-Updates card now shows when the next
+  automatic check will run (e.g. "next ~in 11h"), alongside the last check.
+
+### Changed
+
+- `/api/recipes/status` now returns `next_run_seconds` and a per-channel `channels`
+  map. The scheduler's last-run timestamp moved to wall-clock time so the status
+  endpoint can compute the next run without touching the event loop.
+
+### Notes
+
+- Documentation reconciled against the full original plan: source/target
+  agnosticism (Jellyfin source, ErsatzTV target) is captured as an explicit
+  **future** goal with the in-place-update contract noted, but intentionally not
+  built yet — there's no second source/target to validate an adapter layer against.
+
 ## [0.2.2] — 2026-06-04
 
 ### Added — Live Channels (auto-updating channels)
@@ -98,6 +130,7 @@ and patches it **in place** as the library grows — no redeploy, no manual edit
 - GitHub Actions CI publishing to GHCR; Watchtower auto-update support
   (including the `DOCKER_API_VERSION` fix for newer Docker engines).
 
+[0.2.3]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.3
 [0.2.2]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.2
 [0.2.1]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.1
 [0.2.0]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.0
