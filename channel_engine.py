@@ -12,6 +12,7 @@ No dependencies beyond the Python standard library.
 """
 
 import json
+import re
 import uuid
 import urllib.error
 import urllib.request
@@ -135,6 +136,70 @@ def resolve_title(title, movie_map, show_map):
     return None
 
 
+# ── Franchise matching (live recipes) ──────────────────────────────────────────
+
+def _word_boundary_match(value, title):
+    """True if `value` appears in `title` on word boundaries (case-insensitive).
+
+    Word-boundary, not raw substring: "It" matches "It Follows" but NOT
+    "Little Women". Multi-word values work too ("Bad Boys" matches "Bad Boys II").
+    """
+    if not value:
+        return False
+    return re.search(r"\b" + re.escape(value) + r"\b", title, re.IGNORECASE) is not None
+
+
+def match_titles(value, movie_map, show_map, order=None, exclude=None):
+    """Franchise matcher for {"match": "title_contains"} content refs.
+
+    Scans the Tunarr library for titles containing `value` on word boundaries and
+    returns (resolved_items, preview). `resolved_items` are ready for build_schedule;
+    `preview` is a [{title, year}] list (same order) for the author-time confirm UI.
+
+    order="release_date" sorts movies by releaseDate ascending (unknown dates last);
+    any other value sorts alphabetically. `exclude` is a case-insensitive list of
+    titles to drop (the per-recipe false-positive escape hatch).
+    """
+    exclude_set = {e.lower().strip() for e in (exclude or [])}
+    matched = []  # (sort_release_ms, year, title, item)
+
+    for key, p in movie_map.items():
+        if key in exclude_set:
+            continue
+        prog = p.get("program", {})
+        title = prog.get("title", "")
+        if _word_boundary_match(value, title):
+            release_ms = prog.get("releaseDate")
+            matched.append((
+                release_ms if release_ms is not None else float("inf"),
+                prog.get("year"),
+                title,
+                {"type": "Movie", "title": title, "programs": [p]},
+            ))
+
+    for key, s in show_map.items():
+        if key in exclude_set:
+            continue
+        title = s["title"]
+        if _word_boundary_match(value, title):
+            first_prog = s["programs"][0].get("program", {}) if s.get("programs") else {}
+            matched.append((
+                float("inf"),  # shows have no single release date — sort to the end
+                first_prog.get("year"),
+                title,
+                {"type": "TV", "title": title, "showId": s["showId"], "programs": s["programs"]},
+            ))
+
+    if order == "release_date":
+        matched.sort(key=lambda t: (t[0], t[2].lower()))
+    else:
+        matched.sort(key=lambda t: t[2].lower())
+
+    resolved = [t[3] for t in matched]
+    preview = [{"title": t[2], "year": t[1]} for t in matched]
+    return resolved, preview
+
+
 # ── Plex collection resolution ─────────────────────────────────────────────────
 
 def get_plex_sections(plex_url, token):
@@ -194,8 +259,9 @@ def resolve_content(content_list, movie_map, show_map,
     plex_sections = plex_sections or []
     collection_cache = collection_cache if collection_cache is not None else {}
 
-    # Expand any {"collection": "Name"} entries to their member titles
+    # Expand {"collection": "Name"} → member titles; {"match": ...} → resolved items
     expanded_titles = []
+    matched_items = []
     missing = []
     for entry in content_list:
         if isinstance(entry, dict) and "collection" in entry:
@@ -207,6 +273,20 @@ def resolve_content(content_list, movie_map, show_map,
             else:
                 print(f"    WARNING: Collection '{col_name}' not found in Plex")
                 missing.append(f"[collection:{col_name}]")
+        elif isinstance(entry, dict) and "match" in entry:
+            value = entry.get("value", "")
+            if entry["match"] == "title_contains" and value:
+                items, _ = match_titles(value, movie_map, show_map,
+                                        order=entry.get("order"), exclude=entry.get("exclude"))
+                if items:
+                    matched_items.extend(items)
+                    print(f"    Match '{value}': {len(items)} titles")
+                else:
+                    print(f"    WARNING: match '{value}' matched nothing in library")
+                    missing.append(f"[match:{value}]")
+            else:
+                print(f"    WARNING: unsupported match ref: {entry}")
+                missing.append(f"[match:{value or entry.get('match')}]")
         else:
             expanded_titles.append(entry)
 
@@ -218,6 +298,7 @@ def resolve_content(content_list, movie_map, show_map,
         else:
             missing.append(title)
 
+    resolved.extend(matched_items)
     return resolved, missing
 
 
@@ -277,3 +358,47 @@ def build_schedule(shuffle_type, resolved_items):
 
 def set_programming(tunarr_url, channel_id, schedule_payload):
     return api(tunarr_url, "POST", f"/api/channels/{channel_id}/programming", body=schedule_payload, timeout=120)
+
+
+# ── In-place channel updates (live recipes) ────────────────────────────────────
+
+def find_channel_by_number(tunarr_url, number):
+    """Return the live Tunarr channel dict (incl. id) for a channel number, or None."""
+    for ch in api(tunarr_url, "GET", "/api/channels") or []:
+        if ch.get("number") == number:
+            return ch
+    return None
+
+
+def read_channel_programming(tunarr_url, channel_id):
+    """Return the set of program IDs currently scheduled on a channel, or None on error.
+
+    Uses GET /api/channels/{id}/programming. The `programs` field is a dict keyed by
+    program ID (the same id-space as build_library_index's p["id"]), so its keys are
+    the current content set. Falls back to distinct content lineup ids if absent.
+    This set is the "current" side of the scheduler's change-detection diff.
+    """
+    pr = api(tunarr_url, "GET", f"/api/channels/{channel_id}/programming")
+    if not pr:
+        return None
+    programs = pr.get("programs")
+    if isinstance(programs, dict):
+        return set(programs.keys())
+    return {i["id"] for i in pr.get("lineup", []) if i.get("type") == "content" and i.get("id")}
+
+
+def update_channel_in_place(tunarr_url, number, shuffle, resolved):
+    """Patch an existing channel's programming in place — never delete/recreate.
+
+    Looks the channel up by number (preserving its Tunarr id and Plex DVR mapping),
+    rebuilds the schedule from `resolved`, and POSTs it. This is the primitive the
+    live-channel scheduler calls after detecting a content change. Raises
+    ChannelEngineError if the channel is missing or no schedule can be built.
+    """
+    ch = find_channel_by_number(tunarr_url, number)
+    if not ch:
+        raise ChannelEngineError(f"Channel #{number} not found in Tunarr")
+    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved)
+    if not schedule:
+        raise ChannelEngineError(f"Channel #{number}: no schedule could be built (no content resolved)")
+    return set_programming(tunarr_url, ch["id"], schedule)

@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from routers import channels_router, config_router, logs_router, pipeline_router, status_router
+from routers import channels_router, config_router, logs_router, pipeline_router, recipes_router, status_router
 
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent))
 STATIC_DIR = Path(__file__).parent / "static"
@@ -81,6 +81,7 @@ app.include_router(config_router.router, prefix="/api")
 app.include_router(status_router.router, prefix="/api")
 app.include_router(channels_router.router, prefix="/api")
 app.include_router(pipeline_router.router, prefix="/api")
+app.include_router(recipes_router.router, prefix="/api")
 app.include_router(logs_router.router, prefix="/api")
 
 if STATIC_DIR.exists():
