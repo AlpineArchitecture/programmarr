@@ -15,6 +15,8 @@
 
 Programmarr is a self-hosted web app that exports your Plex library, lets you feed it to an LLM, and deploys the results as themed virtual TV channels in Tunarr — with a web UI that feels like Sonarr or Radarr.
 
+Channels can be **self-maintaining**: mark one "live" and Programmarr re-checks it against your library on a schedule and patches it in place — new episodes and new franchise films appear on their own, no redeploy.
+
 **Requires:** [Tunarr](https://github.com/chrisbenincasa/tunarr) + Plex
 
 ---
@@ -145,6 +147,21 @@ Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your pool.
 
 All three paths end with a probe (dry run) → deploy to Tunarr. The app streams live output to the browser so you can watch it work.
 
+---
+
+## Live Channels (auto-updating) 🆕
+
+Channels are normally static snapshots — you build them, deploy them, and they go stale as your library grows. **Mark a channel "live"** and Programmarr keeps it fresh for you: on a schedule it re-resolves the channel against your current library and patches it **in place**, only when something actually changed.
+
+Two everyday patterns:
+
+- **TV marathons** — a 24/7 single-show loop. New episodes land in Plex → they're on the channel by the next check.
+- **Franchises** — add a *title-contains* rule (e.g. `Bad Boys`) in the channel editor. Every matching film is pulled in, in release order, and a new sequel joins automatically when it appears. A live preview shows exactly what matches before you save, and you can exclude any false positives.
+
+**Why "in place" matters:** updates reuse the existing Tunarr channel — same channel number, same internal id — so Plex's Live TV / DVR mapping is never disturbed. No deleting, no re-adding the channel in Plex. An unchanged channel is a no-op, so there's no needless guide churn.
+
+It ships **off**. Turn it on in **Settings → Live Channels**, flip the **"Auto-update"** switch on any channel you want maintained, and watch it from the **Dashboard → Auto-Updates** card (live count, last run, recent changes, pause, and a "Check now" button). Everything stays a recipe you can edit or revert at any time.
+
 ### Also included
 
 - **Channel protection** — before deploying, choose which existing Tunarr channels to keep. Checked = preserved; unchecked = cleared and rebuilt as new stations. The "Channels start at" number auto-adjusts to leave room for whatever you keep.
@@ -152,7 +169,7 @@ All three paths end with a probe (dry run) → deploy to Tunarr. The app streams
 - **Library picker** — choose which Plex libraries to scan (Movies, 4K Movies, Kids TV, etc.) before each export; supports mixing multiple libraries of the same type
 - **Channel logo fetching** — pulls TMDB clearlogos for single-show/movie channels
 - **Plex DVR sync** — maps new channels into the Plex Live TV guide automatically
-- **Channel editor** — edit names, numbers, shuffle mode, and content lists in the browser
+- **Channel editor** — edit names, numbers, shuffle mode, and content lists in the browser; mark channels live and build franchise auto-match rules
 - **Optional basic auth** — set a username/password if you expose the UI outside your LAN
 
 ---
