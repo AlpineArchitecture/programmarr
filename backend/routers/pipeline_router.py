@@ -12,6 +12,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Response, Uploa
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+import scheduler  # noqa: E402  (backend/ on sys.path) — shared deploy_lock
+
 router = APIRouter()
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent.parent))
 SCRIPTS_DIR = Path(os.environ.get("PROGRAMMARR_SCRIPTS", Path(__file__).parent.parent.parent))
@@ -89,6 +91,17 @@ def _sse(gen: AsyncGenerator[str, None]) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+async def _locked_stream(script: str, args: list[str], tag: str) -> AsyncGenerator[str, None]:
+    """Stream a subprocess while holding the shared deploy_lock for its full duration.
+
+    Used for create.py runs (probe/deploy) so the live-channel scheduler can't patch
+    a channel in the middle of a deploy deleting/recreating it (and vice versa).
+    """
+    async with scheduler.deploy_lock:
+        async for chunk in _stream(script, args, tag):
+            yield chunk
 
 
 class ExportOptions(BaseModel):
@@ -272,7 +285,7 @@ async def run_probe(from_channel: Optional[str] = Query(None)):
     args = ["--probe"]
     if from_channel:
         args += ["--from", from_channel]
-    return _sse(_stream("create.py", args, "probe"))
+    return _sse(_locked_stream("create.py", args, "probe"))
 
 
 @router.post("/pipeline/deploy")
@@ -284,7 +297,7 @@ async def run_deploy(from_channel: Optional[str] = Query(None), protected: str =
         args += ["--from", from_channel]
     if protected:
         args += ["--protect", protected]
-    return _sse(_stream("create.py", args, "deploy"))
+    return _sse(_locked_stream("create.py", args, "deploy"))
 
 
 class DeployRequest(BaseModel):
@@ -319,7 +332,7 @@ async def run_deploy_selective(req: DeployRequest):
         args.append("--no-delete")
     if req.protected_numbers:
         args += ["--protect", ",".join(str(n) for n in req.protected_numbers)]
-    return _sse(_stream("create.py", args, "deploy"))
+    return _sse(_locked_stream("create.py", args, "deploy"))
 
 
 @router.post("/pipeline/images")

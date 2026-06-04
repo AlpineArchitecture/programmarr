@@ -1,9 +1,9 @@
 import {
-  Alert, Box, Button, Card, Divider, Group,
-  PasswordInput, Stack, Text, TextInput, Title,
+  Alert, Box, Button, Card, Divider, Group, NumberInput,
+  PasswordInput, Stack, Switch, Text, TextInput, Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconAlertCircle, IconCheck, IconDeviceFloppy } from '@tabler/icons-react';
+import { IconAlertCircle, IconCheck, IconDeviceFloppy, IconRepeat } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 
@@ -17,6 +17,10 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  const [recipesEnabled, setRecipesEnabled] = useState(false);
+  const [recipeInterval, setRecipeInterval] = useState(12);
+  const [savingRecipes, setSavingRecipes] = useState(false);
+
   useEffect(() => {
     api.getConfig().then((cfg) => {
       setValues({
@@ -29,7 +33,28 @@ export default function Settings() {
       });
       setLoaded(true);
     });
+    api.getRecipesStatus().then((s) => {
+      setRecipesEnabled(s.enabled);
+      setRecipeInterval(s.interval_hours);
+    }).catch(() => {});
   }, []);
+
+  async function saveRecipes() {
+    setSavingRecipes(true);
+    try {
+      await api.saveRecipeConfig(recipesEnabled, recipeInterval);
+      notifications.show({
+        title: 'Saved',
+        message: `Auto-updates ${recipesEnabled ? 'enabled' : 'disabled'}`,
+        color: 'green',
+        icon: <IconCheck size={16} />,
+      });
+    } catch (e: any) {
+      notifications.show({ title: 'Error', message: e.message, color: 'red' });
+    } finally {
+      setSavingRecipes(false);
+    }
+  }
 
   function set(key: string, val: string) {
     setValues((v) => ({ ...v, [key]: val }));
@@ -134,6 +159,47 @@ export default function Settings() {
           Save Changes
         </Button>
       </Group>
+
+      {/* Live channels (auto-update) */}
+      <Card p="lg">
+        <Group gap={6} mb={4}>
+          <IconRepeat size={16} />
+          <Text fw={700}>Live Channels</Text>
+        </Group>
+        <Text size="xs" c="dimmed" mb="md">
+          When enabled, channels marked “live” are re-checked on a schedule and patched in place as
+          your library grows (new episodes, new franchise films) — no redeploy. Off by default.
+        </Text>
+        <Stack gap="sm">
+          <Switch
+            checked={recipesEnabled}
+            onChange={(e) => setRecipesEnabled(e.currentTarget.checked)}
+            color="orange"
+            label="Enable automatic updates"
+          />
+          <NumberInput
+            label="Check interval (hours)"
+            description="How often the scheduler re-checks live channels"
+            value={recipeInterval}
+            onChange={(v) => setRecipeInterval(Number(v) || 12)}
+            min={1}
+            max={168}
+            w={220}
+            disabled={!recipesEnabled}
+          />
+          <Group>
+            <Button
+              leftSection={<IconDeviceFloppy size={16} />}
+              color="orange"
+              variant="light"
+              onClick={saveRecipes}
+              loading={savingRecipes}
+            >
+              Save Live Settings
+            </Button>
+          </Group>
+        </Stack>
+      </Card>
     </Stack>
   );
 }

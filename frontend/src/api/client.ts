@@ -60,17 +60,57 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(selections),
     }),
+
+  // ── Live channels (recipes) ──
+  previewRecipe: (value: string, order?: string | null, exclude: string[] = []) =>
+    req<RecipePreview>('/recipes/preview', {
+      method: 'POST',
+      body: JSON.stringify({ value, order, exclude }),
+    }),
+  getRecipesStatus: () => req<RecipesStatus>('/recipes/status'),
+  runRecipes: (apply: boolean) =>
+    req<CycleSummary>(`/recipes/run?apply=${apply}`, { method: 'POST' }),
+  pauseRecipes: (paused: boolean) =>
+    req<RecipesStatus>(`/recipes/pause?paused=${paused}`, { method: 'POST' }),
+  saveRecipeConfig: (enabled: boolean, interval_hours: number) =>
+    req<RecipesStatus>('/recipes/config', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, interval_hours }),
+    }),
 };
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface ConnStatus { ok: boolean; url: string; error?: string }
 export interface TunarrChannel { number: number; name: string; id?: string }
+export interface MatchRef { match: 'title_contains'; value: string; order?: string | null; exclude?: string[] }
+export type ContentItem = string | { collection: string } | MatchRef;
+export function isMatchRef(c: ContentItem): c is MatchRef {
+  return typeof c === 'object' && c !== null && 'match' in c;
+}
+export function isCollectionRef(c: ContentItem): c is { collection: string } {
+  return typeof c === 'object' && c !== null && 'collection' in c;
+}
 export interface Channel {
   number: number;
   name: string;
   shuffle: 'ordered' | 'shuffle' | 'block';
-  content: (string | { collection: string })[];
+  content: ContentItem[];
+  live?: boolean;
+}
+
+// ── Live channels (recipes) ──
+export interface RecipeMatch { title: string; year: number | null }
+export interface RecipePreview { value: string; order: string | null; count: number; matches: RecipeMatch[] }
+export interface CycleChange { number: number; name: string; added: string[]; added_count: number; removed_count: number; applied: boolean }
+export interface CycleSkip { number: number; name: string; reason: string }
+export interface CycleSummary {
+  time: string; apply: boolean; live: number; changed: number;
+  changes: CycleChange[]; skipped: CycleSkip[]; error: string | null;
+}
+export interface RecipesStatus {
+  enabled: boolean; paused: boolean; running: boolean;
+  interval_hours: number; live_count: number; last_cycle: CycleSummary | null;
 }
 export interface ChannelsFile { channels: Channel[]; orphaned: string[]; suggested_channels: string[] }
 export interface CsvInfo {

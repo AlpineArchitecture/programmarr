@@ -1,16 +1,16 @@
 import {
-  ActionIcon, Badge, Box, Button, Card, Divider, Group,
-  Loader, Modal, Select, Stack, Text, TextInput, Title,
+  ActionIcon, Badge, Box, Button, Card, Checkbox, Divider, Group,
+  Loader, Modal, ScrollArea, Select, Stack, Switch, Text, TextInput, Title,
   Tooltip,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
-  IconCheck, IconEdit, IconPlus, IconTag, IconTrash, IconX,
+  IconCheck, IconEdit, IconPlus, IconRepeat, IconTag, IconTrash, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, Channel } from '../api/client';
+import { api, Channel, ContentItem, isMatchRef, RecipeMatch } from '../api/client';
 
 const SHUFFLE_COLOR: Record<string, string> = { ordered: 'blue', block: 'violet', shuffle: 'teal' };
 const SHUFFLE_OPTIONS = [
@@ -18,6 +18,135 @@ const SHUFFLE_OPTIONS = [
   { value: 'ordered',  label: 'Ordered — sequential' },
   { value: 'block',    label: 'Block — grouped by show' },
 ];
+
+interface MatchRule { value: string; order: string; exclude: string[] }
+
+// ── Franchise auto-match builder ───────────────────────────────────────────────
+
+function FranchiseBuilder({
+  initial,
+  onSave,
+  onCancel,
+}: {
+  initial: MatchRule | null;
+  onSave: (rule: MatchRule) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial?.value ?? '');
+  const [order, setOrder] = useState(initial?.order ?? 'release_date');
+  const [excluded, setExcluded] = useState<Set<string>>(new Set(initial?.exclude ?? []));
+  const [matches, setMatches] = useState<RecipeMatch[] | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  async function preview() {
+    if (!value.trim()) return;
+    setPreviewing(true);
+    try {
+      const res = await api.previewRecipe(value.trim(), order, []); // full candidate list
+      setMatches(res.matches);
+    } catch (e: any) {
+      notifications.show({ title: 'Preview failed', message: e.message, color: 'red' });
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  // Auto-preview when editing an existing rule so the checklist is populated
+  useEffect(() => { if (initial?.value) preview(); /* eslint-disable-next-line */ }, []);
+
+  function toggle(title: string) {
+    setExcluded((s) => {
+      const n = new Set(s);
+      if (n.has(title)) n.delete(title); else n.add(title);
+      return n;
+    });
+  }
+
+  const includedCount = matches ? matches.filter((m) => !excluded.has(m.title)).length : 0;
+
+  return (
+    <Card withBorder p="sm" bg="dark.6">
+      <Stack gap="xs">
+        <Text size="sm" fw={600}>Franchise auto-match</Text>
+        <Text size="xs" c="dimmed">
+          Auto-add every library title containing this phrase (whole-word match — "It" matches
+          "It Follows", not "Little Women"). New matching films join the channel automatically.
+        </Text>
+
+        <Group gap="xs" align="end">
+          <TextInput
+            label="Title contains"
+            placeholder="e.g. Bad Boys"
+            value={value}
+            onChange={(e) => setValue(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && preview()}
+            style={{ flex: 1 }}
+            size="xs"
+          />
+          <Select
+            label="Order"
+            size="xs"
+            w={140}
+            data={[
+              { value: 'release_date', label: 'Release date' },
+              { value: 'alpha', label: 'Alphabetical' },
+            ]}
+            value={order}
+            onChange={(v) => setOrder(v || 'release_date')}
+            allowDeselect={false}
+          />
+          <Button size="xs" variant="light" color="orange" onClick={preview} loading={previewing}>
+            Preview
+          </Button>
+        </Group>
+
+        {matches && (
+          <>
+            <Text size="xs" c="dimmed">
+              {includedCount} of {matches.length} included
+              {excluded.size ? ` · ${excluded.size} excluded` : ''}
+            </Text>
+            {matches.length === 0 ? (
+              <Text size="xs" c="yellow.4">No titles match — try a different phrase.</Text>
+            ) : (
+              <ScrollArea.Autosize mah={180}>
+                <Stack gap={2}>
+                  {matches.map((m) => (
+                    <Checkbox
+                      key={m.title}
+                      size="xs"
+                      color="orange"
+                      checked={!excluded.has(m.title)}
+                      onChange={() => toggle(m.title)}
+                      label={
+                        <Text size="xs">
+                          {m.title}
+                          {m.year ? <Text span c="dimmed"> ({m.year})</Text> : null}
+                        </Text>
+                      }
+                    />
+                  ))}
+                </Stack>
+              </ScrollArea.Autosize>
+            )}
+          </>
+        )}
+
+        <Group justify="flex-end" gap="xs">
+          <Button size="xs" variant="subtle" color="gray" onClick={onCancel}>Cancel</Button>
+          <Button
+            size="xs"
+            color="orange"
+            disabled={!value.trim()}
+            onClick={() => onSave({ value: value.trim(), order, exclude: Array.from(excluded) })}
+          >
+            Save rule
+          </Button>
+        </Group>
+      </Stack>
+    </Card>
+  );
+}
 
 // ── Channel editor modal ───────────────────────────────────────────────────────
 
@@ -37,19 +166,26 @@ function ChannelModal({
   const [shuffle, setShuffle] = useState<string>('shuffle');
   const [content, setContent] = useState<string[]>([]);
   const [newItem, setNewItem] = useState('');
+  const [live, setLive] = useState(false);
+  const [matchRef, setMatchRef] = useState<MatchRule | null>(null);
+  const [building, setBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (channel) {
-      setName(channel.name);
-      setNumber(String(channel.number));
-      setShuffle(channel.shuffle || 'shuffle');
-      setContent(
-        channel.content.map((c) =>
-          typeof c === 'string' ? c : `{collection: ${(c as any).collection}}`
-        )
-      );
-    }
+    if (!channel) return;
+    setName(channel.name);
+    setNumber(String(channel.number));
+    setShuffle(channel.shuffle || 'shuffle');
+    setLive(!!channel.live);
+    setBuilding(false);
+
+    const mref = channel.content.find(isMatchRef);
+    setMatchRef(mref ? { value: mref.value, order: mref.order || 'release_date', exclude: mref.exclude || [] } : null);
+    setContent(
+      channel.content
+        .filter((c) => !isMatchRef(c))
+        .map((c) => (typeof c === 'string' ? c : `{collection: ${(c as any).collection}}`))
+    );
   }, [channel]);
 
   function addItem() {
@@ -66,16 +202,21 @@ function ChannelModal({
     if (!channel) return;
     setSaving(true);
     try {
-      const rawContent = content.map((c) => {
+      const rawContent: ContentItem[] = content.map((c) => {
         const m = c.match(/^\{collection:\s*(.+)\}$/);
         return m ? { collection: m[1] } : c;
       });
-      await api.updateChannel(channel.number, {
-        number: Number(number),
-        name,
-        shuffle,
-        content: rawContent,
-      });
+      if (matchRef) {
+        rawContent.push({
+          match: 'title_contains',
+          value: matchRef.value,
+          order: matchRef.order,
+          exclude: matchRef.exclude,
+        });
+      }
+      const payload: any = { number: Number(number), name, shuffle, content: rawContent };
+      if (live) payload.live = true;
+      await api.updateChannel(channel.number, payload);
       notifications.show({ message: 'Channel saved', color: 'green', icon: <IconCheck size={14} /> });
       onSaved();
       onClose();
@@ -127,6 +268,9 @@ function ChannelModal({
               </ActionIcon>
             </Group>
           ))}
+          {content.length === 0 && !matchRef && (
+            <Text size="xs" c="dimmed">No fixed titles — add titles below or a franchise auto-match.</Text>
+          )}
         </Stack>
 
         <Group gap="xs">
@@ -142,6 +286,58 @@ function ChannelModal({
             Add
           </Button>
         </Group>
+
+        <Divider label="Live recipe" labelPosition="left" />
+
+        <Switch
+          checked={live}
+          onChange={(e) => setLive(e.currentTarget.checked)}
+          color="orange"
+          label="Auto-update on a schedule"
+          description="Re-resolves this channel against your library and patches it in place. New episodes and matching franchise films appear automatically — no redeploy."
+        />
+
+        {matchRef && !building ? (
+          <Card withBorder p="xs">
+            <Group justify="space-between" wrap="nowrap">
+              <Box style={{ minWidth: 0 }}>
+                <Group gap={6}>
+                  <IconRepeat size={14} />
+                  <Text size="sm" fw={600} truncate>“{matchRef.value}”</Text>
+                </Group>
+                <Text size="xs" c="dimmed">
+                  {matchRef.order === 'release_date' ? 'release date order' : 'alphabetical'}
+                  {matchRef.exclude.length ? ` · ${matchRef.exclude.length} excluded` : ''}
+                </Text>
+              </Box>
+              <Group gap={4}>
+                <ActionIcon variant="subtle" color="gray" onClick={() => setBuilding(true)}>
+                  <IconEdit size={14} />
+                </ActionIcon>
+                <ActionIcon variant="subtle" color="red" onClick={() => setMatchRef(null)}>
+                  <IconTrash size={14} />
+                </ActionIcon>
+              </Group>
+            </Group>
+          </Card>
+        ) : building ? (
+          <FranchiseBuilder
+            initial={matchRef}
+            onSave={(rule) => { setMatchRef(rule); setBuilding(false); }}
+            onCancel={() => setBuilding(false)}
+          />
+        ) : (
+          <Button
+            size="xs"
+            variant="light"
+            color="orange"
+            leftSection={<IconPlus size={14} />}
+            onClick={() => setBuilding(true)}
+            style={{ alignSelf: 'flex-start' }}
+          >
+            Add franchise auto-match
+          </Button>
+        )}
 
         <Divider />
 
@@ -201,6 +397,11 @@ function ChannelRow({
             <Badge size="xs" color="dark" variant="light" leftSection={<IconTag size={10} />}>
               {channel.content.length} item{channel.content.length !== 1 ? 's' : ''}
             </Badge>
+            {channel.live && (
+              <Badge size="xs" color="orange" variant="light" leftSection={<IconRepeat size={10} />}>
+                live
+              </Badge>
+            )}
           </Group>
         </Box>
 
@@ -261,10 +462,17 @@ export default function Channels() {
     return <Stack align="center" justify="center" h={400}><Loader color="orange" /></Stack>;
   }
 
+  const liveCount = channels.filter((c) => c.live).length;
+
   return (
     <Stack gap="lg">
       <Group justify="space-between">
         <Title order={2}>Channels ({channels.length})</Title>
+        {liveCount > 0 && (
+          <Badge color="orange" variant="light" leftSection={<IconRepeat size={12} />}>
+            {liveCount} live
+          </Badge>
+        )}
       </Group>
 
       {channels.length === 0 ? (

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent.parent))
@@ -24,6 +24,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import channel_engine  # noqa: E402
+import scheduler  # noqa: E402  (backend/ is on sys.path)
 
 router = APIRouter()
 
@@ -66,3 +67,47 @@ def preview_recipe(req: PreviewRequest):
         req.value, movie_map, show_map, order=req.order, exclude=req.exclude
     )
     return {"value": req.value, "order": req.order, "count": len(preview), "matches": preview}
+
+
+# ── Scheduler control / status ─────────────────────────────────────────────────
+
+@router.get("/recipes/status")
+def recipes_status():
+    """Current scheduler state: enabled flag, pause, interval, live count, last cycle."""
+    return scheduler.get_status()
+
+
+@router.post("/recipes/run")
+async def recipes_run(apply: bool = Query(True)):
+    """Run one cycle on demand. apply=false is a dry run (detect + log, no patch).
+
+    This is the manual-refresh / test trigger — it runs the exact same code path
+    the background loop does, so you don't have to wait for the interval.
+    """
+    return await scheduler.run_cycle(apply=apply)
+
+
+@router.post("/recipes/pause")
+def recipes_pause(paused: bool = Query(True)):
+    """Runtime kill switch — halt (or resume) auto-updates without a restart."""
+    return scheduler.set_paused(paused)
+
+
+class RecipeConfigRequest(BaseModel):
+    enabled: bool
+    interval_hours: float = 12
+
+
+@router.post("/recipes/config")
+def set_recipe_config(req: RecipeConfigRequest):
+    """Persist the master enable flag + interval. Merge-writes config.json so it
+    never clobbers connection/auth settings (unlike the strict /config model)."""
+    cfg = _load_config()
+    cfg["recipes_enabled"] = req.enabled
+    cfg["recipe_interval_hours"] = req.interval_hours
+    try:
+        with open(DATA_DIR / "config.json", "w") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception as e:
+        raise HTTPException(500, f"Could not save config: {e}")
+    return scheduler.get_status()

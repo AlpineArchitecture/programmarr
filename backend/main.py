@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+import scheduler
 from routers import channels_router, config_router, logs_router, pipeline_router, recipes_router, status_router
 
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent))
@@ -28,7 +29,16 @@ STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(app: FastAPI):
     # Ensure data directories exist before serving any requests
     (DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
-    yield
+    # Start the live-channel scheduler loop (no-op unless recipes_enabled in config)
+    scheduler_task = asyncio.create_task(scheduler.scheduler_loop())
+    try:
+        yield
+    finally:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Programmarr", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
