@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 
 # Pipeline scripts and prompt template
-COPY export.py create.py generate_no_ai.py generate_from_collections.py \
+COPY export.py create.py channel_engine.py generate_no_ai.py generate_from_collections.py \
      fetch_images.py sync_plex.py PROMPT.md ./
 
 # Built React app → served as static files by FastAPI
