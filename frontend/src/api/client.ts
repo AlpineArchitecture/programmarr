@@ -68,8 +68,11 @@ export const api = {
       body: JSON.stringify({ value, order, exclude }),
     }),
   getRecipesStatus: () => req<RecipesStatus>('/recipes/status'),
-  runRecipes: (apply: boolean) =>
-    req<CycleSummary>(`/recipes/run?apply=${apply}`, { method: 'POST' }),
+  runRecipes: (apply: boolean, only?: number) =>
+    req<CycleSummary>(
+      `/recipes/run?apply=${apply}${only !== undefined ? `&only=${only}` : ''}`,
+      { method: 'POST' },
+    ),
   pauseRecipes: (paused: boolean) =>
     req<RecipesStatus>(`/recipes/pause?paused=${paused}`, { method: 'POST' }),
   saveRecipeConfig: (enabled: boolean, interval_hours: number) =>
@@ -108,9 +111,12 @@ export interface CycleSummary {
   time: string; apply: boolean; live: number; changed: number;
   changes: CycleChange[]; skipped: CycleSkip[]; error: string | null;
 }
+export interface ChannelSyncState { checked_at?: string; changed_at?: string; change_summary?: string }
 export interface RecipesStatus {
   enabled: boolean; paused: boolean; running: boolean;
-  interval_hours: number; live_count: number; last_cycle: CycleSummary | null;
+  interval_hours: number; next_run_seconds: number | null;
+  live_count: number; last_cycle: CycleSummary | null;
+  channels: Record<string, ChannelSyncState>;
 }
 export interface ChannelsFile { channels: Channel[]; orphaned: string[]; suggested_channels: string[] }
 export interface CsvInfo {

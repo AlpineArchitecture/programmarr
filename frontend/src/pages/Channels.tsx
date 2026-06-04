@@ -6,11 +6,20 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
-  IconCheck, IconEdit, IconPlus, IconRepeat, IconTag, IconTrash, IconX,
+  IconBolt, IconCheck, IconEdit, IconPlus, IconRepeat, IconTag, IconTrash, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, Channel, ContentItem, isMatchRef, RecipeMatch } from '../api/client';
+import { api, Channel, ChannelSyncState, ContentItem, isMatchRef, RecipeMatch } from '../api/client';
+
+function syncedAgo(iso?: string): string {
+  if (!iso) return 'never';
+  const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (secs < 90) return 'just now';
+  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.round(secs / 3600)}h ago`;
+  return `${Math.round(secs / 86400)}d ago`;
+}
 
 const SHUFFLE_COLOR: Record<string, string> = { ordered: 'blue', block: 'violet', shuffle: 'teal' };
 const SHUFFLE_OPTIONS = [
@@ -170,6 +179,7 @@ function ChannelModal({
   const [matchRef, setMatchRef] = useState<MatchRule | null>(null);
   const [building, setBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     if (!channel) return;
@@ -198,25 +208,29 @@ function ChannelModal({
     setContent((c) => c.filter((_, idx) => idx !== i));
   }
 
+  async function persist() {
+    const rawContent: ContentItem[] = content.map((c) => {
+      const m = c.match(/^\{collection:\s*(.+)\}$/);
+      return m ? { collection: m[1] } : c;
+    });
+    if (matchRef) {
+      rawContent.push({
+        match: 'title_contains',
+        value: matchRef.value,
+        order: matchRef.order,
+        exclude: matchRef.exclude,
+      });
+    }
+    const payload: any = { number: Number(number), name, shuffle, content: rawContent };
+    if (live) payload.live = true;
+    await api.updateChannel(channel!.number, payload);
+  }
+
   async function save() {
     if (!channel) return;
     setSaving(true);
     try {
-      const rawContent: ContentItem[] = content.map((c) => {
-        const m = c.match(/^\{collection:\s*(.+)\}$/);
-        return m ? { collection: m[1] } : c;
-      });
-      if (matchRef) {
-        rawContent.push({
-          match: 'title_contains',
-          value: matchRef.value,
-          order: matchRef.order,
-          exclude: matchRef.exclude,
-        });
-      }
-      const payload: any = { number: Number(number), name, shuffle, content: rawContent };
-      if (live) payload.live = true;
-      await api.updateChannel(channel.number, payload);
+      await persist();
       notifications.show({ message: 'Channel saved', color: 'green', icon: <IconCheck size={14} /> });
       onSaved();
       onClose();
@@ -224,6 +238,31 @@ function ChannelModal({
       notifications.show({ title: 'Error', message: e.message, color: 'red' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Save, then immediately run a scheduler cycle scoped to this channel — applies
+  // the recipe to Tunarr in place without leaving the editor.
+  async function saveAndSync() {
+    if (!channel) return;
+    setSyncing(true);
+    try {
+      await persist();
+      const res = await api.runRecipes(true, Number(number));
+      const c = res.changes.find((x) => x.number === Number(number));
+      notifications.show({
+        message: c
+          ? `Synced #${number} — +${c.added_count}${c.removed_count ? ` −${c.removed_count}` : ''}`
+          : `Synced #${number} — already up to date`,
+        color: 'green',
+        icon: <IconCheck size={14} />,
+      });
+      onSaved();
+      onClose();
+    } catch (e: any) {
+      notifications.show({ title: 'Sync failed', message: e.message, color: 'red' });
+    } finally {
+      setSyncing(false);
     }
   }
 
@@ -343,6 +382,17 @@ function ChannelModal({
 
         <Group justify="flex-end">
           <Button variant="subtle" color="gray" onClick={onClose}>Cancel</Button>
+          {live && (
+            <Button
+              variant="light"
+              color="orange"
+              leftSection={<IconBolt size={14} />}
+              onClick={saveAndSync}
+              loading={syncing}
+            >
+              Save &amp; Sync now
+            </Button>
+          )}
           <Button color="orange" onClick={save} loading={saving}>Save Channel</Button>
         </Group>
       </Stack>
@@ -354,10 +404,12 @@ function ChannelModal({
 
 function ChannelRow({
   channel,
+  sync,
   onEdit,
   onDelete,
 }: {
   channel: Channel;
+  sync?: ChannelSyncState;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -402,6 +454,9 @@ function ChannelRow({
                 live
               </Badge>
             )}
+            {channel.live && (
+              <Text size="xs" c="dimmed">synced {syncedAgo(sync?.checked_at)}</Text>
+            )}
           </Group>
         </Box>
 
@@ -428,6 +483,7 @@ export default function Channels() {
   const { number } = useParams<{ number?: string }>();
   const nav = useNavigate();
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [sync, setSync] = useState<Record<string, ChannelSyncState>>({});
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Channel | null>(null);
   const [opened, { open, close }] = useDisclosure(false);
@@ -436,6 +492,7 @@ export default function Channels() {
     const data = await api.getChannels();
     setChannels([...data.channels].sort((a, b) => a.number - b.number));
     setLoading(false);
+    api.getRecipesStatus().then((s) => setSync(s.channels || {})).catch(() => {});
   }
 
   useEffect(() => { load(); }, []);
@@ -491,6 +548,7 @@ export default function Channels() {
             <ChannelRow
               key={ch.number}
               channel={ch}
+              sync={sync[String(ch.number)]}
               onEdit={() => edit(ch)}
               onDelete={() => load()}
             />

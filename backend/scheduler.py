@@ -25,6 +25,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,8 +49,10 @@ _state: dict = {
     "paused": False,
     "running": False,
     "last_cycle": None,      # summary dict of the most recent cycle
-    "last_auto_run": None,   # event-loop time of last automatic cycle (None = never)
+    "last_auto_run": None,   # wall-clock time.time() of last automatic cycle (None = never)
 }
+
+STATE_FILE = "recipe_state.json"  # cosmetic per-channel sync metadata (NOT correctness state)
 
 DEFAULT_INTERVAL_HOURS = 12
 
@@ -80,6 +83,29 @@ def _live_channels(channels: list) -> list:
     return [ch for ch in channels if ch.get("live")]
 
 
+# ── Cosmetic per-channel sync state (recipe_state.json) ────────────────────────
+# Purely for the UI: last-synced timestamps + last change. NOT used by the diff —
+# correctness still reads live Tunarr. Kept in a separate file so it never races
+# with channels.json edits or deploys.
+
+def _load_state() -> dict:
+    try:
+        with open(DATA_DIR / STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_state(state: dict) -> None:
+    try:
+        tmp = DATA_DIR / (STATE_FILE + ".tmp")
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2)
+        tmp.replace(DATA_DIR / STATE_FILE)  # atomic swap — no torn reads
+    except Exception:
+        pass  # cosmetic state must never break a cycle
+
+
 # ── Diff helpers ───────────────────────────────────────────────────────────────
 
 def _program_ids(resolved: list) -> set:
@@ -105,8 +131,13 @@ def _summarize(ids: set, id_label: dict) -> list:
 
 # ── The cycle ──────────────────────────────────────────────────────────────────
 
-def _run_cycle_blocking(apply: bool) -> dict:
-    """Synchronous body of one cycle. Runs in a worker thread."""
+def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
+    """Synchronous body of one cycle. Runs in a worker thread.
+
+    `only` (a channel number) limits the cycle to a single live channel — used by
+    the per-channel "Sync now" button. The full library index is still built once
+    regardless, so this is about scope, not speed.
+    """
     started = datetime.now(timezone.utc)
     cfg = _load_config()
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
@@ -128,6 +159,8 @@ def _run_cycle_blocking(apply: bool) -> dict:
         return summary
 
     live = _live_channels(_load_channels())
+    if only is not None:
+        live = [ch for ch in live if ch.get("number") == only]
     summary["live"] = len(live)
     if not live:
         return summary
@@ -194,6 +227,29 @@ def _run_cycle_blocking(apply: bool) -> dict:
 
     summary["changed"] = len(summary["changes"])
     _write_log(summary)
+
+    # Record cosmetic per-channel sync metadata (apply cycles only — a dry run
+    # isn't a real "sync"). Carries forward prior change info for unchanged channels.
+    if apply:
+        state = _load_state()
+        changed_by_num = {c["number"]: c for c in summary["changes"] if c.get("applied")}
+        for ch in live:
+            num = str(ch.get("number"))
+            entry = state.get(num, {})
+            entry["checked_at"] = summary["time"]
+            c = changed_by_num.get(ch.get("number"))
+            if c:
+                entry["changed_at"] = summary["time"]
+                entry["change_summary"] = (
+                    f"+{c['added_count']}" + (f" −{c['removed_count']}" if c["removed_count"] else "")
+                )
+            state[num] = entry
+        if only is None:
+            # Full cycle: drop entries for channels that are no longer live
+            live_nums = {str(ch.get("number")) for ch in live}
+            state = {k: v for k, v in state.items() if k in live_nums}
+        _save_state(state)
+
     return summary
 
 
@@ -216,12 +272,12 @@ def _write_log(summary: dict) -> None:
         pass  # logging must never break a cycle
 
 
-async def run_cycle(apply: bool = True) -> dict:
+async def run_cycle(apply: bool = True, only: int = None) -> dict:
     """Run one cycle under the deploy lock. Blocking work offloaded to a thread."""
     async with deploy_lock:
         _state["running"] = True
         try:
-            summary = await asyncio.to_thread(_run_cycle_blocking, apply)
+            summary = await asyncio.to_thread(_run_cycle_blocking, apply, only)
         finally:
             _state["running"] = False
     _state["last_cycle"] = summary
@@ -243,7 +299,7 @@ async def scheduler_loop() -> None:
             enabled = bool(cfg.get("recipes_enabled", False))
             interval_h = float(cfg.get("recipe_interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS)
             interval_s = max(60.0, interval_h * 3600.0)
-            now = asyncio.get_event_loop().time()
+            now = time.time()  # wall clock — comparable from the status handler too
             last = _state["last_auto_run"]
             due = last is None or (now - last) >= interval_s
             if enabled and not _state["paused"] and due:
@@ -260,13 +316,25 @@ async def scheduler_loop() -> None:
 
 def get_status() -> dict:
     cfg = _load_config()
+    enabled = bool(cfg.get("recipes_enabled", False))
+    interval_h = float(cfg.get("recipe_interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS)
+
+    # Seconds until the next automatic cycle (null if disabled/paused). last_auto_run
+    # is wall-clock, so this is safe to compute from the sync status handler.
+    next_run_seconds = None
+    if enabled and not _state["paused"]:
+        last = _state["last_auto_run"]
+        next_run_seconds = 0 if last is None else max(0.0, last + interval_h * 3600.0 - time.time())
+
     return {
-        "enabled": bool(cfg.get("recipes_enabled", False)),
+        "enabled": enabled,
         "paused": _state["paused"],
         "running": _state["running"],
-        "interval_hours": float(cfg.get("recipe_interval_hours", DEFAULT_INTERVAL_HOURS) or DEFAULT_INTERVAL_HOURS),
+        "interval_hours": interval_h,
+        "next_run_seconds": next_run_seconds,
         "live_count": len(_live_channels(_load_channels())),
         "last_cycle": _state["last_cycle"],
+        "channels": _load_state(),
     }
 
 

@@ -78,13 +78,14 @@ def recipes_status():
 
 
 @router.post("/recipes/run")
-async def recipes_run(apply: bool = Query(True)):
+async def recipes_run(apply: bool = Query(True), only: Optional[int] = Query(None)):
     """Run one cycle on demand. apply=false is a dry run (detect + log, no patch).
+    `only=N` limits the run to a single live channel (the per-channel "Sync now").
 
     This is the manual-refresh / test trigger — it runs the exact same code path
     the background loop does, so you don't have to wait for the interval.
     """
-    return await scheduler.run_cycle(apply=apply)
+    return await scheduler.run_cycle(apply=apply, only=only)
 
 
 @router.post("/recipes/pause")

@@ -68,6 +68,13 @@ function relTime(iso: string): string {
   return `${Math.round(secs / 86400)}d ago`;
 }
 
+function inTime(secs: number): string {
+  if (secs < 90) return 'in <1m';
+  if (secs < 3600) return `in ${Math.round(secs / 60)}m`;
+  if (secs < 86400) return `in ${Math.round(secs / 3600)}h`;
+  return `in ${Math.round(secs / 86400)}d`;
+}
+
 function LiveRecipesCard({ status, onChange }: { status: RecipesStatus; onChange: () => void }) {
   const [busy, setBusy] = useState(false);
   const last = status.last_cycle;
@@ -117,6 +124,7 @@ function LiveRecipesCard({ status, onChange }: { status: RecipesStatus; onChange
             </Group>
             <Text size="xs" c="dimmed">
               {status.live_count} live channel{status.live_count !== 1 ? 's' : ''} · every {status.interval_hours}h
+              {status.next_run_seconds != null && !status.paused ? ` · next ${inTime(status.next_run_seconds)}` : ''}
             </Text>
           </Box>
         </Group>
