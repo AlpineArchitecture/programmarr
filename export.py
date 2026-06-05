@@ -128,6 +128,15 @@ def build_tunarr_title_sets(tunarr_url):
 
 # ── Row builders ───────────────────────────────────────────────────────────────
 
+# Top-N billed cast kept per title — enough for actor channels without the noise
+# of full cast lists. Plex Role elements come back in billing order.
+LEAD_CAST = 3
+
+
+def _lead_actors(item):
+    return "|".join(r["tag"] for r in item.get("Role", [])[:LEAD_CAST] if r.get("tag"))
+
+
 def movie_to_row(item):
     genres = "|".join(g["tag"] for g in item.get("Genre", []))
     directors = "|".join(d["tag"] for d in item.get("Director", []))
@@ -138,6 +147,8 @@ def movie_to_row(item):
         "Rating": item.get("contentRating", ""),
         "Genres": genres,
         "Director": directors,
+        "Studio": item.get("studio", ""),
+        "Actors": _lead_actors(item),
         "Seasons": "",
         "Episodes": "",
     }
@@ -152,6 +163,8 @@ def show_to_row(item):
         "Rating": item.get("contentRating", ""),
         "Genres": genres,
         "Director": "",
+        "Studio": item.get("studio", ""),
+        "Actors": _lead_actors(item),
         "Seasons": item.get("childCount", ""),
         "Episodes": item.get("leafCount", ""),
     }
@@ -254,7 +267,7 @@ def main():
         rows.append(show_to_row(item))
 
     # ── Write CSV ──────────────────────────────────────────────────────────────
-    fieldnames = ["Title", "Year", "Type", "Rating", "Genres", "Director", "Seasons", "Episodes"]
+    fieldnames = ["Title", "Year", "Type", "Rating", "Genres", "Director", "Studio", "Actors", "Seasons", "Episodes"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

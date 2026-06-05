@@ -207,6 +207,16 @@ DECADE_BUCKETS = [
 ]
 
 
+# Planner v2 surface thresholds (min titles for a candidate to be offered).
+COMBO_MIN = 6      # genre × decade
+BLEND_MIN = 6      # genre ∩ genre
+STUDIO_MIN = 4
+DIRECTOR_MIN = 3
+ACTOR_MIN = 4
+TV_GENRE_MIN = 3
+ENTITY_CAP = 60    # cap each entity list; UI searches for the long tail
+
+
 def _safe_int(val):
     try:
         return int(val)
@@ -214,63 +224,124 @@ def _safe_int(val):
         return None
 
 
+def _multi(val):
+    return [x.strip() for x in (val or "").split("|") if x.strip()]
+
+
+def _decade_start(year):
+    for _, start, end in DECADE_BUCKETS:
+        if year is not None and start <= year <= end:
+            return start
+    return None
+
+
 @router.get("/pipeline/facets")
 def library_facets(min_items: int = 5):
-    """Genre/decade/marathon facets derived from plex_library.csv, with counts.
+    """Library facets that drive the Planner v2 candidate list.
 
-    Drives the Planner toggles: canonical genres (always returned, even at 0 so the
-    UI can decide to show/hide), 'more' genres above min_items, decades present in
-    the library, and the count of marathon-eligible shows (50+ episodes).
+    One pass over plex_library.csv yields: genre counts (canonical always returned,
+    'more' above min_items), decades present, genre×decade matrix and genre∩genre
+    blend counts (movies, above COMBO_MIN/BLEND_MIN), stand-alone entity lists
+    (studio/director/actor above their thresholds, capped), TV genre counts for
+    blocks, and the marathon-eligible show count.
     """
     import csv as _csv
+    from itertools import combinations
     p = DATA_DIR / "plex_library.csv"
     if not p.exists():
         return {"exists": False}
 
+    DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
     genre_counts: dict[str, int] = {}
     decade_counts = {start: 0 for _, start, _ in DECADE_BUCKETS}
+    studio_counts: dict[str, int] = {}
+    director_counts: dict[str, int] = {}
+    actor_counts: dict[str, int] = {}
+    tv_genre_counts: dict[str, int] = {}
+    movie_recs: list[tuple[list[str], int | None]] = []  # (genres, decade_start) for matrix/blends
     movies = tv = marathon = 0
+
     with open(p, encoding="utf-8") as f:
         for row in _csv.DictReader(f):
             t = row.get("Type", "")
             if t == "Movie":
                 movies += 1
-                for g in (row.get("Genres", "") or "").split("|"):
-                    g = g.strip()
-                    if g:
-                        genre_counts[g] = genre_counts.get(g, 0) + 1
-                yr = _safe_int(row.get("Year"))
-                if yr is not None:
-                    for _, start, end in DECADE_BUCKETS:
-                        if start <= yr <= end:
-                            decade_counts[start] += 1
-                            break
+                genres = _multi(row.get("Genres"))
+                for g in genres:
+                    genre_counts[g] = genre_counts.get(g, 0) + 1
+                ds = _decade_start(_safe_int(row.get("Year")))
+                if ds is not None:
+                    decade_counts[ds] += 1
+                for s in _multi(row.get("Studio")):
+                    studio_counts[s] = studio_counts.get(s, 0) + 1
+                for d in _multi(row.get("Director")):
+                    director_counts[d] = director_counts.get(d, 0) + 1
+                for a in _multi(row.get("Actors")):
+                    actor_counts[a] = actor_counts.get(a, 0) + 1
+                movie_recs.append((genres, ds))
             elif t == "TV":
                 tv += 1
+                for g in _multi(row.get("Genres")):
+                    tv_genre_counts[g] = tv_genre_counts.get(g, 0) + 1
                 eps = _safe_int(row.get("Episodes"))
                 if eps is not None and eps >= 50:
                     marathon += 1
 
-    # Case-insensitive lookup for canonical tags.
-    ci_counts = {tag.lower(): n for tag, n in genre_counts.items()}
+    # Genre chips the UI offers: canonical (always) + 'more' above min_items.
     canonical_tags = {tag.lower() for _, tag in CANONICAL_GENRES}
+    ci_counts = {tag.lower(): n for tag, n in genre_counts.items()}
     canonical = [
         {"display": disp, "tag": tag, "count": ci_counts.get(tag.lower(), 0)}
         for disp, tag in CANONICAL_GENRES
     ]
     more = sorted(
-        (
-            {"display": tag, "tag": tag, "count": n}
-            for tag, n in genre_counts.items()
-            if tag.lower() not in canonical_tags and n >= min_items
-        ),
+        ({"display": tag, "tag": tag, "count": n}
+         for tag, n in genre_counts.items()
+         if tag.lower() not in canonical_tags and n >= min_items),
         key=lambda x: (-x["count"], x["tag"].lower()),
     )
+    shown = canonical + more
+    display_of = {g["tag"]: g["display"] for g in shown}
+    shown_tags = set(display_of)
+
+    # Genre × decade matrix and genre ∩ genre blends, restricted to shown genres.
+    gd_counts: dict[tuple[str, int], int] = {}
+    pair_counts: dict[tuple[str, str], int] = {}
+    for genres, ds in movie_recs:
+        present = sorted({g for g in genres if g in shown_tags})
+        if ds is not None:
+            for g in present:
+                gd_counts[(g, ds)] = gd_counts.get((g, ds), 0) + 1
+        for a, b in combinations(present, 2):
+            pair_counts[(a, b)] = pair_counts.get((a, b), 0) + 1
+
+    genre_decade = sorted(
+        ({"genre": g, "display": display_of[g], "decade_start": ds,
+          "decade_label": DECADE_LABEL[ds], "count": n}
+         for (g, ds), n in gd_counts.items() if n >= COMBO_MIN),
+        key=lambda x: (x["decade_start"], -x["count"]),
+    )
+    blends = sorted(
+        ({"genres": [a, b], "displays": [display_of[a], display_of[b]], "count": n}
+         for (a, b), n in pair_counts.items() if n >= BLEND_MIN),
+        key=lambda x: -x["count"],
+    )
+
+    def entity_list(counts, floor):
+        return sorted(
+            ({"value": v, "count": n} for v, n in counts.items() if v and n >= floor),
+            key=lambda x: (-x["count"], x["value"].lower()),
+        )[:ENTITY_CAP]
+
     decades = [
         {"label": label, "start": start, "end": end, "count": decade_counts[start]}
-        for label, start, end in DECADE_BUCKETS
-        if decade_counts[start] > 0
+        for label, start, end in DECADE_BUCKETS if decade_counts[start] > 0
     ]
+    tv_genres = sorted(
+        ({"genre": g, "count": n} for g, n in tv_genre_counts.items() if n >= TV_GENRE_MIN),
+        key=lambda x: (-x["count"], x["genre"].lower()),
+    )
+
     return {
         "exists": True,
         "movies": movies,
@@ -279,6 +350,12 @@ def library_facets(min_items: int = 5):
         "min_items": min_items,
         "genres": {"canonical": canonical, "more": more},
         "decades": decades,
+        "genre_decade": genre_decade,
+        "blends": blends,
+        "studios": entity_list(studio_counts, STUDIO_MIN),
+        "directors": entity_list(director_counts, DIRECTOR_MIN),
+        "actors": entity_list(actor_counts, ACTOR_MIN),
+        "tv_genres": tv_genres,
     }
 
 
@@ -435,6 +512,155 @@ async def validate(file: Optional[UploadFile] = File(None), content: Optional[st
         json.dump(data, f, indent=2)
 
     return {"ok": True, "count": len(data.get("channels", [])), "channels": data.get("channels", [])}
+
+
+# ── Planner v2: deterministic candidate composition ──────────────────────────────
+
+class CandidateSpec(BaseModel):
+    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon
+    name: Optional[str] = None
+    genre: Optional[str] = None
+    genres: Optional[list[str]] = None
+    decade_start: Optional[int] = None
+    value: Optional[str] = None        # studio/director/actor name, or marathon show title
+    shuffle: Optional[str] = None      # override; else category default
+
+
+class ComposeRequest(BaseModel):
+    specs: list[CandidateSpec]
+    start: int = 1
+
+
+# Which soft-block a candidate category lands in, and its number hint + shuffle default.
+_CATEGORY = {
+    "marathon":     ("marathon", 10, "ordered"),
+    "tv_genre":     ("tv_block", 20, "block"),
+    "genre":        ("movie", 30, "shuffle"),
+    "genre_decade": ("movie", 30, "shuffle"),
+    "blend":        ("movie", 30, "shuffle"),
+    "studio":       ("entity", 50, "shuffle"),
+    "director":     ("entity", 50, "shuffle"),
+    "actor":        ("entity", 50, "shuffle"),
+}
+_CATEGORY_ORDER = ["marathon", "tv_block", "movie", "entity"]
+_CATEGORY_HINT = {"marathon": 10, "tv_block": 20, "movie": 30, "entity": 50}
+_DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
+
+
+def _load_library():
+    import csv as _csv
+    p = DATA_DIR / "plex_library.csv"
+    if not p.exists():
+        return [], []
+    movies, shows = [], []
+    with open(p, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            (movies if row.get("Type") == "Movie" else shows if row.get("Type") == "TV" else []).append(row)
+    return movies, shows
+
+
+def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) -> list[str]:
+    """Return the sorted, de-duplicated title list a candidate spec selects."""
+    def has_genre(row, g):
+        gl = g.lower()
+        return any(x.lower() == gl for x in _multi(row.get("Genres")))
+
+    titles: list[str] = []
+    if spec.kind == "genre" and spec.genre:
+        titles = [m["Title"] for m in movies if has_genre(m, spec.genre)]
+    elif spec.kind == "genre_decade" and spec.genre and spec.decade_start is not None:
+        titles = [m["Title"] for m in movies
+                  if has_genre(m, spec.genre) and _decade_start(_safe_int(m.get("Year"))) == spec.decade_start]
+    elif spec.kind == "blend" and spec.genres:
+        titles = [m["Title"] for m in movies if all(has_genre(m, g) for g in spec.genres)]
+    elif spec.kind == "studio" and spec.value:
+        v = spec.value.lower()
+        titles = [m["Title"] for m in movies if any(s.lower() == v for s in _multi(m.get("Studio")))]
+    elif spec.kind == "director" and spec.value:
+        v = spec.value.lower()
+        titles = [m["Title"] for m in movies if any(d.lower() == v for d in _multi(m.get("Director")))]
+    elif spec.kind == "actor" and spec.value:
+        v = spec.value.lower()
+        titles = [m["Title"] for m in movies if any(a.lower() == v for a in _multi(m.get("Actors")))]
+    elif spec.kind == "tv_genre" and spec.genre:
+        titles = [s["Title"] for s in shows if has_genre(s, spec.genre)]
+    elif spec.kind == "marathon" and spec.value:
+        titles = [s["Title"] for s in shows if s["Title"] == spec.value]
+    return sorted({t for t in titles if t})
+
+
+def _auto_name(spec: CandidateSpec) -> str:
+    if spec.kind == "genre":
+        return f"{spec.genre} Movies"
+    if spec.kind == "genre_decade":
+        return f"{_DECADE_LABEL.get(spec.decade_start, '')} {spec.genre}".strip()
+    if spec.kind == "blend":
+        return " & ".join(spec.genres or [])
+    if spec.kind == "studio":
+        return spec.value or "Studio"
+    if spec.kind == "director":
+        return f"Directed by {spec.value}"
+    if spec.kind == "actor":
+        return f"{spec.value} Movies"
+    if spec.kind == "tv_genre":
+        return f"{spec.genre} TV"
+    if spec.kind == "marathon":
+        return f"{spec.value} 24/7"
+    return spec.name or "Channel"
+
+
+@router.post("/pipeline/compose")
+def compose_channels(req: ComposeRequest):
+    """Deterministically build channels.json from picked Planner candidate specs.
+
+    Each spec is resolved against plex_library.csv into a title list; empties are
+    skipped and reported. Numbers are assigned in soft category blocks (marathons
+    ~10s, TV blocks ~20s, movie channels ~30s+, entities ~50s+) sequentially from
+    `start`, spilling into the next gap on overflow.
+    """
+    movies, shows = _load_library()
+    if not movies and not shows:
+        raise HTTPException(404, "Run Export first — plex_library.csv not found")
+
+    # Resolve + bucket by category, preserving input order within each.
+    buckets: dict[str, list[dict]] = {c: [] for c in _CATEGORY_ORDER}
+    skipped: list[dict] = []
+    for spec in req.specs:
+        meta = _CATEGORY.get(spec.kind)
+        if not meta:
+            skipped.append({"name": spec.name or spec.kind, "reason": f"unknown kind '{spec.kind}'"})
+            continue
+        category, _, default_shuffle = meta
+        content = _resolve_spec(spec, movies, shows)
+        name = spec.name or _auto_name(spec)
+        if not content:
+            skipped.append({"name": name, "reason": "no matching titles"})
+            continue
+        shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
+        buckets[category].append({"name": name, "shuffle": shuffle, "content": content})
+
+    # Soft-block numbering: each category starts at max(its hint, running cursor, start).
+    channels: list[dict] = []
+    cursor = req.start
+    for category in _CATEGORY_ORDER:
+        items = buckets[category]
+        if not items:
+            continue
+        base = max(_CATEGORY_HINT[category], cursor, req.start)
+        for i, ch in enumerate(items):
+            channels.append({"number": base + i, **ch})
+        cursor = base + len(items)
+
+    data = {"channels": channels, "orphaned": [], "suggested_channels": []}
+    with open(DATA_DIR / "channels.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return {
+        "ok": True,
+        "count": len(channels),
+        "channels": [{"number": c["number"], "name": c["name"], "items": len(c["content"])} for c in channels],
+        "skipped": skipped,
+    }
 
 
 @router.post("/pipeline/no-ai")
