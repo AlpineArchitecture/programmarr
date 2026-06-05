@@ -840,11 +840,18 @@ function CollectionsStep({ start, onDone }: { start: number; onDone: () => void 
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
 
-  const base = Math.max(80, Math.ceil(start / 10) * 10);
-
   useEffect(() => {
-    api.getCollections()
-      .then(cols => {
+    Promise.all([
+      api.getChannels().catch(() => ({ channels: [] as { number: number }[] })),
+      api.getCollections(),
+    ])
+      .then(([chFile, cols]) => {
+        // Append collections ABOVE the current lineup so they never collide with the
+        // channels just composed (plus any AI extras merged on top). apply_collections
+        // keeps everything below the lowest collection number, so a base above the max
+        // preserves the whole built lineup.
+        const maxNum = (chFile.channels ?? []).reduce((m: number, c: { number: number }) => Math.max(m, c.number ?? 0), 0);
+        const base = Math.max(start, Math.ceil((maxNum + 1) / 10) * 10);
         setCollections(cols);
         setSelections(cols.map((c, i) => ({ id: c.id, name: c.name, channel_number: base + i, include: true })));
       })
