@@ -259,6 +259,7 @@ def library_facets(min_items: int = 5):
     actor_counts: dict[str, int] = {}
     tv_genre_counts: dict[str, int] = {}
     movie_recs: list[tuple[list[str], int | None]] = []  # (genres, decade_start) for matrix/blends
+    show_recs: list[dict] = []  # per-show marathon candidates
     movies = tv = marathon = 0
 
     with open(p, encoding="utf-8") as f:
@@ -283,9 +284,12 @@ def library_facets(min_items: int = 5):
                 tv += 1
                 for g in _multi(row.get("Genres")):
                     tv_genre_counts[g] = tv_genre_counts.get(g, 0) + 1
-                eps = _safe_int(row.get("Episodes"))
-                if eps is not None and eps >= 50:
+                eps = _safe_int(row.get("Episodes")) or 0
+                if eps >= 50:
                     marathon += 1
+                title = row.get("Title", "")
+                if title and eps >= 2:
+                    show_recs.append({"title": title, "episodes": eps, "seasons": _safe_int(row.get("Seasons")) or 0})
 
     # Genre chips the UI offers: canonical (always) + 'more' above min_items.
     canonical_tags = {tag.lower() for _, tag in CANONICAL_GENRES}
@@ -341,6 +345,7 @@ def library_facets(min_items: int = 5):
         ({"genre": g, "count": n} for g, n in tv_genre_counts.items() if n >= TV_GENRE_MIN),
         key=lambda x: (-x["count"], x["genre"].lower()),
     )
+    marathons = sorted(show_recs, key=lambda s: -s["episodes"])
 
     return {
         "exists": True,
@@ -356,6 +361,7 @@ def library_facets(min_items: int = 5):
         "directors": entity_list(director_counts, DIRECTOR_MIN),
         "actors": entity_list(actor_counts, ACTOR_MIN),
         "tv_genres": tv_genres,
+        "marathons": marathons,
     }
 
 

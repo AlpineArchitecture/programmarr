@@ -11,7 +11,7 @@ import {
 import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
-  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet,
+  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -37,6 +37,7 @@ const cid = {
   director: (v: string) => `dir:${v}`,
   actor: (v: string) => `actor:${v}`,
   tv: (g: string) => `tv:${g}`,
+  marathon: (t: string) => `m:${t}`,
 };
 
 interface PlannerState {
@@ -381,17 +382,17 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const filtered = q ? items.filter(i => i.value.toLowerCase().includes(q.toLowerCase())) : items;
+  const selN = items.filter(i => isSel(makeId(i.value))).length;
+  const addItems: AddItem[] = items.map(i => ({ id: makeId(i.value), spec: { kind, value: i.value, name: makeName(i.value) } }));
   return (
     <Card withBorder p="sm">
       <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
-        <Text fw={600} size="sm">{title} <Text span c="dimmed" size="xs">({items.length})</Text></Text>
-        <Group gap={6} wrap="nowrap">
-          <Button size="compact-xs" variant="subtle" color="gray"
-            onClick={(e) => { e.stopPropagation(); onAddMany(items.slice(0, 5).map(i => ({ id: makeId(i.value), spec: { kind, value: i.value, name: makeName(i.value) } }))); }}>
-            Add top 5
-          </Button>
-          <IconChevronDown size={14} style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />
+        <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+          <IconChevronDown size={14} style={{ transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .15s', flexShrink: 0 }} />
+          <Text fw={600} size="sm" lineClamp={1}>{title} <Text span c="dimmed" size="xs">({items.length})</Text></Text>
+          {selN ? <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>{selN} added</Badge> : null}
         </Group>
+        <BulkButtons items={addItems} onAdd={onAddMany} />
       </Group>
       <Collapse in={open}>
         <TextInput size="xs" mt="xs" placeholder={`Search ${title.toLowerCase()}…`} value={q}
@@ -410,6 +411,61 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
     </Card>
   );
 }
+
+type AddItem = { id: string; spec: CandidateSpec };
+
+// Collapsible candidate group with bulk "Top 10" / "Add all" buttons. Adding from a
+// header collapses the group, so a handled category folds away (minimises the wall).
+function BulkButtons({ items, onAdd, onAfter }: { items: AddItem[]; onAdd: (i: AddItem[]) => void; onAfter?: () => void }) {
+  return (
+    <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
+      {items.length > 10 && (
+        <Button size="compact-xs" variant="subtle" color="gray"
+          onClick={(e) => { e.stopPropagation(); onAdd(items.slice(0, 10)); onAfter?.(); }}>Top 10</Button>
+      )}
+      <Button size="compact-xs" variant="subtle" color="gray"
+        onClick={(e) => { e.stopPropagation(); onAdd(items); onAfter?.(); }}>Add all</Button>
+    </Group>
+  );
+}
+
+function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, defaultOpen, children }: {
+  title: string; count: number; selectedCount?: number;
+  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; defaultOpen?: boolean; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <Card withBorder p="sm">
+      <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+        <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+          <IconChevronDown size={14} style={{ transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .15s', flexShrink: 0 }} />
+          <Text fw={600} size="sm" lineClamp={1}>{title} <Text span c="dimmed" size="xs">({count})</Text></Text>
+          {selectedCount ? <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>{selectedCount} added</Badge> : null}
+        </Group>
+        {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} onAfter={() => setOpen(false)} />}
+      </Group>
+      <Collapse in={open}>{children}</Collapse>
+    </Card>
+  );
+}
+
+// Curated, recognizable sub-genres (genre∩genre) — only the meaningful ones, named
+// properly. Arbitrary pairs like "Action & Comedy" are intentionally excluded.
+type SubGenre = { name: string; a: string; b: string };
+const SUBGENRES: SubGenre[] = [
+  { name: 'Rom-Coms', a: 'Comedy', b: 'Romance' },
+  { name: 'Dark Comedies', a: 'Comedy', b: 'Crime' },
+  { name: 'Horror Comedies', a: 'Comedy', b: 'Horror' },
+  { name: 'Dramedies', a: 'Comedy', b: 'Drama' },
+  { name: 'Romantic Dramas', a: 'Romance', b: 'Drama' },
+  { name: 'Crime Thrillers', a: 'Crime', b: 'Thriller' },
+  { name: 'Crime Dramas', a: 'Crime', b: 'Drama' },
+  { name: 'Psychological Thrillers', a: 'Thriller', b: 'Mystery' },
+  { name: 'Sci-Fi Action', a: 'Science Fiction', b: 'Action' },
+  { name: 'Sci-Fi Horror', a: 'Science Fiction', b: 'Horror' },
+  { name: 'Fantasy Adventures', a: 'Fantasy', b: 'Adventure' },
+  { name: 'War Dramas', a: 'War', b: 'Drama' },
+];
 
 function PlannerStep({ planner, setPlanner, setup, onDone }: {
   planner: PlannerState;
@@ -470,9 +526,16 @@ function PlannerStep({ planner, setPlanner, setup, onDone }: {
       (genreDecadeByDecade[c.decade_label] ||= []).push(c);
     }
   });
-  const blendCands = (f.blends ?? []).filter(b => b.genres.every(g => activeGenreTags.has(g)));
   const broadCands = [...(f.genres?.canonical ?? []), ...(f.genres?.more ?? [])].filter(g => activeGenreTags.has(g.tag));
   const selectedCount = Object.keys(planner.selected).length;
+  const countSel = (ids: string[]) => ids.filter(id => isSel(id)).length;
+
+  // Curated sub-genres present in the library (matched against the blend pair counts).
+  const blendByKey: Record<string, BlendFacet> = {};
+  (f.blends ?? []).forEach(b => { blendByKey[[...b.genres].map(g => g.toLowerCase()).sort().join('|')] = b; });
+  const subGenres = SUBGENRES
+    .map(s => ({ s, blend: blendByKey[[s.a, s.b].map(g => g.toLowerCase()).sort().join('|')] }))
+    .filter((x): x is { s: SubGenre; blend: BlendFacet } => !!x.blend);
 
   async function build() {
     setBuilding(true);
@@ -530,92 +593,99 @@ function PlannerStep({ planner, setPlanner, setup, onDone }: {
         </Group>
       </Card>
 
-      {/* Movie candidates */}
-      <Card withBorder p="md">
-        <Text fw={700} mb="sm">Movie channels</Text>
-        {activeGenreTags.size === 0 ? (
-          <Text size="sm" c="dimmed">Pick some genres above to see candidate channels.</Text>
-        ) : (
-          <Stack gap="md">
-            {(f.decades ?? []).filter(d => activeDecadeLabels.has(d.label) && genreDecadeByDecade[d.label]?.length).map(d => {
-              const cells = genreDecadeByDecade[d.label];
+      {/* TV channels — lowest channel numbers, so they lead. Marathons (~10s) then blocks (~20s). */}
+      {((f.marathons?.length ?? 0) > 0 || (f.tv_genres?.length ?? 0) > 0) && (
+        <Box>
+          <Text fw={700} size="sm" mb={6}>TV channels</Text>
+          <Stack gap="sm">
+            {(f.marathons?.length ?? 0) > 0 && (() => {
+              const items: AddItem[] = f.marathons!.map(m => ({ id: cid.marathon(m.title), spec: { kind: 'marathon', value: m.title, name: `${m.title} Marathon` } }));
               return (
-                <Box key={d.label}>
-                  <Group justify="space-between" mb={2}>
-                    <Text size="sm" fw={600}>{d.label}</Text>
-                    <Button size="compact-xs" variant="subtle" color="gray"
-                      onClick={() => addMany(cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } })))}>
-                      Add all {d.label}
-                    </Button>
-                  </Group>
-                  {cells.map(c => {
-                    const id = cid.gd(c.genre, c.decade_start);
-                    const name = gdName(c.decade_label, c.display);
-                    return <CandRow key={id} id={id} count={c.count} label={name} checked={isSel(id)}
-                      onToggle={() => toggleSel(id, { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name })} />;
-                  })}
-                </Box>
+                <CollapsibleSection title="Marathons — one channel per show" count={f.marathons!.length}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                  {f.marathons!.map((m, i) => (
+                    <CandRow key={items[i].id} id={items[i].id} count={m.episodes} label={m.title} checked={isSel(items[i].id)}
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                  ))}
+                </CollapsibleSection>
               );
-            })}
-
-            {blendCands.length > 0 && (
-              <Box>
-                <Group justify="space-between" mb={2}>
-                  <Text size="sm" fw={600}>Blends</Text>
-                  <Button size="compact-xs" variant="subtle" color="gray"
-                    onClick={() => addMany(blendCands.map(b => ({ id: cid.blend(b.genres[0], b.genres[1]), spec: { kind: 'blend', genres: b.genres, name: b.displays.join(' & ') } })))}>
-                    Add all blends
-                  </Button>
-                </Group>
-                {blendCands.map(b => {
-                  const id = cid.blend(b.genres[0], b.genres[1]);
-                  const name = b.displays.join(' & ');
-                  return <CandRow key={id} id={id} count={b.count} label={name} checked={isSel(id)}
-                    onToggle={() => toggleSel(id, { kind: 'blend', genres: b.genres, name })} />;
-                })}
-              </Box>
-            )}
-
-            <Box>
-              <Text size="sm" fw={600} mb={2}>Broad genres</Text>
-              {broadCands.map(g => {
-                const id = cid.genre(g.tag);
-                const name = `${g.display} Movies`;
-                return <CandRow key={id} id={id} count={g.count} label={name} checked={isSel(id)}
-                  onToggle={() => toggleSel(id, { kind: 'genre', genre: g.tag, name })} />;
-              })}
-            </Box>
+            })()}
+            {(f.tv_genres?.length ?? 0) > 0 && (() => {
+              const items: AddItem[] = f.tv_genres!.map(t => ({ id: cid.tv(t.genre), spec: { kind: 'tv_genre', genre: t.genre, name: `${t.genre} TV` } }));
+              return (
+                <CollapsibleSection title="Genre blocks — themed multi-show" count={f.tv_genres!.length}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                  {f.tv_genres!.map((t, i) => (
+                    <CandRow key={items[i].id} id={items[i].id} count={t.count} label={`${t.genre} TV`} checked={isSel(items[i].id)}
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                  ))}
+                </CollapsibleSection>
+              );
+            })()}
           </Stack>
-        )}
-      </Card>
-
-      {/* Entities */}
-      {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
-        <Stack gap="sm">
-          <Text fw={700} size="sm">Studios, directors &amp; actors</Text>
-          {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-          {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-          {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-        </Stack>
+        </Box>
       )}
 
-      {/* TV blocks */}
-      {(f.tv_genres?.length ?? 0) > 0 && (
-        <Card withBorder p="md">
-          <Text fw={700} mb="sm">TV blocks</Text>
-          <Group gap="xs">
-            {f.tv_genres!.map(t => {
-              const id = cid.tv(t.genre);
-              const name = `${t.genre} TV`;
+      {/* Movie channels (~30s) */}
+      <Box>
+        <Text fw={700} size="sm" mb={6}>Movie channels</Text>
+        {activeGenreTags.size === 0 ? (
+          <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
+        ) : (
+          <Stack gap="sm">
+            {(f.decades ?? []).filter(d => activeDecadeLabels.has(d.label) && genreDecadeByDecade[d.label]?.length).map(d => {
+              const cells = genreDecadeByDecade[d.label];
+              const items: AddItem[] = cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } }));
               return (
-                <Chip key={id} size="sm" color="grape" variant="outline" checked={isSel(id)}
-                  onChange={() => toggleSel(id, { kind: 'tv_genre', genre: t.genre, name })}>
-                  {name} <Text span c="dimmed" size="xs">({t.count})</Text>
-                </Chip>
+                <CollapsibleSection key={d.label} title={d.label} count={cells.length}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                  {cells.map((c, i) => (
+                    <CandRow key={items[i].id} id={items[i].id} count={c.count} label={gdName(c.decade_label, c.display)} checked={isSel(items[i].id)}
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                  ))}
+                </CollapsibleSection>
               );
             })}
-          </Group>
-        </Card>
+
+            {subGenres.length > 0 && (() => {
+              const items: AddItem[] = subGenres.map(x => ({ id: cid.blend(x.blend.genres[0], x.blend.genres[1]), spec: { kind: 'blend', genres: x.blend.genres, name: x.s.name } }));
+              return (
+                <CollapsibleSection title="Sub-genres" count={subGenres.length}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                  {subGenres.map(({ s, blend }, i) => (
+                    <CandRow key={items[i].id} id={items[i].id} count={blend.count} label={s.name} checked={isSel(items[i].id)}
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                  ))}
+                </CollapsibleSection>
+              );
+            })()}
+
+            {(() => {
+              const items: AddItem[] = broadCands.map(g => ({ id: cid.genre(g.tag), spec: { kind: 'genre', genre: g.tag, name: `${g.display} Movies` } }));
+              return (
+                <CollapsibleSection title="Broad genres" count={broadCands.length}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                  {broadCands.map((g, i) => (
+                    <CandRow key={items[i].id} id={items[i].id} count={g.count} label={`${g.display} Movies`} checked={isSel(items[i].id)}
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                  ))}
+                </CollapsibleSection>
+              );
+            })()}
+          </Stack>
+        )}
+      </Box>
+
+      {/* Entities (~50s) */}
+      {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
+        <Box>
+          <Text fw={700} size="sm" mb={6}>Studios, directors &amp; actors</Text>
+          <Stack gap="sm">
+            {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+            {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+            {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+          </Stack>
+        </Box>
       )}
 
       {/* Build bar */}

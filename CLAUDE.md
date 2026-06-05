@@ -274,7 +274,7 @@ A title can appear on multiple channels — this is intentional and expected.
 | POST | `/api/pipeline/export` | SSE-stream `export.py`; JSON body `{"no_crossref": bool, "movie_sections": ["1","2"], "tv_sections": ["3"]}` — sections are Plex section keys; `null` = auto-detect, `[]` = skip that type |
 | GET | `/api/pipeline/csv` | Download `plex_library.csv` |
 | GET | `/api/pipeline/csv/info` | Stats: rows, movies, tv_shows, skipped counts, preview lines |
-| GET | `/api/pipeline/facets` | **Facets v2** — one CSV pass returning everything the Planner candidate list needs: `genres:{canonical,more}` (canonical always present; `more` ≥ `min_items`), `decades`, `genre_decade` matrix (≥6), `blends` genre-pairs (≥6), entity lists `studios`(≥4)/`directors`(≥3)/`actors`(≥4, capped 60), `tv_genres`(≥3), plus `movies`/`tv_shows`/`marathon_count`. Thresholds are module constants in `pipeline_router.py`. |
+| GET | `/api/pipeline/facets` | **Facets v2** — one CSV pass returning everything the Planner candidate list needs: `genres:{canonical,more}` (canonical always present; `more` ≥ `min_items`), `decades`, `genre_decade` matrix (≥6), `blends` genre-pairs (≥6), entity lists `studios`(≥4)/`directors`(≥3)/`actors`(≥4, capped 60), `tv_genres`(≥3), `marathons` (every show with ≥2 episodes, `{title,episodes,seasons}` sorted desc — drives the per-show marathon candidates), plus `movies`/`tv_shows`/`marathon_count`. Thresholds are module constants in `pipeline_router.py`. |
 | POST | `/api/pipeline/compose` | **Planner v2 deterministic resolver.** Body `ComposeRequest{specs:[CandidateSpec], start}`. Each `CandidateSpec{kind, …}` (`kind` ∈ genre / genre_decade / blend / studio / director / actor / tv_genre / marathon) is resolved against `plex_library.csv` into a title list; empties skipped + reported. Writes `channels.json` with **soft-block numbering** (marathons ~10s, TV blocks ~20s, movie channels ~30s+, entities ~50s+, sequential from `start`, spilling on overflow). Returns `{count, channels:[{number,name,items}], skipped}`. |
 | GET | `/api/pipeline/prompt` | **Legacy** — fetch full `PROMPT.md` (meta header included) with `{TARGET}`, preferences, and `start` (block offset) injected; query params: `target`, `preferences`, `start`. Used by the current Run UI; kept until the new flow ships. |
 | POST | `/api/pipeline/prompt` | New flow — body `PromptOptions{target, preferences, start, include_genres, exclude_genres, include_decades, exclude_decades, include_types, exclude_types}`. Strips the meta header above the first `---` (the UI walkthrough carries that guidance) and injects a `## What To Build` section (must-include / never-create lists + an explicit invite to discover additional channels) before the numbering scheme. |
@@ -332,13 +332,14 @@ skipped for *Collections-only*; Collections only if opted in. (The optional **AI
    number = highest kept rounded up to the next 10). `protectedNums` + `start` flow through the rest of the flow.
 2. **Export** (`ExportStep`) — "Libraries to scan" checkboxes grouped Movies / TV; runs `export.py`; compact stats on success.
 3. **Planner v2** (`PlannerStep`) — **ingredients → curated candidates** from `GET /pipeline/facets` (v2).
-   Top: **genres + decades "in play"** (chips with counts + "More genres" expander). Below, a checkable
-   **candidate list** derived from the active ingredients: genre×decade (nested per decade), genre∩genre
-   **blends**, and **broad** genres — each with a live count, all **unchecked** by default. **Entity sections**
-   (Studios / Directors / Actors) are collapsible with search + "Add top 5". **TV blocks** are genre chips.
-   Bulk helpers ("Add all 90s", "Add all blends"). The **Build N Channels** button posts the selected
-   `CandidateSpec[]` to `POST /pipeline/compose`, which deterministically writes `channels.json`, then advances.
-   `CandRow` + `EntitySection` are top-level components (avoid remount/focus bugs).
+   Top: **genres + decades "in play"** (chips with counts + "More genres" expander). Below, **collapsible
+   candidate sections** ordered by channel number: **TV** (per-show *Marathons* + genre *Blocks*) → **Movies**
+   (genre×decade nested per decade · curated named *Sub-genres* like Rom-Coms/Dark Comedies, **not** arbitrary
+   pairs · *Broad* genres) → **Studios / Directors / Actors** (searchable). Every section header carries **Top 10**
+   (when >10) + **Add all** (`BulkButtons`), an "N added" badge, and folds away after a bulk add. Candidates are
+   all **unchecked** by default. The **Build N Channels** button posts the selected `CandidateSpec[]` to
+   `POST /pipeline/compose`, which deterministically writes `channels.json`, then advances.
+   `CandRow` / `CollapsibleSection` / `EntitySection` are top-level components (avoid remount/focus bugs).
 4. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` (base = `max(80, start rounded up)`).
 5. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
    collides with a kept channel). One **Deploy** button runs the **cascade**: `deploy-selective` → (if art opted in) `images` → `sync`,

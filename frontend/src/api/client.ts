@@ -150,6 +150,7 @@ export interface GenreDecadeFacet { genre: string; display: string; decade_start
 export interface BlendFacet { genres: string[]; displays: string[]; count: number }
 export interface EntityFacet { value: string; count: number }
 export interface TvGenreFacet { genre: string; count: number }
+export interface MarathonFacet { title: string; episodes: number; seasons: number }
 export interface LibraryFacets {
   exists: boolean;
   movies?: number;
@@ -164,6 +165,7 @@ export interface LibraryFacets {
   directors?: EntityFacet[];
   actors?: EntityFacet[];
   tv_genres?: TvGenreFacet[];
+  marathons?: MarathonFacet[];
 }
 
 // ── Planner v2 candidate composition ──
