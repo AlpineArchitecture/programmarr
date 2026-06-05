@@ -194,34 +194,211 @@ def csv_info():
     return result
 
 
-@router.get("/pipeline/prompt")
-def get_prompt(target: str = "", preferences: str = "", start: int = 10):
+# Canonical movie genres (display, Plex tag) and decade buckets.
+# KEEP IN SYNC with generate_no_ai.py CANONICAL_GENRES / DECADE_RANGES.
+CANONICAL_GENRES = [
+    ("Comedy", "Comedy"), ("Action", "Action"), ("Horror", "Horror"),
+    ("Sci-Fi", "Science Fiction"), ("Drama", "Drama"),
+    ("Animation", "Animation"), ("Documentary", "Documentary"),
+]
+DECADE_BUCKETS = [
+    ("70s", 1970, 1979), ("80s", 1980, 1989), ("90s", 1990, 1999),
+    ("2000s", 2000, 2009), ("2010s", 2010, 2019), ("2020s", 2020, 2029),
+]
+
+
+def _safe_int(val):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
+
+
+@router.get("/pipeline/facets")
+def library_facets(min_items: int = 5):
+    """Genre/decade/marathon facets derived from plex_library.csv, with counts.
+
+    Drives the Planner toggles: canonical genres (always returned, even at 0 so the
+    UI can decide to show/hide), 'more' genres above min_items, decades present in
+    the library, and the count of marathon-eligible shows (50+ episodes).
+    """
+    import csv as _csv
+    p = DATA_DIR / "plex_library.csv"
+    if not p.exists():
+        return {"exists": False}
+
+    genre_counts: dict[str, int] = {}
+    decade_counts = {start: 0 for _, start, _ in DECADE_BUCKETS}
+    movies = tv = marathon = 0
+    with open(p, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            t = row.get("Type", "")
+            if t == "Movie":
+                movies += 1
+                for g in (row.get("Genres", "") or "").split("|"):
+                    g = g.strip()
+                    if g:
+                        genre_counts[g] = genre_counts.get(g, 0) + 1
+                yr = _safe_int(row.get("Year"))
+                if yr is not None:
+                    for _, start, end in DECADE_BUCKETS:
+                        if start <= yr <= end:
+                            decade_counts[start] += 1
+                            break
+            elif t == "TV":
+                tv += 1
+                eps = _safe_int(row.get("Episodes"))
+                if eps is not None and eps >= 50:
+                    marathon += 1
+
+    # Case-insensitive lookup for canonical tags.
+    ci_counts = {tag.lower(): n for tag, n in genre_counts.items()}
+    canonical_tags = {tag.lower() for _, tag in CANONICAL_GENRES}
+    canonical = [
+        {"display": disp, "tag": tag, "count": ci_counts.get(tag.lower(), 0)}
+        for disp, tag in CANONICAL_GENRES
+    ]
+    more = sorted(
+        (
+            {"display": tag, "tag": tag, "count": n}
+            for tag, n in genre_counts.items()
+            if tag.lower() not in canonical_tags and n >= min_items
+        ),
+        key=lambda x: (-x["count"], x["tag"].lower()),
+    )
+    decades = [
+        {"label": label, "start": start, "end": end, "count": decade_counts[start]}
+        for label, start, end in DECADE_BUCKETS
+        if decade_counts[start] > 0
+    ]
+    return {
+        "exists": True,
+        "movies": movies,
+        "tv_shows": tv,
+        "marathon_count": marathon,
+        "min_items": min_items,
+        "genres": {"canonical": canonical, "more": more},
+        "decades": decades,
+    }
+
+
+ANCHOR = "## Channel Numbering Scheme"
+TYPE_LABELS = {
+    "marathons": "TV Marathons", "tv_blocks": "TV Blocks", "movies": "Movie channels",
+    "franchise": "Franchise series", "specialty": "Specialty channels",
+}
+
+
+def _read_prompt_source() -> str:
     for candidate in [DATA_DIR / "PROMPT.md", SCRIPTS_DIR / "PROMPT.md"]:
         if candidate.exists():
-            content = candidate.read_text(encoding="utf-8")
-            if target:
-                content = content.replace("{TARGET}", target)
-            if preferences:
-                inj = (
-                    "\n## User Preferences\n\n"
-                    "The user has specifically requested the following channels or themes. "
-                    "Treat these as high-priority — if the library has enough content to support them, "
-                    "they must appear in the output:\n\n"
-                    f"{preferences}\n"
-                )
-                content = content.replace("## Channel Numbering Scheme", inj + "\n## Channel Numbering Scheme")
-            if start != 10:
-                o = start - 10
-                content = content.replace("**10–19**", f"**{10+o}–{19+o}**")
-                content = content.replace("**20–29**", f"**{20+o}–{29+o}**")
-                content = content.replace("**30–49**", f"**{30+o}–{49+o}**")
-                content = content.replace("**50–69**", f"**{50+o}–{69+o}**")
-                content = content.replace("**70–79**", f"**{70+o}–{79+o}**")
-                content = content.replace('"number": 10,', f'"number": {10+o},')
-                content = content.replace('"number": 20,', f'"number": {20+o},')
-                content = content.replace('"number": 30,', f'"number": {30+o},')
-            return {"content": content}
+            return candidate.read_text(encoding="utf-8")
     raise HTTPException(404, "PROMPT.md not found")
+
+
+def _strip_meta(content: str) -> str:
+    """Drop the human-facing meta header above the first '---' separator line.
+
+    Those lines (model recommendation, attach-vs-paste guidance) belong in the UI
+    walkthrough, not the copied prompt. The CLI still reads the full file directly.
+    """
+    lines = content.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip() == "---":
+            return "\n".join(lines[i + 1:]).lstrip("\n")
+    return content
+
+
+def _apply_target_prefs_start(content: str, target: str, preferences: str, start: int) -> str:
+    if target:
+        content = content.replace("{TARGET}", target)
+    if preferences:
+        inj = (
+            "\n## User Preferences\n\n"
+            "The user has specifically requested the following channels or themes. "
+            "Treat these as high-priority — if the library has enough content to support them, "
+            "they must appear in the output:\n\n"
+            f"{preferences}\n"
+        )
+        content = content.replace(ANCHOR, inj + "\n" + ANCHOR)
+    if start != 10:
+        o = start - 10
+        content = content.replace("**10–19**", f"**{10+o}–{19+o}**")
+        content = content.replace("**20–29**", f"**{20+o}–{29+o}**")
+        content = content.replace("**30–49**", f"**{30+o}–{49+o}**")
+        content = content.replace("**50–69**", f"**{50+o}–{69+o}**")
+        content = content.replace("**70–79**", f"**{70+o}–{79+o}**")
+        content = content.replace('"number": 10,', f'"number": {10+o},')
+        content = content.replace('"number": 20,', f'"number": {20+o},')
+        content = content.replace('"number": 30,', f'"number": {30+o},')
+    return content
+
+
+@router.get("/pipeline/prompt")
+def get_prompt(target: str = "", preferences: str = "", start: int = 10):
+    # Legacy GET: full file (meta included), used by the current Run UI. Kept
+    # intact so the live UI isn't degraded before the new flow (PR2) ships.
+    content = _apply_target_prefs_start(_read_prompt_source(), target, preferences, start)
+    return {"content": content}
+
+
+class PromptOptions(BaseModel):
+    target: str = ""
+    preferences: str = ""
+    start: int = 10
+    include_genres: list[str] = []
+    exclude_genres: list[str] = []
+    include_decades: list[str] = []   # labels, e.g. "90s"
+    exclude_decades: list[str] = []
+    include_types: list[str] = []     # marathons, tv_blocks, movies, franchise, specialty
+    exclude_types: list[str] = []
+
+
+def _what_to_build(opts: "PromptOptions") -> str:
+    def line(prefix, items, labels=None):
+        if not items:
+            return None
+        names = [labels.get(i, i) if labels else i for i in items]
+        return f"- {prefix}: {', '.join(names)}"
+
+    inc = [x for x in (
+        line("Channel types", opts.include_types, TYPE_LABELS),
+        line("Movie genres", opts.include_genres),
+        line("Decades", opts.include_decades),
+    ) if x]
+    exc = [x for x in (
+        line("Channel types", opts.exclude_types, TYPE_LABELS),
+        line("Movie genres", opts.exclude_genres),
+        line("Decades", opts.exclude_decades),
+    ) if x]
+    if not inc and not exc:
+        return ""
+
+    s = "\n## What To Build\n\n"
+    if inc:
+        s += "Definitely include channels for these when the library has enough content:\n"
+        s += "\n".join(inc) + "\n\n"
+    if exc:
+        s += "Do NOT create any channels for these:\n"
+        s += "\n".join(exc) + "\n\n"
+    s += (
+        "Beyond the must-include list above, you are encouraged to create additional "
+        "themed channels you discover in the library — franchises, directors, sub-genres, "
+        "holiday blocks, and other clusters. Surprising, well-curated channels are welcome, "
+        "as long as they don't fall under the 'do not create' list.\n"
+    )
+    return s
+
+
+@router.post("/pipeline/prompt")
+def build_prompt(opts: PromptOptions = PromptOptions()):
+    # New flow: meta stripped (UI carries that guidance) + toggle-driven What To Build.
+    content = _strip_meta(_read_prompt_source())
+    wtb = _what_to_build(opts)
+    if wtb:
+        content = content.replace(ANCHOR, wtb + "\n" + ANCHOR)
+    content = _apply_target_prefs_start(content, opts.target, opts.preferences, opts.start)
+    return {"content": content}
 
 
 @router.post("/pipeline/validate")

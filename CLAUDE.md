@@ -158,6 +158,7 @@ See `config.json.example` for the template.
 - Auto-generates TV marathon channels for shows with 50+ episodes
 - Writes placeholder entries for franchise/themed channels (user fills manually)
 - `--start N` — offsets all block ranges by `N - 10` (default: 10). E.g. `--start 30` shifts TV Marathons to 30–39, TV Blocks to 40–49, etc., leaving lower numbers free for pre-existing channels. Passed automatically by the web UI.
+- **Toggle flags** (omit any flag to keep its default = "all"): `--genres TAG,TAG` (Plex genre tags to build movie channels for — canonical tags get friendly names like "Sci-Fi Movies", others are named "<tag> Movies"), `--decades YEAR,YEAR` (decade start years), `--types TYPE,TYPE` (any of `marathons, tv_blocks, movies, franchise, specialty`), `--min-items N` (min titles for a genre/decade channel, default 5). Movie-block channel numbers (30–49) are assigned **dynamically/sequentially** so an arbitrary set of toggles never collides or leaves fixed gaps. `marathons` + `movies` are data-driven; `tv_blocks`/`franchise`/`specialty` are placeholder scaffolds (AI-only in the new Planner UI).
 - Output: `channels.json`
 
 **`generate_from_collections.py`** (Option C — Plex collections as channels)
@@ -273,7 +274,9 @@ A title can appear on multiple channels — this is intentional and expected.
 | POST | `/api/pipeline/export` | SSE-stream `export.py`; JSON body `{"no_crossref": bool, "movie_sections": ["1","2"], "tv_sections": ["3"]}` — sections are Plex section keys; `null` = auto-detect, `[]` = skip that type |
 | GET | `/api/pipeline/csv` | Download `plex_library.csv` |
 | GET | `/api/pipeline/csv/info` | Stats: rows, movies, tv_shows, skipped counts, preview lines |
-| GET | `/api/pipeline/prompt` | Fetch `PROMPT.md` with `{TARGET}`, preferences, and `start` (block offset) injected; query params: `target`, `preferences`, `start` |
+| GET | `/api/pipeline/facets` | Genre/decade/marathon facets from `plex_library.csv` with counts. Returns `{movies, tv_shows, marathon_count, genres:{canonical:[{display,tag,count}], more:[…]}, decades:[{label,start,end,count}]}`. Canonical genres always present (even at 0); `more` = other library genres ≥ `min_items` (query param, default 5). Drives the Planner toggles. |
+| GET | `/api/pipeline/prompt` | **Legacy** — fetch full `PROMPT.md` (meta header included) with `{TARGET}`, preferences, and `start` (block offset) injected; query params: `target`, `preferences`, `start`. Used by the current Run UI; kept until the new flow ships. |
+| POST | `/api/pipeline/prompt` | New flow — body `PromptOptions{target, preferences, start, include_genres, exclude_genres, include_decades, exclude_decades, include_types, exclude_types}`. Strips the meta header above the first `---` (the UI walkthrough carries that guidance) and injects a `## What To Build` section (must-include / never-create lists + an explicit invite to discover additional channels) before the numbering scheme. |
 | POST | `/api/pipeline/validate` | Parse/validate LLM output (file upload or raw text), write `channels.json` |
 | POST | `/api/pipeline/no-ai` | SSE-stream `generate_no_ai.py`; query param `start=N` passed as `--start N` |
 | GET | `/api/pipeline/collections` | Fetch all Plex collections (id, name, count, section, summary, has_poster) |
