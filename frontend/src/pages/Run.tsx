@@ -1,47 +1,23 @@
 import {
   Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
   Image, Loader, NumberInput, ScrollArea, SimpleGrid, Stack,
-  Stepper, Text, Textarea, ThemeIcon, Title, Tooltip,
+  Stepper, Text, TextInput, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { Dropzone } from '@mantine/dropzone';
 import {
-  IconAlertCircle, IconArrowRight, IconCheck, IconChevronDown, IconCopy, IconDownload,
-  IconExternalLink, IconPlayerPlay, IconRobot, IconSparkles, IconStack2,
-  IconUpload, IconWand, IconX,
+  IconAlertCircle, IconArrowRight, IconCheck, IconChevronDown, IconCopy,
+  IconExternalLink, IconPlayerPlay, IconSearch, IconStack2, IconWand, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
-  LibraryFacets, GenreFacet, DecadeFacet, PromptOptions,
+  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet,
 } from '../api/client';
-import type { Channel } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
 // ── Types ────────────────────────────────────────────────────────────────────────
 
-type Method = 'ai' | 'no-ai' | 'collections';
-type ContentType = 'marathons' | 'tv_blocks' | 'movies' | 'franchise' | 'specialty';
-
-const TYPE_META: { key: ContentType; label: string; aiOnly: boolean }[] = [
-  { key: 'marathons', label: 'TV Marathons', aiOnly: false },
-  { key: 'tv_blocks', label: 'TV Blocks', aiOnly: true },
-  { key: 'movies', label: 'Movie channels', aiOnly: false },
-  { key: 'franchise', label: 'Franchise', aiOnly: true },
-  { key: 'specialty', label: 'Specialty', aiOnly: true },
-];
-
-interface PlannerState {
-  types: Record<ContentType, boolean>;
-  genres: Record<string, boolean>;   // keyed by Plex tag
-  decades: Record<string, boolean>;  // keyed by label
-  canonical: GenreFacet[];
-  more: GenreFacet[];
-  decadeFacets: DecadeFacet[];
-  target: number | string;
-  theme: string;
-  loaded: boolean;
-}
+type Method = 'build' | 'collections';
 
 // Setup carries the upfront decisions through the whole flow.
 interface SetupState {
@@ -52,16 +28,26 @@ interface SetupState {
   start: number;
 }
 
-// ── Shared helpers ─────────────────────────────────────────────────────────────
+// Stable candidate ids for the selected-map.
+const cid = {
+  genre: (t: string) => `g:${t}`,
+  gd: (t: string, d: number) => `gd:${t}:${d}`,
+  blend: (a: string, b: string) => `b:${[a, b].sort().join('|')}`,
+  studio: (v: string) => `studio:${v}`,
+  director: (v: string) => `dir:${v}`,
+  actor: (v: string) => `actor:${v}`,
+  tv: (g: string) => `tv:${g}`,
+};
 
-function StatBox({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <Stack gap={2} align="center" p="sm">
-      <Text size="xl" fw={800} c="orange.4">{value}</Text>
-      <Text size="xs" c="dimmed" ta="center">{label}</Text>
-    </Stack>
-  );
+interface PlannerState {
+  loaded: boolean;
+  facets: LibraryFacets | null;
+  activeGenres: Record<string, boolean>;   // genre tag → in play
+  activeDecades: Record<string, boolean>;  // decade label → in play
+  selected: Record<string, CandidateSpec>; // candidate id → spec (checked)
 }
+
+// ── Shared helpers ─────────────────────────────────────────────────────────────
 
 function ResultsCard({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
@@ -80,60 +66,10 @@ function ResultsCard({ title, subtitle, children }: { title: string; subtitle?: 
   );
 }
 
-function getChannelBreakdown(channels: Channel[]) {
-  return {
-    marathons: channels.filter(c => c.number >= 10 && c.number <= 19).length,
-    tvBlocks:  channels.filter(c => c.number >= 20 && c.number <= 29).length,
-    movies:    channels.filter(c => c.number >= 30 && c.number <= 49).length,
-    franchise: channels.filter(c => c.number >= 50 && c.number <= 69).length,
-    specialty: channels.filter(c => c.number >= 70 && c.number <= 79).length,
-    collections: channels.filter(c => c.number >= 80).length,
-    totalContent: channels.reduce((s, c) => s + c.content.length, 0),
-  };
-}
-
 function parseRunStats(lines: string[]) {
   const summaryLine = lines.slice().reverse().find(l => l.includes('Done:'));
   const m = summaryLine?.match(/Done:\s*(\d+) created,\s*(\d+) skipped/);
   return { created: m ? parseInt(m[1]) : null, skipped: m ? parseInt(m[2]) : null };
-}
-
-// Derive include/exclude lists from planner toggle state.
-function plannerToPromptOptions(p: PlannerState, start: number): PromptOptions {
-  const shown = [...p.canonical, ...p.more];
-  const checkedGenres = shown.filter(g => p.genres[g.tag]).map(g => g.tag);
-  // Only an unchecked *canonical* genre is a hard "never create" — "More" genres
-  // left unchecked are simply not requested.
-  const excludedGenres = p.canonical.filter(g => !p.genres[g.tag]).map(g => g.tag);
-  const checkedDecades = p.decadeFacets.filter(d => p.decades[d.label]).map(d => d.label);
-  const excludedDecades = p.decadeFacets.filter(d => !p.decades[d.label]).map(d => d.label);
-  const checkedTypes = TYPE_META.filter(t => p.types[t.key]).map(t => t.key);
-  const excludedTypes = TYPE_META.filter(t => !p.types[t.key]).map(t => t.key);
-  return {
-    target: String(p.target),
-    preferences: p.theme,
-    start,
-    include_genres: checkedGenres,
-    exclude_genres: excludedGenres,
-    include_decades: checkedDecades,
-    exclude_decades: excludedDecades,
-    include_types: checkedTypes,
-    exclude_types: excludedTypes,
-  };
-}
-
-// Derive No-AI CLI params (only marathons + movies are data-driven there).
-function plannerToNoAiParams(p: PlannerState, start: number): Record<string, string> {
-  const shown = [...p.canonical, ...p.more];
-  const genres = shown.filter(g => p.genres[g.tag]).map(g => g.tag);
-  const decades = p.decadeFacets.filter(d => p.decades[d.label]).map(d => String(d.start));
-  const types = TYPE_META.filter(t => !t.aiOnly && p.types[t.key]).map(t => t.key);
-  const params: Record<string, string> = {};
-  if (start !== 10) params.start = String(start);
-  params.genres = genres.join(',');
-  params.decades = decades.join(',');
-  params.types = types.join(',');
-  return params;
 }
 
 // ── Setup screen ───────────────────────────────────────────────────────────────
@@ -217,17 +153,12 @@ function SetupStep({ setup, onChange, onDone }: {
     <Stack gap="lg">
       {/* Method */}
       <Card withBorder p="md">
-        <Text fw={700} mb="sm">How should we build your channels?</Text>
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+        <Text fw={700} mb="sm">What do you want to do?</Text>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           <MethodCard
-            icon={<IconSparkles size={18} />} title="Let AI design them"
-            desc="An LLM curates themed channels from your library. Most creative."
-            active={setup.method === 'ai'} onClick={() => onChange({ method: 'ai' })}
-          />
-          <MethodCard
-            icon={<IconWand size={18} />} title="Auto-generate"
-            desc="Build genre, decade & marathon channels automatically. No AI needed."
-            active={setup.method === 'no-ai'} onClick={() => onChange({ method: 'no-ai' })}
+            icon={<IconWand size={18} />} title="Build a lineup"
+            desc="Compose curated channels from your library — genres, decades, blends, studios, directors, actors."
+            active={setup.method === 'build'} onClick={() => onChange({ method: 'build' })}
           />
           <MethodCard
             icon={<IconStack2 size={18} />} title="Just my collections"
@@ -424,333 +355,281 @@ function ExportStep({ onDone }: { onDone: () => void }) {
   );
 }
 
-// ── Planner step (toggles) ───────────────────────────────────────────────────────
+// ── Planner v2 — ingredients → curated candidates ────────────────────────────────
 
-function PlannerStep({ method, planner, setPlanner, start, onNext, onGenerate }: {
-  method: Method;
+function CandRow({ id, label, count, checked, onToggle }: {
+  id: string; label: string; count: number; checked: boolean; onToggle: () => void;
+}) {
+  return (
+    <Group key={id} gap="xs" wrap="nowrap" py={3} px={6}
+      style={{ borderRadius: 4, cursor: 'pointer', backgroundColor: checked ? 'var(--mantine-color-dark-6)' : undefined }}
+      onClick={onToggle}>
+      <Checkbox size="xs" checked={checked} readOnly style={{ flexShrink: 0 }} />
+      <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>{label}</Text>
+      <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{count}</Text>
+    </Group>
+  );
+}
+
+function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, onAddMany }: {
+  title: string; kind: CandidateKind; items: EntityFacet[];
+  makeId: (v: string) => string; makeName: (v: string) => string;
+  isSel: (id: string) => boolean;
+  onToggle: (id: string, spec: CandidateSpec) => void;
+  onAddMany: (items: { id: string; spec: CandidateSpec }[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const filtered = q ? items.filter(i => i.value.toLowerCase().includes(q.toLowerCase())) : items;
+  return (
+    <Card withBorder p="sm">
+      <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+        <Text fw={600} size="sm">{title} <Text span c="dimmed" size="xs">({items.length})</Text></Text>
+        <Group gap={6} wrap="nowrap">
+          <Button size="compact-xs" variant="subtle" color="gray"
+            onClick={(e) => { e.stopPropagation(); onAddMany(items.slice(0, 5).map(i => ({ id: makeId(i.value), spec: { kind, value: i.value, name: makeName(i.value) } }))); }}>
+            Add top 5
+          </Button>
+          <IconChevronDown size={14} style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />
+        </Group>
+      </Group>
+      <Collapse in={open}>
+        <TextInput size="xs" mt="xs" placeholder={`Search ${title.toLowerCase()}…`} value={q}
+          onChange={(e) => setQ(e.currentTarget.value)} leftSection={<IconSearch size={13} />} />
+        <ScrollArea.Autosize mah={220} mt="xs">
+          <Stack gap={0}>
+            {filtered.map(i => {
+              const id = makeId(i.value);
+              return <CandRow key={id} id={id} count={i.count} label={makeName(i.value)} checked={isSel(id)}
+                onToggle={() => onToggle(id, { kind, value: i.value, name: makeName(i.value) })} />;
+            })}
+            {filtered.length === 0 && <Text size="xs" c="dimmed" p="xs">No matches.</Text>}
+          </Stack>
+        </ScrollArea.Autosize>
+      </Collapse>
+    </Card>
+  );
+}
+
+function PlannerStep({ planner, setPlanner, setup, onDone }: {
   planner: PlannerState;
   setPlanner: (p: PlannerState) => void;
-  start: number;
-  onNext: () => void;          // AI: go to prompt
-  onGenerate: () => void;      // No-AI: generate then advance
+  setup: SetupState;
+  onDone: () => void;
 }) {
   const [loading, setLoading] = useState(!planner.loaded);
   const [error, setError] = useState<string | null>(null);
+  const [building, setBuilding] = useState(false);
   const [showMore, setShowMore] = useState(false);
 
   useEffect(() => {
     if (planner.loaded) { setLoading(false); return; }
     api.getFacets()
-      .then((f: LibraryFacets) => {
+      .then((f) => {
         if (!f.exists) { setError('Run Export first.'); return; }
-        const canonical = f.genres?.canonical ?? [];
-        const more = f.genres?.more ?? [];
-        const decadeFacets = f.decades ?? [];
         const minItems = f.min_items ?? 5;
-        // Default-on: canonical genres with enough items, all present decades, all types.
-        const genres: Record<string, boolean> = {};
-        canonical.forEach(g => { genres[g.tag] = g.count >= minItems; });
-        more.forEach(g => { genres[g.tag] = false; });
-        const decades: Record<string, boolean> = {};
-        decadeFacets.forEach(d => { decades[d.label] = true; });
-        const types = { marathons: true, tv_blocks: true, movies: true, franchise: true, specialty: true };
-        setPlanner({ ...planner, canonical, more, decadeFacets, genres, decades, types, loaded: true });
+        const activeGenres: Record<string, boolean> = {};
+        (f.genres?.canonical ?? []).forEach(g => { activeGenres[g.tag] = g.count >= minItems; });
+        const activeDecades: Record<string, boolean> = {};
+        (f.decades ?? []).forEach(d => { activeDecades[d.label] = true; });
+        setPlanner({ ...planner, facets: f, activeGenres, activeDecades, loaded: true });
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const f = planner.facets;
   function patch(p: Partial<PlannerState>) { setPlanner({ ...planner, ...p }); }
-  function setType(k: ContentType, v: boolean) { patch({ types: { ...planner.types, [k]: v } }); }
-  function setGenre(tag: string, v: boolean) { patch({ genres: { ...planner.genres, [tag]: v } }); }
-  function setDecade(label: string, v: boolean) { patch({ decades: { ...planner.decades, [label]: v } }); }
+  function toggleGenre(tag: string) { patch({ activeGenres: { ...planner.activeGenres, [tag]: !planner.activeGenres[tag] } }); }
+  function toggleDecade(label: string) { patch({ activeDecades: { ...planner.activeDecades, [label]: !planner.activeDecades[label] } }); }
 
-  const moviesOn = planner.types.movies;
-
-  if (loading) {
-    return <Center py="xl"><Stack align="center" gap="sm"><Loader color="orange" /><Text size="sm" c="dimmed">Reading your library…</Text></Stack></Center>;
+  const isSel = (id: string) => id in planner.selected;
+  function toggleSel(id: string, spec: CandidateSpec) {
+    const next = { ...planner.selected };
+    if (id in next) delete next[id]; else next[id] = spec;
+    patch({ selected: next });
   }
-  if (error) {
-    return <Alert color="yellow" variant="light" icon={<IconAlertCircle size={16} />}>{error}</Alert>;
+  function addMany(items: { id: string; spec: CandidateSpec }[]) {
+    const next = { ...planner.selected };
+    items.forEach(({ id, spec }) => { next[id] = spec; });
+    patch({ selected: next });
   }
 
-  function GenreChip({ g }: { g: GenreFacet }) {
-    return (
-      <Chip size="sm" checked={!!planner.genres[g.tag]} disabled={!moviesOn}
-        onChange={(v) => setGenre(g.tag, v)} color="orange" variant="outline">
-        {g.display} <Text span c="dimmed" size="xs">({g.count})</Text>
-      </Chip>
-    );
+  if (loading) return <Center py="xl"><Stack align="center" gap="sm"><Loader color="orange" /><Text size="sm" c="dimmed">Reading your library…</Text></Stack></Center>;
+  if (error || !f) return <Alert color="yellow" variant="light" icon={<IconAlertCircle size={16} />}>{error || 'No library data.'}</Alert>;
+
+  const activeGenreTags = new Set(Object.keys(planner.activeGenres).filter(t => planner.activeGenres[t]));
+  const activeDecadeLabels = new Set(Object.keys(planner.activeDecades).filter(l => planner.activeDecades[l]));
+
+  // Build candidate groups from active ingredients.
+  const gdName = (label: string, disp: string) => `${label} ${disp}`;
+  const genreDecadeByDecade: Record<string, GenreDecadeFacet[]> = {};
+  (f.genre_decade ?? []).forEach(c => {
+    if (activeGenreTags.has(c.genre) && activeDecadeLabels.has(c.decade_label)) {
+      (genreDecadeByDecade[c.decade_label] ||= []).push(c);
+    }
+  });
+  const blendCands = (f.blends ?? []).filter(b => b.genres.every(g => activeGenreTags.has(g)));
+  const broadCands = [...(f.genres?.canonical ?? []), ...(f.genres?.more ?? [])].filter(g => activeGenreTags.has(g.tag));
+  const selectedCount = Object.keys(planner.selected).length;
+
+  async function build() {
+    setBuilding(true);
+    try {
+      const r = await api.composeChannels(Object.values(planner.selected), setup.start);
+      if (r.skipped.length) notifications.show({ message: `${r.skipped.length} candidate(s) skipped — no matching titles`, color: 'yellow' });
+      notifications.show({ message: `${r.count} channels built`, color: 'green', icon: <IconCheck size={14} /> });
+      onDone();
+    } catch (e: any) {
+      notifications.show({ message: `Build failed: ${e.message}`, color: 'red', icon: <IconX size={14} /> });
+    } finally { setBuilding(false); }
   }
 
   return (
     <Stack gap="lg">
       <Text size="sm" c="dimmed">
-        Pick what kinds of channels to {method === 'ai' ? 'ask for' : 'build'}. {method === 'ai'
-          ? 'Checked items are must-haves; unchecked genres are off-limits. The AI can still surprise you with extra finds.'
-          : 'Only the checked blocks get generated.'}
+        Compose a curated lineup. Pick which genres and decades are in play, then check the specific channels you want —
+        tighter cuts (90s Comedy, blends, a studio or director) feel more hand-programmed than one broad “Comedy”.
       </Text>
 
-      {/* Content types */}
+      {/* Ingredients */}
       <Card withBorder p="md">
-        <Text fw={700} mb="xs">Content types</Text>
-        <Group gap="sm">
-          {TYPE_META.map(t => {
-            const disabled = method === 'no-ai' && t.aiOnly;
-            const chip = (
-              <Chip size="sm" checked={!!planner.types[t.key] && !disabled} disabled={disabled}
-                onChange={(v) => setType(t.key, v)} color="orange" variant="outline">
-                {t.label}
-              </Chip>
-            );
-            return disabled
-              ? <Tooltip key={t.key} label="Requires AI — Auto-generate only does Marathons + Movies" withArrow>{chip}</Tooltip>
-              : <Box key={t.key}>{chip}</Box>;
-          })}
+        <Text fw={700} mb={4}>Genres in play</Text>
+        <Group gap="xs" mb="xs">
+          {(f.genres?.canonical ?? []).map(g => (
+            <Chip key={g.tag} size="sm" color="orange" variant="outline" checked={activeGenreTags.has(g.tag)} onChange={() => toggleGenre(g.tag)}>
+              {g.display} <Text span c="dimmed" size="xs">({g.count})</Text>
+            </Chip>
+          ))}
         </Group>
-      </Card>
-
-      {/* Genres */}
-      <Card withBorder p="md" style={{ opacity: moviesOn ? 1 : 0.5 }}>
-        <Text fw={700} mb={2}>Movie genres</Text>
-        <Text size="xs" c="dimmed" mb="sm">{moviesOn ? 'From your library, with item counts.' : 'Enable “Movie channels” above to choose genres.'}</Text>
-        <Group gap="xs">
-          {planner.canonical.map(g => <GenreChip key={g.tag} g={g} />)}
-        </Group>
-        {planner.more.length > 0 && (
+        {(f.genres?.more ?? []).length > 0 && (
           <>
-            <Button variant="subtle" size="xs" color="gray" mt="sm" px={4}
+            <Button variant="subtle" size="xs" color="gray" px={4}
               rightSection={<IconChevronDown size={13} style={{ transform: showMore ? 'rotate(180deg)' : undefined, transition: 'transform .15s' }} />}
-              onClick={() => setShowMore(v => !v)} disabled={!moviesOn}>
-              More genres ({planner.more.length})
-            </Button>
+              onClick={() => setShowMore(v => !v)}>More genres ({(f.genres?.more ?? []).length})</Button>
             <Collapse in={showMore}>
               <Group gap="xs" mt="xs">
-                {planner.more.map(g => <GenreChip key={g.tag} g={g} />)}
+                {(f.genres?.more ?? []).map(g => (
+                  <Chip key={g.tag} size="sm" color="orange" variant="outline" checked={activeGenreTags.has(g.tag)} onChange={() => toggleGenre(g.tag)}>
+                    {g.display} <Text span c="dimmed" size="xs">({g.count})</Text>
+                  </Chip>
+                ))}
               </Group>
             </Collapse>
           </>
         )}
+        <Divider my="sm" />
+        <Text fw={700} mb={4}>Decades in play</Text>
+        <Group gap="xs">
+          {(f.decades ?? []).map(d => (
+            <Chip key={d.label} size="sm" color="orange" variant="outline" checked={activeDecadeLabels.has(d.label)} onChange={() => toggleDecade(d.label)}>
+              {d.label} <Text span c="dimmed" size="xs">({d.count})</Text>
+            </Chip>
+          ))}
+        </Group>
       </Card>
 
-      {/* Decades */}
-      <Card withBorder p="md" style={{ opacity: moviesOn ? 1 : 0.5 }}>
-        <Text fw={700} mb="sm">Decades</Text>
-        {planner.decadeFacets.length === 0 ? (
-          <Text size="xs" c="dimmed">No dated movies found.</Text>
+      {/* Movie candidates */}
+      <Card withBorder p="md">
+        <Text fw={700} mb="sm">Movie channels</Text>
+        {activeGenreTags.size === 0 ? (
+          <Text size="sm" c="dimmed">Pick some genres above to see candidate channels.</Text>
         ) : (
-          <Group gap="xs">
-            {planner.decadeFacets.map(d => (
-              <Chip key={d.label} size="sm" checked={!!planner.decades[d.label]} disabled={!moviesOn}
-                onChange={(v) => setDecade(d.label, v)} color="orange" variant="outline">
-                {d.label} <Text span c="dimmed" size="xs">({d.count})</Text>
-              </Chip>
-            ))}
-          </Group>
+          <Stack gap="md">
+            {(f.decades ?? []).filter(d => activeDecadeLabels.has(d.label) && genreDecadeByDecade[d.label]?.length).map(d => {
+              const cells = genreDecadeByDecade[d.label];
+              return (
+                <Box key={d.label}>
+                  <Group justify="space-between" mb={2}>
+                    <Text size="sm" fw={600}>{d.label}</Text>
+                    <Button size="compact-xs" variant="subtle" color="gray"
+                      onClick={() => addMany(cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } })))}>
+                      Add all {d.label}
+                    </Button>
+                  </Group>
+                  {cells.map(c => {
+                    const id = cid.gd(c.genre, c.decade_start);
+                    const name = gdName(c.decade_label, c.display);
+                    return <CandRow key={id} id={id} count={c.count} label={name} checked={isSel(id)}
+                      onToggle={() => toggleSel(id, { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name })} />;
+                  })}
+                </Box>
+              );
+            })}
+
+            {blendCands.length > 0 && (
+              <Box>
+                <Group justify="space-between" mb={2}>
+                  <Text size="sm" fw={600}>Blends</Text>
+                  <Button size="compact-xs" variant="subtle" color="gray"
+                    onClick={() => addMany(blendCands.map(b => ({ id: cid.blend(b.genres[0], b.genres[1]), spec: { kind: 'blend', genres: b.genres, name: b.displays.join(' & ') } })))}>
+                    Add all blends
+                  </Button>
+                </Group>
+                {blendCands.map(b => {
+                  const id = cid.blend(b.genres[0], b.genres[1]);
+                  const name = b.displays.join(' & ');
+                  return <CandRow key={id} id={id} count={b.count} label={name} checked={isSel(id)}
+                    onToggle={() => toggleSel(id, { kind: 'blend', genres: b.genres, name })} />;
+                })}
+              </Box>
+            )}
+
+            <Box>
+              <Text size="sm" fw={600} mb={2}>Broad genres</Text>
+              {broadCands.map(g => {
+                const id = cid.genre(g.tag);
+                const name = `${g.display} Movies`;
+                return <CandRow key={id} id={id} count={g.count} label={name} checked={isSel(id)}
+                  onToggle={() => toggleSel(id, { kind: 'genre', genre: g.tag, name })} />;
+              })}
+            </Box>
+          </Stack>
         )}
       </Card>
 
-      {/* AI-only: target + theme */}
-      {method === 'ai' && (
+      {/* Entities */}
+      {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
+        <Stack gap="sm">
+          <Text fw={700} size="sm">Studios, directors &amp; actors</Text>
+          {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+          {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+          {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+        </Stack>
+      )}
+
+      {/* TV blocks */}
+      {(f.tv_genres?.length ?? 0) > 0 && (
         <Card withBorder p="md">
-          <Text fw={700} mb="sm">Fine-tuning</Text>
-          <Group align="flex-end" gap="md" mb="sm">
-            <NumberInput label="Target channel count" w={120} value={planner.target}
-              onChange={(v) => patch({ target: v })} min={1} max={500} step={1} size="sm" />
-            <Text size="sm" c="dimmed" mb={6}>roughly 1 channel per 15–20 titles</Text>
+          <Text fw={700} mb="sm">TV blocks</Text>
+          <Group gap="xs">
+            {f.tv_genres!.map(t => {
+              const id = cid.tv(t.genre);
+              const name = `${t.genre} TV`;
+              return (
+                <Chip key={id} size="sm" color="grape" variant="outline" checked={isSel(id)}
+                  onChange={() => toggleSel(id, { kind: 'tv_genre', genre: t.genre, name })}>
+                  {name} <Text span c="dimmed" size="xs">({t.count})</Text>
+                </Chip>
+              );
+            })}
           </Group>
-          <Textarea label="Anything specific you want? (optional)"
-            placeholder="e.g. a Batman channel, 90s cartoons, classic westerns, a Studio Ghibli block…"
-            value={planner.theme} onChange={(e) => patch({ theme: e.currentTarget.value })}
-            minRows={2} autosize maxRows={6} size="sm" maxLength={500} />
         </Card>
       )}
 
-      <Group>
-        {method === 'ai' ? (
-          <Button color="orange" rightSection={<IconArrowRight size={15} />} onClick={onNext}>Get the AI prompt</Button>
-        ) : (
-          <Button color="orange" leftSection={<IconWand size={15} />} onClick={onGenerate}>Generate Channels</Button>
-        )}
-        <Text size="xs" c="dimmed">Channels will start at #{start}.</Text>
-      </Group>
-    </Stack>
-  );
-}
-
-// ── No-AI generation runner (invoked from Planner's Generate button) ──────────────
-
-function NoAiRunStep({ planner, start, onDone }: { planner: PlannerState; start: number; onDone: () => void }) {
-  const [lines, setLines] = useState<string[]>([]);
-  const [running, setRunning] = useState(false);
-  const [done, setDone] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [count, setCount] = useState<number | null>(null);
-
-  async function run() {
-    setLines([]); setDone(false); setCount(null); setRunning(true);
-    try {
-      const code = await streamPipeline('/pipeline/no-ai', plannerToNoAiParams(planner, start), (ev) => {
-        if (ev.type === 'line') setLines(l => [...l, ev.text]);
-      });
-      const ok = code === 0; setSuccess(ok); setDone(true);
-      if (ok) { try { setCount((await api.getChannels()).channels.length); } catch { /* ignore */ } }
-    } catch (e: any) {
-      setLines(l => [...l, `Error: ${e.message}`]); setDone(true); setSuccess(false);
-    } finally { setRunning(false); }
-  }
-
-  useEffect(() => { run(); /* auto-run on entry */ // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <Stack gap="md">
-      <Text size="sm" c="dimmed">Building channels from your library and toggle selections…</Text>
-      {(running || done) && <TerminalOutput lines={lines} done={done} success={success} />}
-      {done && !success && <Button variant="subtle" color="red" onClick={run}>Retry</Button>}
-      {done && success && count !== null && (
-        <ResultsCard title={`${count} channels generated`} subtitle="channels.json is ready">
-          <Button color="orange" rightSection={<IconArrowRight size={15} />} onClick={onDone}>Continue</Button>
-        </ResultsCard>
-      )}
-    </Stack>
-  );
-}
-
-// ── AI Prompt walkthrough ─────────────────────────────────────────────────────────
-
-function PromptStep({ planner, start, onValidated }: {
-  planner: PlannerState;
-  start: number;
-  onValidated: (channels: Channel[]) => void;
-}) {
-  const [prompt, setPrompt] = useState('');
-  const [csvInfo, setCsvInfo] = useState<any>(null);
-  const [pasteText, setPasteText] = useState('');
-  const [validating, setValidating] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; count?: number; error?: string; channels?: Channel[] } | null>(null);
-
-  useEffect(() => {
-    api.getCsvInfo().then(setCsvInfo).catch(() => {});
-    api.buildPrompt(plannerToPromptOptions(planner, start)).then(p => setPrompt(p.content)).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function copyPrompt() {
-    await navigator.clipboard.writeText(prompt);
-    notifications.show({ message: 'Prompt copied', color: 'green', icon: <IconCheck size={14} /> });
-  }
-  async function validatePaste() {
-    if (!pasteText.trim()) return;
-    setValidating(true); setResult(await api.validateText(pasteText)); setValidating(false);
-  }
-  async function handleFileDrop(files: File[]) {
-    setValidating(true); setResult(await api.validateFile(files[0])); setValidating(false);
-  }
-
-  const breakdown = result?.ok && result.channels ? getChannelBreakdown(result.channels) : null;
-
-  function Step({ n, children }: { n: number; children: React.ReactNode }) {
-    return (
-      <Group gap="sm" wrap="nowrap" align="flex-start">
-        <ThemeIcon color="orange" variant="light" radius="xl" size="md" style={{ flexShrink: 0 }}>
-          <Text size="xs" fw={700}>{n}</Text>
-        </ThemeIcon>
-        <Box style={{ flex: 1, minWidth: 0 }}>{children}</Box>
-      </Group>
-    );
-  }
-
-  return (
-    <Stack gap="lg">
-      <Alert color="blue" variant="light" icon={<IconRobot size={16} />}>
-        You'll hand this prompt to any AI chat, give it your library file, and paste its answer back here.
-        Use the most capable model you have access to (Claude Opus, Gemini Pro, GPT-4-class) — small/fast models often cut the list short.
-      </Alert>
-
-      <Card withBorder p="lg">
-        <Stack gap="lg">
-          <Step n={1}>
-            <Group justify="space-between" wrap="nowrap">
-              <Text size="sm" fw={600}>Copy the prompt</Text>
-              <Button size="xs" variant="light" color="orange" leftSection={<IconCopy size={13} />} onClick={copyPrompt} disabled={!prompt}>Copy</Button>
-            </Group>
-            <ScrollArea h={180} mt="xs" style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--mantine-color-dark-4)' }}>
-              <Box p="sm"><Text size="xs" style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', color: '#d4d4d4' }}>{prompt || 'Building prompt…'}</Text></Box>
-            </ScrollArea>
-          </Step>
-
-          <Step n={2}>
-            <Text size="sm" fw={600} mb={4}>Open your AI chat</Text>
-            <Group gap="xs">
-              <Button component="a" href="https://chatgpt.com" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>ChatGPT</Button>
-              <Button component="a" href="https://claude.ai" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Claude</Button>
-              <Button component="a" href="https://gemini.google.com" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Gemini</Button>
-            </Group>
-          </Step>
-
-          <Step n={3}>
-            <Text size="sm" fw={600} mb={4}>Paste the prompt, then attach your library file</Text>
-            <Text size="xs" c="dimmed" mb="xs">
-              Most chats let you attach a file — use that for best results. If yours can't, paste the CSV's contents right after the prompt instead.
-            </Text>
-            {csvInfo?.exists ? (
-              <Button component="a" href="/api/pipeline/csv" download="plex_library.csv" leftSection={<IconDownload size={14} />} color="orange" variant="light" size="xs">
-                Download plex_library.csv ({csvInfo.rows?.toLocaleString()} titles)
-              </Button>
-            ) : (
-              <Alert color="yellow" variant="light" icon={<IconAlertCircle size={14} />}>Run Export first to generate the library file.</Alert>
-            )}
-          </Step>
-
-          <Step n={4}>
-            <Text size="sm" fw={600}>Copy the AI's channel list — the JSON only</Text>
-            <Text size="xs" c="dimmed">
-              Copy just the channel lines (each looks like <Code>{'{"number": 30, "name": …}'}</Code>, one per line).
-              Leave out any intro, explanation, or closing remarks the AI writes around the list — paste only the JSON.
-            </Text>
-          </Step>
-
-          <Step n={5}>
-            <Text size="sm" fw={600} mb="xs">Paste the channel list back here</Text>
-            {!result?.ok ? (
-              <Stack gap="sm">
-                <Textarea placeholder="Paste only the JSON channel lines here…" minRows={5} autosize maxRows={12}
-                  value={pasteText} onChange={(e) => { setPasteText(e.currentTarget.value); setResult(null); }}
-                  styles={{ input: { fontFamily: 'ui-monospace, monospace', fontSize: 12 } }} />
-                <Text size="xs" c="dimmed" ta="center">— or —</Text>
-                <Dropzone onDrop={handleFileDrop} accept={{ 'application/json': ['.json'], 'text/plain': ['.jsonl', '.txt'] }}
-                  maxFiles={1} loading={validating} styles={{ root: { borderColor: 'var(--mantine-color-dark-4)' } }}>
-                  <Group justify="center" gap="sm" py="sm"><IconUpload size={18} color="var(--mantine-color-dimmed)" /><Text size="sm" c="dimmed">Drop the saved .json / .jsonl file here</Text></Group>
-                </Dropzone>
-                {result && !result.ok && <Alert color="red" icon={<IconX size={16} />} variant="light">Invalid — {result.error}</Alert>}
-                {pasteText && !result && <Button color="orange" onClick={validatePaste} loading={validating} style={{ alignSelf: 'flex-start' }}>Validate &amp; Save</Button>}
-              </Stack>
-            ) : (
-              <Text size="xs" c="green.4">✓ Saved.</Text>
-            )}
-          </Step>
-        </Stack>
-      </Card>
-
-      {result?.ok && breakdown && result.channels && (
-        <ResultsCard title={`${result.count} channels loaded`} subtitle={`${breakdown.totalContent} content items · saved to channels.json`}>
-          <SimpleGrid cols={{ base: 2, sm: 3 }} mb="md">
-            {breakdown.marathons > 0 && <StatBox label="TV Marathons" value={breakdown.marathons} />}
-            {breakdown.tvBlocks > 0 && <StatBox label="TV Blocks" value={breakdown.tvBlocks} />}
-            {breakdown.movies > 0 && <StatBox label="Movies" value={breakdown.movies} />}
-            {breakdown.franchise > 0 && <StatBox label="Franchise" value={breakdown.franchise} />}
-            {breakdown.specialty > 0 && <StatBox label="Specialty" value={breakdown.specialty} />}
-            {breakdown.collections > 0 && <StatBox label="Collections" value={breakdown.collections} />}
-          </SimpleGrid>
-          <Divider mb="md" />
-          <Group>
-            <Button color="orange" rightSection={<IconArrowRight size={15} />} onClick={() => onValidated(result.channels!)}>Continue</Button>
-            <Button variant="subtle" size="xs" color="dimmed" onClick={() => setResult(null)}>Replace</Button>
+      {/* Build bar */}
+      <Card withBorder p="md">
+        <Group justify="space-between">
+          <Text size="sm" fw={600}>{selectedCount} channel{selectedCount !== 1 ? 's' : ''} selected · start at #{setup.start}</Text>
+          <Group gap="xs">
+            {selectedCount > 0 && <Button variant="subtle" size="xs" color="gray" onClick={() => patch({ selected: {} })}>Clear</Button>}
+            <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0} loading={building} onClick={build}>
+              Build {selectedCount} Channel{selectedCount !== 1 ? 's' : ''}
+            </Button>
           </Group>
-        </ResultsCard>
-      )}
+        </Group>
+      </Card>
     </Stack>
   );
 }
@@ -1115,19 +994,15 @@ function DeployStep({ setup }: { setup: SetupState }) {
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 const blankPlanner: PlannerState = {
-  types: { marathons: true, tv_blocks: true, movies: true, franchise: true, specialty: true },
-  genres: {}, decades: {}, canonical: [], more: [], decadeFacets: [],
-  target: 30, theme: '', loaded: false,
+  loaded: false, facets: null, activeGenres: {}, activeDecades: {}, selected: {},
 };
 
 export default function Run() {
   const [step, setStep] = useState(0);
   const [setup, setSetup] = useState<SetupState>({
-    method: 'ai', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
+    method: 'build', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
   });
   const [planner, setPlanner] = useState<PlannerState>(blankPlanner);
-  // For No-AI we route the Planner's Generate into a transient run sub-view.
-  const [noAiRunning, setNoAiRunning] = useState(false);
 
   const { method, includeCollections } = setup;
 
@@ -1137,8 +1012,7 @@ export default function Run() {
   ];
   if (method !== 'collections') {
     steps.push({ key: 'export', label: 'Export', desc: 'Scan your library' });
-    steps.push({ key: 'planner', label: 'Planner', desc: 'Pick what to build' });
-    if (method === 'ai') steps.push({ key: 'prompt', label: 'AI Prompt', desc: 'Hand off & paste back' });
+    steps.push({ key: 'planner', label: 'Planner', desc: 'Compose your lineup' });
   }
   if (includeCollections || method === 'collections') {
     steps.push({ key: 'collections', label: 'Collections', desc: 'Choose collections' });
@@ -1153,22 +1027,13 @@ export default function Run() {
     <Stack gap="lg">
       <Title order={2}>Build Channels</Title>
 
-      <Stepper active={step} onStepClick={(s) => { if (s < step) { setNoAiRunning(false); setStep(s); } }} color="orange" size="sm">
+      <Stepper active={step} onStepClick={(s) => { if (s < step) setStep(s); }} color="orange" size="sm">
         {steps.map(s => (
           <Stepper.Step key={s.key} label={s.label} description={s.desc}>
             <Box mt="lg">
               {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} />}
               {s.key === 'export' && <ExportStep onDone={next} />}
-              {s.key === 'planner' && (
-                noAiRunning
-                  ? <NoAiRunStep planner={planner} start={setup.start} onDone={() => { setNoAiRunning(false); next(); }} />
-                  : <PlannerStep
-                      method={method} planner={planner} setPlanner={setPlanner} start={setup.start}
-                      onNext={next}
-                      onGenerate={() => setNoAiRunning(true)}
-                    />
-              )}
-              {s.key === 'prompt' && <PromptStep planner={planner} start={setup.start} onValidated={() => next()} />}
+              {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} onDone={next} />}
               {s.key === 'collections' && <CollectionsStep start={setup.start} onDone={next} />}
               {s.key === 'deploy' && <DeployStep setup={setup} />}
             </Box>

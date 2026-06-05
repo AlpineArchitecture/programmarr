@@ -318,28 +318,29 @@ the user's setup choices. Full design + rationale: [`docs/run-overhaul-design.md
 **Shared patterns:**
 - `streamPipeline(endpoint, params, onEvent, body?)` — SSE stream with optional JSON body for selective deploy
 - `parseProbeChannels(lines)` — parses `[PROBE] #N name | shuffle=X | summary` lines into `ChannelSel[]`
-- `plannerToPromptOptions` / `plannerToNoAiParams` — turn the shared toggle state into a `POST /pipeline/prompt` body (AI) or `/pipeline/no-ai` query params (No-AI)
+- `cid` — stable candidate-id helpers (`g:`, `gd:`, `b:`, `studio:`, …) keying the Planner's `selected` map
 - Stepper navigation is locked: only completed steps are clickable
 
-**Flow:** `Setup → Export → Planner → [AI Prompt] → [Collections] → Deploy`. Steps appear
-conditionally: Export/Planner/Prompt are skipped for *Collections-only*; AI Prompt only for
-*AI*; Collections only if opted in.
+**Flow:** `Setup → Export → Planner → [Collections] → Deploy`. Export/Planner are
+skipped for *Collections-only*; Collections only if opted in. (The optional **AI layer**
+— AI-discovered/tonal-curated channels merged on top of the deterministic lineup — is
+**designed but not yet built**; see [`docs/run-overhaul-design.md`](docs/run-overhaul-design.md) § Planner v2.)
 
-1. **Setup** (`SetupStep`) — all upfront decisions: **method** cards (AI / No-AI / Collections-only),
+1. **Setup** (`SetupStep`) — upfront decisions: **method** cards (**Build a lineup** / **Collections-only**),
    *include collections?*, *fetch TMDB art?* (checkbox **disabled** + tooltip when `config.has_tmdb` is false),
    and the **keep/wipe existing Tunarr lineup** list (checked = keep = protected; auto-computes the start
    number = highest kept rounded up to the next 10). `protectedNums` + `start` flow through the rest of the flow.
 2. **Export** (`ExportStep`) — "Libraries to scan" checkboxes grouped Movies / TV; runs `export.py`; compact stats on success.
-3. **Planner** (`PlannerStep`) — shared, **library-derived** toggles from `GET /pipeline/facets`, grouped with hierarchy:
-   *Content types* (the 5 blocks; TV Blocks/Franchise/Specialty disabled with a "requires AI" tooltip for No-AI),
-   *Movie genres* (canonical chips with counts + a "More genres" expander; disabled when Movies is off),
-   *Decades* (present decades with counts). Default-on = canonical genres ≥ `min_items`, all present decades, all types.
-   AI also shows **target count + theme** (free text). For **AI** the primary button is "Get the AI prompt" → Prompt step;
-   for **No-AI** it's "Generate Channels", which runs `NoAiRunStep` (auto-streams `/pipeline/no-ai` with the toggle params) then advances.
-4. **AI Prompt** (`PromptStep`) — numbered 1–5 walkthrough: copy prompt (built via `POST /pipeline/prompt` with the toggle spec),
-   open ChatGPT/Claude/Gemini, paste + attach CSV (download button), copy reply, paste back (validate/save → `channels.json`).
-5. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` (base = `max(80, start rounded up)`).
-6. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
+3. **Planner v2** (`PlannerStep`) — **ingredients → curated candidates** from `GET /pipeline/facets` (v2).
+   Top: **genres + decades "in play"** (chips with counts + "More genres" expander). Below, a checkable
+   **candidate list** derived from the active ingredients: genre×decade (nested per decade), genre∩genre
+   **blends**, and **broad** genres — each with a live count, all **unchecked** by default. **Entity sections**
+   (Studios / Directors / Actors) are collapsible with search + "Add top 5". **TV blocks** are genre chips.
+   Bulk helpers ("Add all 90s", "Add all blends"). The **Build N Channels** button posts the selected
+   `CandidateSpec[]` to `POST /pipeline/compose`, which deterministically writes `channels.json`, then advances.
+   `CandRow` + `EntitySection` are top-level components (avoid remount/focus bugs).
+4. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` (base = `max(80, start rounded up)`).
+5. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
    collides with a kept channel). One **Deploy** button runs the **cascade**: `deploy-selective` → (if art opted in) `images` → `sync`,
    each streamed inline. The cascade **always completes**; the final summary shows per-stage status (✓ deployed N · ✓/skip art · ✓/⚠ sync)
    with the art and sync output collapsible (sync's manual-step instructions/XMLTV URL live there).
