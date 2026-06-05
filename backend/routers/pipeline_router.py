@@ -485,7 +485,11 @@ def build_prompt(opts: PromptOptions = PromptOptions()):
 
 
 @router.post("/pipeline/validate")
-async def validate(file: Optional[UploadFile] = File(None), content: Optional[str] = Form(None)):
+async def validate(
+    file: Optional[UploadFile] = File(None),
+    content: Optional[str] = Form(None),
+    append: bool = Form(False),
+):
     if file:
         raw = (await file.read()).decode("utf-8", errors="replace")
     elif content:
@@ -514,10 +518,81 @@ async def validate(file: Optional[UploadFile] = File(None), content: Optional[st
             return {"ok": False, "error": "No valid channel objects found"}
         data = {"channels": channels, "orphaned": [], "suggested_channels": []}
 
+    new_channels = data.get("channels", [])
+    if append:
+        # Merge AI-discovered channels on top of the existing deterministic lineup,
+        # renumbering any collisions to the next free slot so nothing is overwritten.
+        existing = {"channels": [], "orphaned": [], "suggested_channels": []}
+        cpath = DATA_DIR / "channels.json"
+        if cpath.exists():
+            with open(cpath, encoding="utf-8") as f:
+                existing = json.load(f)
+        kept = existing.get("channels", [])
+        used = {c.get("number") for c in kept}
+        next_free = (max(used) + 1) if used else 1
+        added = 0
+        for ch in new_channels:
+            n = ch.get("number")
+            if n in used or n is None:
+                while next_free in used:
+                    next_free += 1
+                ch["number"] = next_free
+            used.add(ch["number"])
+            next_free = max(next_free, ch["number"] + 1)
+            kept.append(ch)
+            added += 1
+        existing["channels"] = sorted(kept, key=lambda c: c.get("number", 0))
+        data = existing
+        with open(cpath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return {"ok": True, "count": len(data["channels"]), "added": added, "channels": data["channels"]}
+
     with open(DATA_DIR / "channels.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-    return {"ok": True, "count": len(data.get("channels", [])), "channels": data.get("channels", [])}
+    return {"ok": True, "count": len(new_channels), "channels": new_channels}
+
+
+@router.get("/pipeline/discover-prompt")
+def discover_prompt():
+    """Build the AI-discovery prompt, seeded with the existing (deterministic) lineup.
+
+    The AI is asked to suggest ADDITIONAL themed channels that don't duplicate what the
+    user already composed, numbered from the next free channel up.
+    """
+    existing: list[dict] = []
+    cpath = DATA_DIR / "channels.json"
+    if cpath.exists():
+        try:
+            with open(cpath, encoding="utf-8") as f:
+                existing = json.load(f).get("channels", [])
+        except Exception:
+            existing = []
+    maxnum = max((c.get("number", 0) for c in existing), default=9)
+    start = maxnum + 1
+    listing = "\n".join(
+        f'- #{c.get("number")} {c.get("name")}'
+        for c in sorted(existing, key=lambda c: c.get("number", 0))
+    ) or "(none yet)"
+
+    prompt = (
+        "You are a TV channel programmer. The user has a self-hosted media library "
+        "(attached as plex_library.csv) and has ALREADY built these channels:\n\n"
+        f"{listing}\n\n"
+        "Your job: suggest ADDITIONAL themed channels that make the lineup feel richer.\n\n"
+        "Rules:\n"
+        "1. Use ONLY exact titles from the attached plex_library.csv.\n"
+        "2. Do NOT duplicate or substantially overlap the existing channels above.\n"
+        "3. Favour themes that plain genre/decade filters miss — e.g. Heist Films, "
+        "Courtroom Dramas, Road Trip Movies, Time Travel, Mind-Benders, Feel-Good "
+        "Rainy Day, Whodunits, Coming-of-Age, Holiday/Christmas, Sports Underdogs.\n"
+        "4. Each channel needs at least 4 fitting titles to qualify.\n"
+        f"5. Number channels sequentially starting at {start}.\n\n"
+        "Output one channel per line as a JSON object (JSONL) — no commentary, no "
+        "markdown fences, just one {...} per line:\n"
+        f'{{"number": {start}, "name": "Heist Films", "shuffle": "shuffle", "content": ["Heat", "Ocean\'s Eleven", "The Italian Job"]}}\n'
+    )
+    return {"content": prompt, "start": start, "existing_count": len(existing)}
 
 
 # ── Planner v2: deterministic candidate composition ──────────────────────────────

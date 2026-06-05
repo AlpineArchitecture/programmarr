@@ -1,17 +1,18 @@
 import {
   Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
   Image, Loader, NumberInput, ScrollArea, SimpleGrid, Stack,
-  Stepper, Text, TextInput, ThemeIcon, Title, Tooltip,
+  Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
+import { Dropzone } from '@mantine/dropzone';
 import {
-  IconAlertCircle, IconArrowRight, IconCheck, IconChevronDown, IconCopy,
-  IconExternalLink, IconPlayerPlay, IconSearch, IconStack2, IconWand, IconX,
+  IconAlertCircle, IconArrowRight, IconCheck, IconChevronDown, IconCopy, IconDownload,
+  IconExternalLink, IconPlayerPlay, IconRobot, IconSearch, IconStack2, IconUpload, IconWand, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
-  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet,
+  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -467,10 +468,12 @@ const SUBGENRES: SubGenre[] = [
   { name: 'War Dramas', a: 'War', b: 'Drama' },
 ];
 
-function PlannerStep({ planner, setPlanner, setup, onDone }: {
+function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone }: {
   planner: PlannerState;
   setPlanner: (p: PlannerState) => void;
   setup: SetupState;
+  aiExtras: boolean;
+  setAiExtras: (v: boolean) => void;
   onDone: () => void;
 }) {
   const [loading, setLoading] = useState(!planner.loaded);
@@ -688,18 +691,140 @@ function PlannerStep({ planner, setPlanner, setup, onDone }: {
         </Box>
       )}
 
-      {/* Build bar */}
+      {/* AI extras + Build bar */}
       <Card withBorder p="md">
+        <Switch mb="sm" color="grape" checked={aiExtras} onChange={(e) => setAiExtras(e.currentTarget.checked)}
+          label={<Text size="sm" fw={600}>✨ Also let AI suggest extra channels</Text>}
+          description="After building, you'll get a prompt for ChatGPT/Claude to discover themed channels your picks miss (heist films, courtroom dramas…). Their suggestions merge on top." />
+        <Divider mb="sm" />
         <Group justify="space-between">
           <Text size="sm" fw={600}>{selectedCount} channel{selectedCount !== 1 ? 's' : ''} selected · start at #{setup.start}</Text>
           <Group gap="xs">
             {selectedCount > 0 && <Button variant="subtle" size="xs" color="gray" onClick={() => patch({ selected: {} })}>Clear</Button>}
-            <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0} loading={building} onClick={build}>
-              Build {selectedCount} Channel{selectedCount !== 1 ? 's' : ''}
+            <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0 && !aiExtras} loading={building} onClick={build}>
+              {selectedCount === 0 && aiExtras ? 'Continue to AI' : `Build ${selectedCount} Channel${selectedCount !== 1 ? 's' : ''}`}
             </Button>
           </Group>
         </Group>
       </Card>
+    </Stack>
+  );
+}
+
+// ── AI Extras — discover additional channels, merged on top ──────────────────────
+
+function DiscoverStep({ onDone }: { onDone: () => void }) {
+  const [prompt, setPrompt] = useState('');
+  const [csvInfo, setCsvInfo] = useState<any>(null);
+  const [existingCount, setExistingCount] = useState(0);
+  const [pasteText, setPasteText] = useState('');
+  const [validating, setValidating] = useState(false);
+  const [result, setResult] = useState<ValidateResult | null>(null);
+
+  useEffect(() => {
+    api.getCsvInfo().then(setCsvInfo).catch(() => {});
+    api.getDiscoverPrompt().then(p => { setPrompt(p.content); setExistingCount(p.existing_count); }).catch(() => {});
+  }, []);
+
+  async function copyPrompt() {
+    await navigator.clipboard.writeText(prompt);
+    notifications.show({ message: 'Prompt copied', color: 'green', icon: <IconCheck size={14} /> });
+  }
+  async function validatePaste() {
+    if (!pasteText.trim()) return;
+    setValidating(true); setResult(await api.validateText(pasteText, true)); setValidating(false);
+  }
+  async function handleFileDrop(files: File[]) {
+    setValidating(true); setResult(await api.validateFile(files[0], true)); setValidating(false);
+  }
+
+  function Step({ n, children }: { n: number; children: React.ReactNode }) {
+    return (
+      <Group gap="sm" wrap="nowrap" align="flex-start">
+        <ThemeIcon color="grape" variant="light" radius="xl" size="md" style={{ flexShrink: 0 }}>
+          <Text size="xs" fw={700}>{n}</Text>
+        </ThemeIcon>
+        <Box style={{ flex: 1, minWidth: 0 }}>{children}</Box>
+      </Group>
+    );
+  }
+
+  return (
+    <Stack gap="lg">
+      <Alert color="grape" variant="light" icon={<IconRobot size={16} />}>
+        Optional. You've built {existingCount} channel{existingCount !== 1 ? 's' : ''} deterministically — now an AI can
+        suggest extra themed channels those filters miss (heist films, courtroom dramas, feel-good rainy-day…).
+        Paste its answer back and it merges on top of your lineup. Skip if you don't want it.
+      </Alert>
+
+      <Card withBorder p="lg">
+        <Stack gap="lg">
+          <Step n={1}>
+            <Group justify="space-between" wrap="nowrap">
+              <Text size="sm" fw={600}>Copy the prompt</Text>
+              <Button size="xs" variant="light" color="grape" leftSection={<IconCopy size={13} />} onClick={copyPrompt} disabled={!prompt}>Copy</Button>
+            </Group>
+            <ScrollArea h={160} mt="xs" style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--mantine-color-dark-4)' }}>
+              <Box p="sm"><Text size="xs" style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', color: '#d4d4d4' }}>{prompt || 'Building prompt…'}</Text></Box>
+            </ScrollArea>
+          </Step>
+
+          <Step n={2}>
+            <Text size="sm" fw={600} mb={4}>Open your AI chat</Text>
+            <Group gap="xs">
+              <Button component="a" href="https://chatgpt.com" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>ChatGPT</Button>
+              <Button component="a" href="https://claude.ai" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Claude</Button>
+              <Button component="a" href="https://gemini.google.com" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Gemini</Button>
+            </Group>
+          </Step>
+
+          <Step n={3}>
+            <Text size="sm" fw={600} mb={4}>Paste the prompt, then attach your library file</Text>
+            {csvInfo?.exists ? (
+              <Button component="a" href="/api/pipeline/csv" download="plex_library.csv" leftSection={<IconDownload size={14} />} color="grape" variant="light" size="xs">
+                Download plex_library.csv ({csvInfo.rows?.toLocaleString()} titles)
+              </Button>
+            ) : (
+              <Alert color="yellow" variant="light" icon={<IconAlertCircle size={14} />}>Run Export first to generate the library file.</Alert>
+            )}
+          </Step>
+
+          <Step n={4}>
+            <Text size="sm" fw={600}>Copy the AI's channel list — the JSON only</Text>
+            <Text size="xs" c="dimmed">Just the channel lines (one <Code>{'{"number": …}'}</Code> per line). Skip any intro or commentary.</Text>
+          </Step>
+
+          <Step n={5}>
+            <Text size="sm" fw={600} mb="xs">Paste it back — it merges on top</Text>
+            {!result?.ok ? (
+              <Stack gap="sm">
+                <Textarea placeholder="Paste only the JSON channel lines here…" minRows={5} autosize maxRows={12}
+                  value={pasteText} onChange={(e) => { setPasteText(e.currentTarget.value); setResult(null); }}
+                  styles={{ input: { fontFamily: 'ui-monospace, monospace', fontSize: 12 } }} />
+                <Text size="xs" c="dimmed" ta="center">— or —</Text>
+                <Dropzone onDrop={handleFileDrop} accept={{ 'application/json': ['.json'], 'text/plain': ['.jsonl', '.txt'] }}
+                  maxFiles={1} loading={validating} styles={{ root: { borderColor: 'var(--mantine-color-dark-4)' } }}>
+                  <Group justify="center" gap="sm" py="sm"><IconUpload size={18} color="var(--mantine-color-dimmed)" /><Text size="sm" c="dimmed">Drop the saved .json / .jsonl file here</Text></Group>
+                </Dropzone>
+                {result && !result.ok && <Alert color="red" icon={<IconX size={16} />} variant="light">Invalid — {result.error}</Alert>}
+                {pasteText && !result && <Button color="grape" onClick={validatePaste} loading={validating} style={{ alignSelf: 'flex-start' }}>Merge channels</Button>}
+              </Stack>
+            ) : (
+              <Text size="sm" c="green.4">✓ {result.added ?? 0} channel{(result.added ?? 0) !== 1 ? 's' : ''} merged in.</Text>
+            )}
+          </Step>
+        </Stack>
+      </Card>
+
+      <Group>
+        {result?.ok ? (
+          <Button color="grape" rightSection={<IconArrowRight size={15} />} onClick={onDone}>
+            Continue ({result.count} channels total)
+          </Button>
+        ) : (
+          <Button variant="subtle" color="gray" onClick={onDone}>Skip — deploy what I built</Button>
+        )}
+      </Group>
     </Stack>
   );
 }
@@ -1073,6 +1198,7 @@ export default function Run() {
     method: 'build', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
   });
   const [planner, setPlanner] = useState<PlannerState>(blankPlanner);
+  const [aiExtras, setAiExtras] = useState(false);
 
   const { method, includeCollections } = setup;
 
@@ -1083,6 +1209,7 @@ export default function Run() {
   if (method !== 'collections') {
     steps.push({ key: 'export', label: 'Export', desc: 'Scan your library' });
     steps.push({ key: 'planner', label: 'Planner', desc: 'Compose your lineup' });
+    if (aiExtras) steps.push({ key: 'discover', label: 'AI Extras', desc: 'Discover more channels' });
   }
   if (includeCollections || method === 'collections') {
     steps.push({ key: 'collections', label: 'Collections', desc: 'Choose collections' });
@@ -1103,7 +1230,8 @@ export default function Run() {
             <Box mt="lg">
               {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} />}
               {s.key === 'export' && <ExportStep onDone={next} />}
-              {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} onDone={next} />}
+              {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} aiExtras={aiExtras} setAiExtras={setAiExtras} onDone={next} />}
+              {s.key === 'discover' && <DiscoverStep onDone={next} />}
               {s.key === 'collections' && <CollectionsStep start={setup.start} onDone={next} />}
               {s.key === 'deploy' && <DeployStep setup={setup} />}
             </Box>

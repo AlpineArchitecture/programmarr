@@ -48,18 +48,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ specs, start }),
     }),
-  validateText: async (content: string) => {
+  validateText: async (content: string, append = false) => {
     const form = new FormData();
     form.append('content', content);
+    if (append) form.append('append', 'true');
     const res = await fetch(`${BASE}/pipeline/validate`, { method: 'POST', body: form });
     return res.json() as Promise<ValidateResult>;
   },
-  validateFile: async (file: File) => {
+  validateFile: async (file: File, append = false) => {
     const form = new FormData();
     form.append('file', file);
+    if (append) form.append('append', 'true');
     const res = await fetch(`${BASE}/pipeline/validate`, { method: 'POST', body: form });
     return res.json() as Promise<ValidateResult>;
   },
+  getDiscoverPrompt: () =>
+    req<{ content: string; start: number; existing_count: number }>('/pipeline/discover-prompt'),
 
   getLogs: () => req<LogEntry[]>('/logs'),
   getLog: (name: string) => req<{ name: string; content: string }>(`/logs/${name}`),
@@ -141,7 +145,7 @@ export interface CsvInfo {
   skipped_movies?: number;
   skipped_shows?: number;
 }
-export interface ValidateResult { ok: boolean; count?: number; error?: string; channels?: Channel[] }
+export interface ValidateResult { ok: boolean; count?: number; added?: number; error?: string; channels?: Channel[] }
 
 // ── Planner facets + prompt options ──
 export interface GenreFacet { display: string; tag: string; count: number }
