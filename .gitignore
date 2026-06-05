@@ -24,7 +24,6 @@ backend/static/
 # Dev / scratch
 _archive/
 .claude/
-CLAUDE.md
 generate_ai.py
 PROMPT.personal.md
 screenshot_*.png
