@@ -226,3 +226,117 @@ ship. The old flow stays usable until PR2 flips it.
   and a `Year`→decade bucketing.
 - Channel protection still flows to `create.py` via `--protect N1,N2,…`; only the
   *place the user decides it* moves (setup screen, not Deploy).
+
+---
+
+# Planner v2 — Curated, Granular Channel Composition
+
+> **Status:** designed, not built. Supersedes the Planner step (and the Setup
+> "method" cards) from the PR1/PR2 overhaul above. Captured from a design
+> interview. Realistically 2–3 PRs; build on top of the merged PR1+PR2 base.
+
+## The problem
+
+The PR1/PR2 Planner is a good foundation but too coarse. "Comedy" is one broad
+bucket — a rom-com sits next to a gross-out comedy next to a dark satire, so the
+channel feels AI-generated, not curated. The user wants channels that feel
+**hand-programmed**, with granular control, "thinking like a TV programmer."
+
+## Core philosophy — curation = tighter selection
+
+Attack "abrupt transitions" by narrowing **what's in** a channel, not by
+sequencing **what plays after what**. A channel feels hand-made when its pool is
+narrow and coherent to begin with, so any shuffle within it already flows.
+(Ordering stays simple: `shuffle` / `ordered` / `block`.)
+
+## Channel dimensions (movies)
+
+- **Broad genre** — `Comedy` (still offered, but de-emphasized in favor of tighter cuts).
+- **Genre × Decade** — `90s Comedies` (era-narrowing). The user's original idea.
+- **Genre × Genre blend** — `Romantic Comedies` (Comedy∩Romance), `Horror Comedies`
+  (Comedy∩Horror). De-facto sub-genres from the **multi-tags every Plex title
+  already carries** — the most direct fix for "Comedy is too broad."
+- **Entities, stand-alone** — **Studio** (`A24`, `Blumhouse`, `Pixar`, `Studio
+  Ghibli`), **Director** (`Directed by Tarantino`), **Actor** (`Tom Hanks
+  Movies`). No entity×genre or entity×decade combos in v1 (catalogs are already
+  small/coherent; combining explodes the matrix into 2-film channels).
+
+**TV** (separate, unchanged in spirit): single-show **Marathons** (already
+coherent) + genre-based **Blocks** (`Sitcoms`, `Crime Dramas`). **No TV×decade**
+(long-running shows span eras; decades mislead).
+
+## Interaction — ingredients → candidates
+
+1. Pick which **genres + decades** are "in play" (chips).
+2. The Planner generates a **checkable candidate list** from those picks, each
+   with a **live item count**: genre×decade nested under each decade, blends, and
+   broad. **All start unchecked** — the user deliberately composes the lineup.
+3. **Entities** appear behind a minimum-films threshold, collapsed under
+   Studios / Directors / Actors with a count + search ("show more").
+4. **Bulk helpers:** "Add all 90s", "Add all Comedy blends", "Add top 5 studios".
+
+Active-ingredient gating is the primary volume control: combos only materialize
+for genres/decades the user activated.
+
+## The reframe — deterministic core + AI as an optional layer
+
+This is the load-bearing architectural shift, and it **supersedes the AI / No-AI
+method cards**:
+
+- **Every checked candidate is built deterministically** (exact filters: year,
+  genre tags, studio, director, lead cast) — reliable, no AI. This is the engine
+  for *everyone*.
+- **AI is no longer a "method"** — it's an optional layer. **Setup's method cards
+  collapse to `[Build a lineup]` vs `[Collections-only]`.** A Planner toggle —
+  "✨ Also let AI discover extras & curate by tone" — conditionally adds the **AI
+  Prompt walkthrough step** after the Planner (still copy-prompt / paste-back;
+  this app has no LLM key), and its results **merge** into the deterministic
+  lineup.
+- **AI does only what filters can't:**
+  - **Tonal split / curate** — a **per-pick mode switch** on each candidate:
+    `Build exactly` (deterministic) vs `Let AI curate` (hand this pool to AI to
+    split into tonally-coherent channels — Feel-Good vs Raunchy Comedies — or trim
+    to a best-of). Tags can't see tone; AI can.
+  - **Discovery** — themed channels no tag expresses (Heist, Courtroom,
+    Rainy-Day Feel-Good).
+- **Merge:** deterministic channels are built and numbered first; the AI prompt is
+  seeded with the taken names/numbers + the "AI curate" pools + a discovery
+  request; pasted-back AI channels are appended.
+
+## Numbering — soft category blocks
+
+The fixed 20-slot Movies block can't hold this. Keep the cable-TV feel as a
+*guideline*, assign sequentially within each category from the start number, and
+**spill into the next gap** on overflow: ~10s marathons, ~20s TV blocks, ~30s+
+movie channels (genre/decade/blend), ~50s+ entities ("Curated Series"), AI
+discoveries last. The Deploy review step remains the renumber safety valve.
+
+## Proposed defaults (adjustable)
+
+- **Surface thresholds (min films):** broad genre ≥12, genre×decade ≥6, blend ≥6,
+  studio ≥4, director ≥3, actor ≥4 (counting **top-3 billed** roles only).
+- **Auto-names:** `90s Comedies`, `Romantic Comedies`, `Comedy`, `A24`, `Directed
+  by Christopher Nolan`, `Tom Hanks Movies`; TV `Sitcoms` / `Crime Dramas`.
+  Renamable later on the Channels page.
+- **Shuffle:** movie pools `shuffle`, marathons `ordered`, TV blocks `block`.
+
+## Build footprint (2–3 PRs)
+
+1. **Data/backend:** `export.py` gains **Studio** + **lead Actors** (top-3 billed
+   from Plex `Role`); **facets v2** returns the genre×decade matrix, blend
+   (genre-pair) counts, and entity lists (studio/director/actor) with counts; a
+   **deterministic candidate resolver** that turns checked candidate specs into
+   `channels.json` content lists (generalizes `generate_no_ai.py`).
+2. **Flow + Planner UI:** Setup method-cards → `Build a lineup` / `Collections-only`;
+   the ingredients→candidates Planner (nested combos, blends, entity search,
+   per-pick AI-curate mode, bulk actions); soft numbering; AI-layer toggle +
+   conditional AI Prompt step + merge logic.
+3. **AI prompt engineering:** seed the prompt with the deterministic lineup +
+   "AI curate" pools + discovery request; merge pasted-back results.
+
+## Deferred / revisit later
+
+- Entity × genre/decade combos (`A24 Horror`, `90s Tarantino`).
+- Actor channels beyond top-3-billed; smarter lead detection.
+- Within-channel smart ordering (deliberate sequencing) — explicitly **not** the
+  v2 lever.
