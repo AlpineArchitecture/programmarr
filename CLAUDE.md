@@ -363,9 +363,32 @@ Channel names do not appear as text in Plex's Live TV guide channel column — o
 
 ## Git Workflow
 
-- Commit messages must be verbose and descriptive — explain what changed and why, not just "fix bug" or "update script".
-- Update this file (CLAUDE.md) whenever a feature changes: new flags, API behavior changes, schema updates, new scripts, or removed functionality.
-- After any feature change: update CLAUDE.md, commit with a detailed message, and push to origin.
+This project follows **GitHub Flow**. `master` is the production branch — a push to it
+triggers CI → GHCR → Watchtower → a live redeploy, so treat `master` as always
+shippable and **never commit directly to it**.
+
+**For every change — no exceptions:**
+1. **Branch from an up-to-date `master`** with a descriptive, prefixed name:
+   `feature/…`, `fix/…`, `docs/…`, or `chore/…`. Never a generic name like `wip`.
+   One branch = one logical task; keep branches short-lived.
+   ```bash
+   git checkout master && git pull
+   git checkout -b feature/short-description
+   ```
+2. **Commit in small, focused chunks** with verbose messages that explain *what*
+   changed and *why* — not "fix bug" or "update script".
+3. **Push the branch and open a Pull Request** into `master`. Review the diff, let CI
+   run, then merge **only when ready to deploy**. Delete the branch after merging.
+   ```bash
+   git push -u origin feature/short-description   # then open the PR on GitHub
+   ```
+4. **Never commit secrets or personal data** — keys, passwords, internal IPs, the
+   user's library. These stay gitignored (`config*.json`, `channels*.json`, `*.csv`,
+   `PROMPT.personal.md`, etc.).
+
+**Docs discipline:** update `CLAUDE.md` whenever a feature changes (new flags, API
+behavior, schema updates, new/removed scripts) — in the **same branch/PR** as the code
+change, so docs and code never drift apart.
 
 ## Live Channels (Auto-Updating Channels)
 
