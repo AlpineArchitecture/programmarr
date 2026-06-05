@@ -43,6 +43,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(opts),
     }),
+  composeChannels: (specs: CandidateSpec[], start: number) =>
+    req<ComposeResult>('/pipeline/compose', {
+      method: 'POST',
+      body: JSON.stringify({ specs, start }),
+    }),
   validateText: async (content: string) => {
     const form = new FormData();
     form.append('content', content);
@@ -141,6 +146,11 @@ export interface ValidateResult { ok: boolean; count?: number; error?: string; c
 // ── Planner facets + prompt options ──
 export interface GenreFacet { display: string; tag: string; count: number }
 export interface DecadeFacet { label: string; start: number; end: number; count: number }
+export interface GenreDecadeFacet { genre: string; display: string; decade_start: number; decade_label: string; count: number }
+export interface BlendFacet { genres: string[]; displays: string[]; count: number }
+export interface EntityFacet { value: string; count: number }
+export interface TvGenreFacet { genre: string; count: number }
+export interface MarathonFacet { title: string; episodes: number; seasons: number }
 export interface LibraryFacets {
   exists: boolean;
   movies?: number;
@@ -149,6 +159,32 @@ export interface LibraryFacets {
   min_items?: number;
   genres?: { canonical: GenreFacet[]; more: GenreFacet[] };
   decades?: DecadeFacet[];
+  genre_decade?: GenreDecadeFacet[];
+  blends?: BlendFacet[];
+  studios?: EntityFacet[];
+  directors?: EntityFacet[];
+  actors?: EntityFacet[];
+  tv_genres?: TvGenreFacet[];
+  marathons?: MarathonFacet[];
+}
+
+// ── Planner v2 candidate composition ──
+export type CandidateKind =
+  | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon';
+export interface CandidateSpec {
+  kind: CandidateKind;
+  name?: string;
+  genre?: string;
+  genres?: string[];
+  decade_start?: number;
+  value?: string;
+  shuffle?: 'ordered' | 'shuffle' | 'block';
+}
+export interface ComposeResult {
+  ok: boolean;
+  count: number;
+  channels: { number: number; name: string; items: number }[];
+  skipped: { name: string; reason: string }[];
 }
 export interface PromptOptions {
   target?: string;
