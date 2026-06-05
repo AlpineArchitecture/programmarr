@@ -1,5 +1,5 @@
 import {
-  Alert, Anchor, Badge, Box, Button, Card, Center, Checkbox, Chip, Collapse, Divider, Group,
+  Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
   Image, Loader, NumberInput, ScrollArea, SimpleGrid, Stack,
   Stepper, Text, Textarea, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
@@ -705,15 +705,18 @@ function PromptStep({ planner, start, onValidated }: {
           </Step>
 
           <Step n={4}>
-            <Text size="sm" fw={600}>Copy the AI's full response</Text>
-            <Text size="xs" c="dimmed">It should be a list of channels — one JSON object per line.</Text>
+            <Text size="sm" fw={600}>Copy the AI's channel list — the JSON only</Text>
+            <Text size="xs" c="dimmed">
+              Copy just the channel lines (each looks like <Code>{'{"number": 30, "name": …}'}</Code>, one per line).
+              Leave out any intro, explanation, or closing remarks the AI writes around the list — paste only the JSON.
+            </Text>
           </Step>
 
           <Step n={5}>
-            <Text size="sm" fw={600} mb="xs">Paste it back here</Text>
+            <Text size="sm" fw={600} mb="xs">Paste the channel list back here</Text>
             {!result?.ok ? (
               <Stack gap="sm">
-                <Textarea placeholder="Paste the AI's channel list here…" minRows={5} autosize maxRows={12}
+                <Textarea placeholder="Paste only the JSON channel lines here…" minRows={5} autosize maxRows={12}
                   value={pasteText} onChange={(e) => { setPasteText(e.currentTarget.value); setResult(null); }}
                   styles={{ input: { fontFamily: 'ui-monospace, monospace', fontSize: 12 } }} />
                 <Text size="xs" c="dimmed" ta="center">— or —</Text>
@@ -853,7 +856,7 @@ function parseProbeChannels(lines: string[]): ChannelSel[] {
 
 type CascadeStatus = 'pending' | 'running' | 'ok' | 'warn' | 'skip';
 
-function DeployStep({ setup, onComplete }: { setup: SetupState; onComplete: () => void }) {
+function DeployStep({ setup }: { setup: SetupState }) {
   const [probeLines, setProbeLines] = useState<string[]>([]);
   const [probeDone, setProbeDone] = useState(false);
   const [probeOk, setProbeOk] = useState(false);
@@ -868,7 +871,7 @@ function DeployStep({ setup, onComplete }: { setup: SetupState; onComplete: () =
   const [syncLines, setSyncLines] = useState<string[]>([]);
   const [syncStatus, setSyncStatus] = useState<CascadeStatus>('pending');
   const [showArt, setShowArt] = useState(false);
-  const [showSync, setShowSync] = useState(true);
+  const [showSync, setShowSync] = useState(false);
 
   const [config, setConfig] = useState<Record<string, string>>({});
   useEffect(() => { api.getConfig().then(setConfig).catch(() => {}); }, []);
@@ -929,6 +932,7 @@ function DeployStep({ setup, onComplete }: { setup: SetupState; onComplete: () =
   const includedCount = channelSels.filter(s => s.include).length;
   const tunarrUrl = config.tunarr_url || '';
   const plexLiveTvUrl = config.plex_url ? `${config.plex_url.replace(/\/$/, '')}/web/index.html#!/settings/livetv` : '';
+  const xmltvUrl = tunarrUrl ? `${tunarrUrl.replace(/\/$/, '')}/api/xmltv.xml` : '';
   const cascadeRunning = phase === 'deploying' || phase === 'art' || phase === 'sync';
 
   function StatusRow({ status, label, children }: { status: CascadeStatus; label: string; children?: React.ReactNode }) {
@@ -951,6 +955,7 @@ function DeployStep({ setup, onComplete }: { setup: SetupState; onComplete: () =
 
   // ── Done summary ──
   if (phase === 'done') {
+    const syncFailed = deployOk && syncStatus === 'warn';
     return (
       <Stack gap="lg">
         <ResultsCard
@@ -969,26 +974,55 @@ function DeployStep({ setup, onComplete }: { setup: SetupState; onComplete: () =
                 {(artStatus === 'ok' || artStatus === 'warn') && <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setShowArt(v => !v)}>details</Button>}
               </StatusRow>
             )}
-            {deployOk && (
-              <StatusRow status={syncStatus} label={syncStatus === 'ok' ? 'Plex sync complete' : 'Plex sync — may need a manual step'}>
-                <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setShowSync(v => !v)}>details</Button>
-              </StatusRow>
-            )}
+            {deployOk && syncStatus === 'ok' && <StatusRow status="ok" label="Plex sync complete — your channels are in the guide" />}
           </Stack>
 
           {deployOk && <Collapse in={showArt}><Box mb="md"><TerminalOutput lines={artLines} done success={artStatus === 'ok'} height={180} /></Box></Collapse>}
-          {deployOk && <Collapse in={showSync}><Box mb="md"><TerminalOutput lines={syncLines} done success={syncStatus === 'ok'} height={200} /></Box></Collapse>}
+
+          {/* Prominent, can't-miss manual-step callout when Plex didn't auto-sync. */}
+          {syncFailed && (
+            <Alert color="yellow" variant="light" icon={<IconAlertCircle size={18} />} mb="md"
+              title="One more step — add your channels to Plex">
+              <Text size="sm" mb="xs">
+                Your channels are live in <b>Tunarr</b>, but Plex couldn’t add them to its guide automatically.
+                Until you do this once, the channels <b>won’t appear in Plex Live TV</b>:
+              </Text>
+              <Stack gap={2} mb="sm">
+                <Text size="sm">1. Open <b>Plex → Settings → Live TV &amp; DVR</b></Text>
+                <Text size="sm">2. Click <b>Set Up Plex DVR</b> and pick <b>Tunarr</b> as the device</Text>
+                <Text size="sm">3. When it asks for a guide source (XMLTV), paste this URL:</Text>
+              </Stack>
+              {xmltvUrl && (
+                <Group gap="xs" wrap="nowrap" mb="sm">
+                  <Code style={{ flex: 1, overflowX: 'auto', whiteSpace: 'nowrap' }}>{xmltvUrl}</Code>
+                  <Button size="compact-xs" variant="light" color="yellow" leftSection={<IconCopy size={12} />}
+                    onClick={() => { navigator.clipboard.writeText(xmltvUrl); notifications.show({ message: 'XMLTV URL copied', color: 'green', icon: <IconCheck size={14} /> }); }}>
+                    Copy
+                  </Button>
+                </Group>
+              )}
+              <Text size="sm" mb="xs">4. Select all channels and finish the wizard.</Text>
+              <Group gap="sm">
+                {plexLiveTvUrl && <Button component="a" href={plexLiveTvUrl} target="_blank" rel="noreferrer" variant="light" color="grape" size="xs" leftSection={<IconExternalLink size={13} />}>Open Plex Live TV</Button>}
+                <Button size="compact-xs" variant="subtle" color="gray" onClick={() => setShowSync(v => !v)}>{showSync ? 'Hide' : 'Show'} sync log</Button>
+              </Group>
+              <Collapse in={showSync}><Box mt="sm"><TerminalOutput lines={syncLines} done success={false} height={180} /></Box></Collapse>
+            </Alert>
+          )}
+
           {!deployOk && <Box mb="md"><TerminalOutput lines={deployLines} done success={false} /></Box>}
 
-          {deployOk && (tunarrUrl || plexLiveTvUrl) && (
+          {deployOk && tunarrUrl && (
             <Group mb="md" gap="sm">
-              {tunarrUrl && <Button component="a" href={tunarrUrl} target="_blank" rel="noreferrer" variant="light" color="blue" size="sm" leftSection={<IconExternalLink size={14} />}>Open Tunarr</Button>}
-              {plexLiveTvUrl && <Button component="a" href={plexLiveTvUrl} target="_blank" rel="noreferrer" variant="light" color="grape" size="sm" leftSection={<IconExternalLink size={14} />}>Open Plex Live TV</Button>}
+              <Button component="a" href={tunarrUrl} target="_blank" rel="noreferrer" variant="light" color="blue" size="sm" leftSection={<IconExternalLink size={14} />}>Open Tunarr</Button>
+              {!syncFailed && plexLiveTvUrl && <Button component="a" href={plexLiveTvUrl} target="_blank" rel="noreferrer" variant="light" color="grape" size="sm" leftSection={<IconExternalLink size={14} />}>Open Plex Live TV</Button>}
             </Group>
           )}
           <Group>
-            {!deployOk && <Button variant="light" color="orange" onClick={() => { setPhase('idle'); }}>Back to review</Button>}
-            <Button color="green" rightSection={<IconArrowRight size={15} />} onClick={onComplete}>Finish</Button>
+            {!deployOk && <Button variant="light" color="orange" onClick={() => setPhase('idle')}>Back to review</Button>}
+            <Button component="a" href="/" color="green" rightSection={<IconArrowRight size={15} />}>
+              {deployOk ? 'Finish — go to Dashboard' : 'Go to Dashboard'}
+            </Button>
           </Group>
         </ResultsCard>
       </Stack>
@@ -1111,8 +1145,6 @@ export default function Run() {
   }
   steps.push({ key: 'deploy', label: 'Deploy', desc: 'Push & sync' });
 
-  const cur = steps[step]?.key;
-  const go = (key: string) => { const i = steps.findIndex(s => s.key === key); if (i >= 0) setStep(i); };
   const next = () => setStep(s => Math.min(s + 1, steps.length - 1));
 
   function patchSetup(p: Partial<SetupState>) { setSetup(s => ({ ...s, ...p })); }
@@ -1138,16 +1170,10 @@ export default function Run() {
               )}
               {s.key === 'prompt' && <PromptStep planner={planner} start={setup.start} onValidated={() => next()} />}
               {s.key === 'collections' && <CollectionsStep start={setup.start} onDone={next} />}
-              {s.key === 'deploy' && <DeployStep setup={setup} onComplete={() => setStep(steps.length)} />}
+              {s.key === 'deploy' && <DeployStep setup={setup} />}
             </Box>
           </Stepper.Step>
         ))}
-
-        <Stepper.Completed>
-          <Alert color="green" icon={<IconCheck size={16} />} mt="lg" variant="light">
-            All done! Your channels are live. <Anchor href="/" size="sm">Head to the Dashboard →</Anchor>
-          </Alert>
-        </Stepper.Completed>
       </Stepper>
     </Stack>
   );
