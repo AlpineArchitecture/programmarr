@@ -438,10 +438,24 @@ async def validate(file: Optional[UploadFile] = File(None), content: Optional[st
 
 
 @router.post("/pipeline/no-ai")
-async def run_no_ai(start: int = Query(10)):
+async def run_no_ai(
+    start: int = Query(10),
+    genres: Optional[str] = Query(None),
+    decades: Optional[str] = Query(None),
+    types: Optional[str] = Query(None),
+    min_items: Optional[int] = Query(None),
+):
     args = []
     if start != 10:
         args += ["--start", str(start)]
+    if genres is not None:
+        args += ["--genres", genres]
+    if decades is not None:
+        args += ["--decades", decades]
+    if types is not None:
+        args += ["--types", types]
+    if min_items is not None:
+        args += ["--min-items", str(min_items)]
     return _sse(_stream("generate_no_ai.py", args, "no_ai"))
 
 
