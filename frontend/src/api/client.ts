@@ -30,6 +30,7 @@ export const api = {
   getLibraryTitles: () => req<string[]>('/library/titles'),
 
   getCsvInfo: () => req<CsvInfo>('/pipeline/csv/info'),
+  getFacets: (minItems = 5) => req<LibraryFacets>(`/pipeline/facets?min_items=${minItems}`),
   getPrompt: (target?: string, prefs?: string, start?: number) => {
     const p = new URLSearchParams();
     if (target) p.set('target', target);
@@ -37,6 +38,11 @@ export const api = {
     if (start !== undefined && start !== 10) p.set('start', String(start));
     return req<{ content: string }>(`/pipeline/prompt?${p}`);
   },
+  buildPrompt: (opts: PromptOptions) =>
+    req<{ content: string }>('/pipeline/prompt', {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    }),
   validateText: async (content: string) => {
     const form = new FormData();
     form.append('content', content);
@@ -131,6 +137,30 @@ export interface CsvInfo {
   skipped_shows?: number;
 }
 export interface ValidateResult { ok: boolean; count?: number; error?: string; channels?: Channel[] }
+
+// ── Planner facets + prompt options ──
+export interface GenreFacet { display: string; tag: string; count: number }
+export interface DecadeFacet { label: string; start: number; end: number; count: number }
+export interface LibraryFacets {
+  exists: boolean;
+  movies?: number;
+  tv_shows?: number;
+  marathon_count?: number;
+  min_items?: number;
+  genres?: { canonical: GenreFacet[]; more: GenreFacet[] };
+  decades?: DecadeFacet[];
+}
+export interface PromptOptions {
+  target?: string;
+  preferences?: string;
+  start?: number;
+  include_genres?: string[];
+  exclude_genres?: string[];
+  include_decades?: string[];
+  exclude_decades?: string[];
+  include_types?: string[];
+  exclude_types?: string[];
+}
 export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show' }
 export interface PlexCollection { id: string; name: string; count: number; section: string; summary: string; has_poster: boolean }
 export interface CollectionSelection { name: string; channel_number: number; include: boolean }
