@@ -67,13 +67,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ discover, curate_pools }),
     }),
-  getRenamePrompt: () => req<{ content: string; count: number }>('/pipeline/rename-prompt'),
-  applyRenames: async (content: string, file?: File) => {
-    const form = new FormData();
-    if (file) form.append('file', file); else form.append('content', content);
-    const res = await fetch(`${BASE}/pipeline/apply-renames`, { method: 'POST', body: form });
-    return res.json() as Promise<RenameResult>;
-  },
 
   getLogs: () => req<LogEntry[]>('/logs'),
   getLog: (name: string) => req<{ name: string; content: string }>(`/logs/${name}`),
@@ -156,7 +149,6 @@ export interface CsvInfo {
   skipped_shows?: number;
 }
 export interface ValidateResult { ok: boolean; count?: number; added?: number; skipped_dupes?: number; error?: string; channels?: Channel[] }
-export interface RenameResult { ok: boolean; count?: number; error?: string; applied?: { number: number; old: string; new: string }[] }
 
 // ── Planner facets + prompt options ──
 export interface GenreFacet { display: string; tag: string; count: number }

@@ -279,8 +279,6 @@ A title can appear on multiple channels — this is intentional and expected.
 | GET | `/api/pipeline/prompt` | **Legacy** — fetch full `PROMPT.md` (meta header included) with `{TARGET}`, preferences, and `start` (block offset) injected; query params: `target`, `preferences`, `start`. Used by the current Run UI; kept until the new flow ships. |
 | POST | `/api/pipeline/prompt` | New flow — body `PromptOptions{target, preferences, start, include_genres, exclude_genres, include_decades, exclude_decades, include_types, exclude_types}`. Strips the meta header above the first `---` (the UI walkthrough carries that guidance) and injects a `## What To Build` section (must-include / never-create lists + an explicit invite to discover additional channels) before the numbering scheme. |
 | POST | `/api/pipeline/validate` | Parse/validate LLM output (file upload or raw text), write `channels.json`. With form field `append=true`, **merges** the parsed channels on top of the existing `channels.json` instead of overwriting — colliding numbers are bumped to the next free slot, and incoming channels whose **name already exists (case-insensitive) are skipped** so re-running the AI step can't stack duplicates; returns `added` + `skipped_dupes`. |
-| GET | `/api/pipeline/rename-prompt` | Build a name-polish prompt: lists every channel (number, current name, sample titles) and asks the AI to rewrite only the generically-named ones (clarity-first), leaving marathons/studios/directors/actors/themed channels alone. Returns `{content, count}`. |
-| POST | `/api/pipeline/apply-renames` | Parse `{number, name}` JSON/JSONL (form `content` or `file`) and **rename channels by number** in `channels.json`. Returns `{applied:[{number, old, new}], count}`. |
 | POST | `/api/pipeline/discover-prompt` | Build the AI-extras prompt, seeded with the current `channels.json` lineup (so the AI avoids duplicates) and numbering new suggestions from `max+1`. Body `DiscoverOptions{discover, curate_pools}`: `discover` adds a "suggest additional themed channels" section; `curate_pools` (human pool descriptions) adds a "split these pools by tone" section (PR-D per-pick AI-curate). Returns `{content, start, existing_count}`. |
 | POST | `/api/pipeline/no-ai` | SSE-stream `generate_no_ai.py`; query params `start`, `genres`, `decades`, `types`, `min_items` passed through as the matching `--` flags (the Planner toggles drive these) |
 | GET | `/api/pipeline/collections` | Fetch all Plex collections (id, name, count, section, summary, has_poster) |
@@ -352,11 +350,8 @@ extra channels" toggle is on; Collections only if opted in. (The **AI layer** sh
    with `{discover:true, curate_pools}` (knows your built lineup; asks the AI to split the flagged pools by tone **and**
    discover non-duplicate themed channels, numbered from `max+1`). Paste the AI's JSONL → `POST /pipeline/validate` with
    `append=true` **merges** it on top of `channels.json` (collisions renumbered; **name-duplicates skipped** → `skipped_dupes`). Skippable.
-5. **Polish Names** (`RenameStep`, only when `aiExtras`) — optional AI name-polish: `GET /pipeline/rename-prompt` → paste the
-   AI's `{number,name}` lines → `POST /pipeline/apply-renames` rewrites the generic names by number, with an old→new review.
-   Leaves already-good names (marathons/studios/directors/actors/themed) alone. No library file needed. Skippable.
-6. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` above the current max (`max(start, ceil((maxNum+1)/10)*10)`).
-7. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
+5. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` above the current max (`max(start, ceil((maxNum+1)/10)*10)`).
+6. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
    collides with a kept channel). One **Deploy** button runs the **cascade**: `deploy-selective` → (if art opted in) `images` → `sync`,
    each streamed inline. The cascade **always completes**; the final summary shows per-stage status (✓ deployed N · ✓/skip art · ✓/⚠ sync)
    with the art and sync output collapsible (sync's manual-step instructions/XMLTV URL live there).
