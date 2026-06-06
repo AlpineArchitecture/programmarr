@@ -62,8 +62,11 @@ export const api = {
     const res = await fetch(`${BASE}/pipeline/validate`, { method: 'POST', body: form });
     return res.json() as Promise<ValidateResult>;
   },
-  getDiscoverPrompt: () =>
-    req<{ content: string; start: number; existing_count: number }>('/pipeline/discover-prompt'),
+  getDiscoverPrompt: (discover = true, curate_pools: string[] = []) =>
+    req<{ content: string; start: number; existing_count: number }>('/pipeline/discover-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ discover, curate_pools }),
+    }),
 
   getLogs: () => req<LogEntry[]>('/logs'),
   getLog: (name: string) => req<{ name: string; content: string }>(`/logs/${name}`),
@@ -145,7 +148,7 @@ export interface CsvInfo {
   skipped_movies?: number;
   skipped_shows?: number;
 }
-export interface ValidateResult { ok: boolean; count?: number; added?: number; error?: string; channels?: Channel[] }
+export interface ValidateResult { ok: boolean; count?: number; added?: number; skipped_dupes?: number; error?: string; channels?: Channel[] }
 
 // ── Planner facets + prompt options ──
 export interface GenreFacet { display: string; tag: string; count: number }

@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
+  ActionIcon, Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
   Image, Loader, NumberInput, ScrollArea, SimpleGrid, Stack,
   Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
@@ -7,7 +7,7 @@ import { notifications } from '@mantine/notifications';
 import { Dropzone } from '@mantine/dropzone';
 import {
   IconAlertCircle, IconArrowRight, IconCheck, IconChevronDown, IconCopy, IconDownload,
-  IconExternalLink, IconPlayerPlay, IconRobot, IconSearch, IconStack2, IconUpload, IconWand, IconX,
+  IconExternalLink, IconPlayerPlay, IconRobot, IconSearch, IconSparkles, IconStack2, IconUpload, IconWand, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import {
@@ -47,6 +47,7 @@ interface PlannerState {
   activeGenres: Record<string, boolean>;   // genre tag → in play
   activeDecades: Record<string, boolean>;  // decade label → in play
   selected: Record<string, CandidateSpec>; // candidate id → spec (checked)
+  curate: Record<string, boolean>;         // candidate id → "let AI split by tone"
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -359,15 +360,26 @@ function ExportStep({ onDone }: { onDone: () => void }) {
 
 // ── Planner v2 — ingredients → curated candidates ────────────────────────────────
 
-function CandRow({ id, label, count, checked, onToggle }: {
+function CandRow({ id, label, count, checked, onToggle, curatable, curate, onCurate }: {
   id: string; label: string; count: number; checked: boolean; onToggle: () => void;
+  curatable?: boolean; curate?: boolean; onCurate?: () => void;
 }) {
   return (
     <Group key={id} gap="xs" wrap="nowrap" py={3} px={6}
-      style={{ borderRadius: 4, cursor: 'pointer', backgroundColor: checked ? 'var(--mantine-color-dark-6)' : undefined }}
+      style={{ borderRadius: 4, cursor: 'pointer', backgroundColor: curate ? 'var(--mantine-color-grape-9)' : checked ? 'var(--mantine-color-dark-6)' : undefined }}
       onClick={onToggle}>
       <Checkbox size="xs" checked={checked} readOnly style={{ flexShrink: 0 }} />
-      <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>{label}</Text>
+      <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
+        {label}{curate && <Text span c="grape.4" size="xs"> · AI splits by tone</Text>}
+      </Text>
+      {curatable && checked && onCurate && (
+        <Tooltip label={curate ? "AI will split this pool by tone" : "Let AI split this pool by tone"} withArrow>
+          <ActionIcon size="sm" variant={curate ? 'filled' : 'subtle'} color="grape" style={{ flexShrink: 0 }}
+            onClick={(e) => { e.stopPropagation(); onCurate(); }}>
+            <IconSparkles size={13} />
+          </ActionIcon>
+        </Tooltip>
+      )}
       <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{count}</Text>
     </Group>
   );
@@ -504,11 +516,14 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   function toggleDecade(label: string) { patch({ activeDecades: { ...planner.activeDecades, [label]: !planner.activeDecades[label] } }); }
 
   const isSel = (id: string) => id in planner.selected;
+  const isCurate = (id: string) => !!planner.curate[id];
   function toggleSel(id: string, spec: CandidateSpec) {
     const next = { ...planner.selected };
-    if (id in next) delete next[id]; else next[id] = spec;
-    patch({ selected: next });
+    const nextCurate = { ...planner.curate };
+    if (id in next) { delete next[id]; delete nextCurate[id]; } else { next[id] = spec; }
+    patch({ selected: next, curate: nextCurate });
   }
+  function toggleCurate(id: string) { patch({ curate: { ...planner.curate, [id]: !planner.curate[id] } }); }
   function addMany(items: { id: string; spec: CandidateSpec }[]) {
     const next = { ...planner.selected };
     items.forEach(({ id, spec }) => { next[id] = spec; });
@@ -540,10 +555,15 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     .map(s => ({ s, blend: blendByKey[[s.a, s.b].map(g => g.toLowerCase()).sort().join('|')] }))
     .filter((x): x is { s: SubGenre; blend: BlendFacet } => !!x.blend);
 
+  // AI-curate picks are NOT built deterministically — they're handed to the AI step
+  // to split by tone. Only "exact" picks go to compose.
+  const exactSpecs = Object.entries(planner.selected).filter(([id]) => !planner.curate[id]).map(([, spec]) => spec);
+  const curateCount = Object.keys(planner.curate).filter(id => planner.curate[id] && id in planner.selected).length;
+
   async function build() {
     setBuilding(true);
     try {
-      const r = await api.composeChannels(Object.values(planner.selected), setup.start);
+      const r = await api.composeChannels(exactSpecs, setup.start);
       if (r.skipped.length) notifications.show({ message: `${r.skipped.length} candidate(s) skipped — no matching titles`, color: 'yellow' });
       notifications.show({ message: `${r.count} channels built`, color: 'green', icon: <IconCheck size={14} /> });
       onDone();
@@ -558,6 +578,14 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         Compose a curated lineup. Pick which genres and decades are in play, then check the specific channels you want —
         tighter cuts (90s Comedy, blends, a studio or director) feel more hand-programmed than one broad “Comedy”.
       </Text>
+
+      {/* AI toggle — at the top so the per-pick ✨ on broad/decade picks is discoverable. */}
+      <Card withBorder p="sm" style={{ borderColor: aiExtras ? 'var(--mantine-color-grape-6)' : undefined }}>
+        <Switch color="grape" checked={aiExtras}
+          onChange={(e) => { const v = e.currentTarget.checked; setAiExtras(v); if (!v) patch({ curate: {} }); }}
+          label={<Text size="sm" fw={600}>✨ Bring in AI (optional)</Text>}
+          description="Adds an AI step after building — discover channels your picks miss, and split broad pools by tone. With this ON, a grape ✨ appears on each checked broad-genre or decade pick; tap it to hand that pool to the AI instead of building it as one channel." />
+      </Card>
 
       {/* Ingredients */}
       <Card withBorder p="md">
@@ -631,7 +659,12 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
 
       {/* Movie channels (~30s) */}
       <Box>
-        <Text fw={700} size="sm" mb={6}>Movie channels</Text>
+        <Group justify="space-between" mb={6}>
+          <Text fw={700} size="sm">Movie channels</Text>
+          {aiExtras && activeGenreTags.size > 0 && (
+            <Text size="xs" c="grape.4">✨ tap the sparkle on a checked genre/decade pick to let AI split it by tone</Text>
+          )}
+        </Group>
         {activeGenreTags.size === 0 ? (
           <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
         ) : (
@@ -644,7 +677,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
                   {cells.map((c, i) => (
                     <CandRow key={items[i].id} id={items[i].id} count={c.count} label={gdName(c.decade_label, c.display)} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)}
+                      curatable={aiExtras} curate={isCurate(items[i].id)} onCurate={() => toggleCurate(items[i].id)} />
                   ))}
                 </CollapsibleSection>
               );
@@ -670,7 +704,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
                   {broadCands.map((g, i) => (
                     <CandRow key={items[i].id} id={items[i].id} count={g.count} label={`${g.display} Movies`} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                      onToggle={() => toggleSel(items[i].id, items[i].spec)}
+                      curatable={aiExtras} curate={isCurate(items[i].id)} onCurate={() => toggleCurate(items[i].id)} />
                   ))}
                 </CollapsibleSection>
               );
@@ -691,18 +726,17 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         </Box>
       )}
 
-      {/* AI extras + Build bar */}
+      {/* Build bar */}
       <Card withBorder p="md">
-        <Switch mb="sm" color="grape" checked={aiExtras} onChange={(e) => setAiExtras(e.currentTarget.checked)}
-          label={<Text size="sm" fw={600}>✨ Also let AI suggest extra channels</Text>}
-          description="After building, you'll get a prompt for ChatGPT/Claude to discover themed channels your picks miss (heist films, courtroom dramas…). Their suggestions merge on top." />
-        <Divider mb="sm" />
         <Group justify="space-between">
-          <Text size="sm" fw={600}>{selectedCount} channel{selectedCount !== 1 ? 's' : ''} selected · start at #{setup.start}</Text>
+          <Box>
+            <Text size="sm" fw={600}>{exactSpecs.length} channel{exactSpecs.length !== 1 ? 's' : ''} to build · start at #{setup.start}</Text>
+            {curateCount > 0 && <Text size="xs" c="grape.4">+ {curateCount} pool{curateCount !== 1 ? 's' : ''} for AI to split by tone</Text>}
+          </Box>
           <Group gap="xs">
-            {selectedCount > 0 && <Button variant="subtle" size="xs" color="gray" onClick={() => patch({ selected: {} })}>Clear</Button>}
+            {selectedCount > 0 && <Button variant="subtle" size="xs" color="gray" onClick={() => patch({ selected: {}, curate: {} })}>Clear</Button>}
             <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0 && !aiExtras} loading={building} onClick={build}>
-              {selectedCount === 0 && aiExtras ? 'Continue to AI' : `Build ${selectedCount} Channel${selectedCount !== 1 ? 's' : ''}`}
+              {exactSpecs.length === 0 ? 'Continue to AI' : `Build ${exactSpecs.length} Channel${exactSpecs.length !== 1 ? 's' : ''}`}
             </Button>
           </Group>
         </Group>
@@ -711,9 +745,17 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   );
 }
 
+// Human description of a curate pool, handed to the AI to split by tone.
+function curatePoolDescription(spec: CandidateSpec): string {
+  if (spec.kind === 'genre_decade' && spec.decade_start) {
+    return `${spec.name} — "${spec.genre}"-tagged movies from ${spec.decade_start}–${spec.decade_start + 9}`;
+  }
+  return `${spec.name} — all "${spec.genre}"-tagged movies`;
+}
+
 // ── AI Extras — discover additional channels, merged on top ──────────────────────
 
-function DiscoverStep({ onDone }: { onDone: () => void }) {
+function DiscoverStep({ discover, curatePools, onDone }: { discover: boolean; curatePools: string[]; onDone: () => void }) {
   const [prompt, setPrompt] = useState('');
   const [csvInfo, setCsvInfo] = useState<any>(null);
   const [existingCount, setExistingCount] = useState(0);
@@ -723,7 +765,8 @@ function DiscoverStep({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     api.getCsvInfo().then(setCsvInfo).catch(() => {});
-    api.getDiscoverPrompt().then(p => { setPrompt(p.content); setExistingCount(p.existing_count); }).catch(() => {});
+    api.getDiscoverPrompt(discover, curatePools).then(p => { setPrompt(p.content); setExistingCount(p.existing_count); }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function copyPrompt() {
@@ -752,9 +795,11 @@ function DiscoverStep({ onDone }: { onDone: () => void }) {
   return (
     <Stack gap="lg">
       <Alert color="grape" variant="light" icon={<IconRobot size={16} />}>
-        Optional. You've built {existingCount} channel{existingCount !== 1 ? 's' : ''} deterministically — now an AI can
-        suggest extra themed channels those filters miss (heist films, courtroom dramas, feel-good rainy-day…).
-        Paste its answer back and it merges on top of your lineup. Skip if you don't want it.
+        You've built {existingCount} channel{existingCount !== 1 ? 's' : ''} deterministically. This prompt asks an AI to{' '}
+        {curatePools.length > 0 && <b>split your {curatePools.length} flagged pool{curatePools.length !== 1 ? 's' : ''} by tone</b>}
+        {curatePools.length > 0 && discover && ' and '}
+        {discover && <b>discover extra themed channels your filters miss</b>}
+        {!discover && curatePools.length === 0 && 'add channels'}. Paste its answer back and it merges on top. Skip anytime.
       </Alert>
 
       <Card withBorder p="lg">
@@ -810,7 +855,10 @@ function DiscoverStep({ onDone }: { onDone: () => void }) {
                 {pasteText && !result && <Button color="grape" onClick={validatePaste} loading={validating} style={{ alignSelf: 'flex-start' }}>Merge channels</Button>}
               </Stack>
             ) : (
-              <Text size="sm" c="green.4">✓ {result.added ?? 0} channel{(result.added ?? 0) !== 1 ? 's' : ''} merged in.</Text>
+              <Text size="sm" c="green.4">
+                ✓ {result.added ?? 0} channel{(result.added ?? 0) !== 1 ? 's' : ''} merged in.
+                {(result.skipped_dupes ?? 0) > 0 && <Text span c="yellow.5"> {result.skipped_dupes} skipped as duplicate{result.skipped_dupes !== 1 ? 's' : ''}.</Text>}
+              </Text>
             )}
           </Step>
         </Stack>
@@ -1196,7 +1244,7 @@ function DeployStep({ setup }: { setup: SetupState }) {
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 const blankPlanner: PlannerState = {
-  loaded: false, facets: null, activeGenres: {}, activeDecades: {}, selected: {},
+  loaded: false, facets: null, activeGenres: {}, activeDecades: {}, selected: {}, curate: {},
 };
 
 export default function Run() {
@@ -1209,6 +1257,11 @@ export default function Run() {
 
   const { method, includeCollections } = setup;
 
+  // Pools the user flagged for AI tonal-splitting (✨ on a broad/decade pick).
+  const curatePools = Object.entries(planner.selected)
+    .filter(([id]) => planner.curate[id])
+    .map(([, spec]) => curatePoolDescription(spec));
+
   // Build the ordered step list for this method.
   const steps: { key: string; label: string; desc: string }[] = [
     { key: 'setup', label: 'Setup', desc: 'Choose your approach' },
@@ -1216,7 +1269,7 @@ export default function Run() {
   if (method !== 'collections') {
     steps.push({ key: 'export', label: 'Export', desc: 'Scan your library' });
     steps.push({ key: 'planner', label: 'Planner', desc: 'Compose your lineup' });
-    if (aiExtras) steps.push({ key: 'discover', label: 'AI Extras', desc: 'Discover more channels' });
+    if (aiExtras) steps.push({ key: 'discover', label: 'AI Extras', desc: 'Discover & curate' });
   }
   if (includeCollections || method === 'collections') {
     steps.push({ key: 'collections', label: 'Collections', desc: 'Choose collections' });
@@ -1238,7 +1291,7 @@ export default function Run() {
               {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} />}
               {s.key === 'export' && <ExportStep onDone={next} />}
               {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} aiExtras={aiExtras} setAiExtras={setAiExtras} onDone={next} />}
-              {s.key === 'discover' && <DiscoverStep onDone={next} />}
+              {s.key === 'discover' && <DiscoverStep discover curatePools={curatePools} onDone={next} />}
               {s.key === 'collections' && <CollectionsStep start={setup.start} onDone={next} />}
               {s.key === 'deploy' && <DeployStep setup={setup} />}
             </Box>

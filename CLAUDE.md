@@ -278,8 +278,8 @@ A title can appear on multiple channels — this is intentional and expected.
 | POST | `/api/pipeline/compose` | **Planner v2 deterministic resolver.** Body `ComposeRequest{specs:[CandidateSpec], start}`. Each `CandidateSpec{kind, …}` (`kind` ∈ genre / genre_decade / blend / studio / director / actor / tv_genre / marathon) is resolved against `plex_library.csv` into a title list; empties skipped + reported. Writes `channels.json` with **soft-block numbering** (marathons ~10s, TV blocks ~20s, movie channels ~30s+, entities ~50s+, sequential from `start`, spilling on overflow). Returns `{count, channels:[{number,name,items}], skipped}`. |
 | GET | `/api/pipeline/prompt` | **Legacy** — fetch full `PROMPT.md` (meta header included) with `{TARGET}`, preferences, and `start` (block offset) injected; query params: `target`, `preferences`, `start`. Used by the current Run UI; kept until the new flow ships. |
 | POST | `/api/pipeline/prompt` | New flow — body `PromptOptions{target, preferences, start, include_genres, exclude_genres, include_decades, exclude_decades, include_types, exclude_types}`. Strips the meta header above the first `---` (the UI walkthrough carries that guidance) and injects a `## What To Build` section (must-include / never-create lists + an explicit invite to discover additional channels) before the numbering scheme. |
-| POST | `/api/pipeline/validate` | Parse/validate LLM output (file upload or raw text), write `channels.json`. With form field `append=true`, **merges** the parsed channels on top of the existing `channels.json` instead of overwriting — colliding numbers are bumped to the next free slot (used by the AI-extras discovery layer); returns `added`. |
-| GET | `/api/pipeline/discover-prompt` | Build the AI-discovery prompt, seeded with the current `channels.json` lineup (so the AI avoids duplicates) and numbering new suggestions from `max+1`. Returns `{content, start, existing_count}`. |
+| POST | `/api/pipeline/validate` | Parse/validate LLM output (file upload or raw text), write `channels.json`. With form field `append=true`, **merges** the parsed channels on top of the existing `channels.json` instead of overwriting — colliding numbers are bumped to the next free slot, and incoming channels whose **name already exists (case-insensitive) are skipped** so re-running the AI step can't stack duplicates; returns `added` + `skipped_dupes`. |
+| POST | `/api/pipeline/discover-prompt` | Build the AI-extras prompt, seeded with the current `channels.json` lineup (so the AI avoids duplicates) and numbering new suggestions from `max+1`. Body `DiscoverOptions{discover, curate_pools}`: `discover` adds a "suggest additional themed channels" section; `curate_pools` (human pool descriptions) adds a "split these pools by tone" section (PR-D per-pick AI-curate). Returns `{content, start, existing_count}`. |
 | POST | `/api/pipeline/no-ai` | SSE-stream `generate_no_ai.py`; query params `start`, `genres`, `decades`, `types`, `min_items` passed through as the matching `--` flags (the Planner toggles drive these) |
 | GET | `/api/pipeline/collections` | Fetch all Plex collections (id, name, count, section, summary, has_poster) |
 | GET | `/api/pipeline/collections/{id}/poster` | Proxy Plex collection poster image |
@@ -342,11 +342,15 @@ extra channels" toggle is on; Collections only if opted in. (The **AI layer** sh
    all **unchecked** by default. The **Build N Channels** button posts the selected `CandidateSpec[]` to
    `POST /pipeline/compose`, which deterministically writes `channels.json`, then advances.
    `CandRow` / `CollapsibleSection` / `EntitySection` are top-level components (avoid remount/focus bugs).
-   A "✨ also let AI suggest extra channels" **Switch** sets `aiExtras` (Run-root state), which inserts the AI Extras step.
-4. **AI Extras** (`DiscoverStep`, only when `aiExtras`) — numbered walkthrough seeded by `GET /pipeline/discover-prompt`
-   (knows your built lineup, asks for non-duplicate themed finds numbered from `max+1`). Paste the AI's JSONL →
-   `POST /pipeline/validate` with `append=true` **merges** it on top of `channels.json` (collisions renumbered). Skippable.
-5. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` (base = `max(80, start rounded up)`).
+   A "✨ Bring in AI" **Switch** sets `aiExtras` (Run-root state), which (a) inserts the AI Extras step and (b) reveals a
+   per-pick **✨ curate** toggle on broad-genre and genre×decade rows. A curated pick is **excluded from `compose`** and
+   instead handed to the AI to **split by tone** (Feel-Good vs Raunchy Comedies); `curatePoolDescription()` builds the
+   human pool description, and `planner.curate` tracks which picks are flagged.
+4. **AI Extras** (`DiscoverStep`, only when `aiExtras`) — numbered walkthrough seeded by `POST /pipeline/discover-prompt`
+   with `{discover:true, curate_pools}` (knows your built lineup; asks the AI to split the flagged pools by tone **and**
+   discover non-duplicate themed channels, numbered from `max+1`). Paste the AI's JSONL → `POST /pipeline/validate` with
+   `append=true` **merges** it on top of `channels.json` (collisions renumbered; **name-duplicates skipped** → `skipped_dupes`). Skippable.
+5. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` above the current max (`max(start, ceil((maxNum+1)/10)*10)`).
 6. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
    collides with a kept channel). One **Deploy** button runs the **cascade**: `deploy-selective` → (if art opted in) `images` → `sync`,
    each streamed inline. The cascade **always completes**; the final summary shows per-stage status (✓ deployed N · ✓/skip art · ✓/⚠ sync)

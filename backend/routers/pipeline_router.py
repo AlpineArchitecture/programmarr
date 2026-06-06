@@ -529,15 +529,24 @@ async def validate(
                 existing = json.load(f)
         kept = existing.get("channels", [])
         used = {c.get("number") for c in kept}
+        seen_names = {(c.get("name") or "").strip().lower() for c in kept}
         next_free = (max(used) + 1) if used else 1
         added = 0
+        skipped_dupes = 0
         for ch in new_channels:
+            # Skip anything we already have by name (case-insensitive) — re-running the
+            # AI step shouldn't stack a second "Time Travel" channel.
+            nm = (ch.get("name") or "").strip().lower()
+            if nm and nm in seen_names:
+                skipped_dupes += 1
+                continue
             n = ch.get("number")
             if n in used or n is None:
                 while next_free in used:
                     next_free += 1
                 ch["number"] = next_free
             used.add(ch["number"])
+            seen_names.add(nm)
             next_free = max(next_free, ch["number"] + 1)
             kept.append(ch)
             added += 1
@@ -545,7 +554,8 @@ async def validate(
         data = existing
         with open(cpath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        return {"ok": True, "count": len(data["channels"]), "added": added, "channels": data["channels"]}
+        return {"ok": True, "count": len(data["channels"]), "added": added,
+                "skipped_dupes": skipped_dupes, "channels": data["channels"]}
 
     with open(DATA_DIR / "channels.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -553,12 +563,21 @@ async def validate(
     return {"ok": True, "count": len(new_channels), "channels": new_channels}
 
 
-@router.get("/pipeline/discover-prompt")
-def discover_prompt():
-    """Build the AI-discovery prompt, seeded with the existing (deterministic) lineup.
+class DiscoverOptions(BaseModel):
+    discover: bool = True
+    curate_pools: list[str] = []  # human descriptions of broad pools to split by tone
 
-    The AI is asked to suggest ADDITIONAL themed channels that don't duplicate what the
-    user already composed, numbered from the next free channel up.
+
+@router.post("/pipeline/discover-prompt")
+def discover_prompt(opts: DiscoverOptions = DiscoverOptions()):
+    """Build the AI-extras prompt, seeded with the existing (deterministic) lineup.
+
+    Two jobs the AI can be asked to do, depending on `opts`:
+      - curate_pools: replace a broad pool (e.g. "Comedy") with several tonally-coherent
+        channels, or trim to a best-of — what genre tags can't express.
+      - discover: suggest ADDITIONAL themed channels that don't duplicate the lineup.
+    New channels are numbered from the next free channel up; the merge step renumbers
+    any collisions anyway.
     """
     existing: list[dict] = []
     cpath = DATA_DIR / "channels.json"
@@ -575,24 +594,41 @@ def discover_prompt():
         for c in sorted(existing, key=lambda c: c.get("number", 0))
     ) or "(none yet)"
 
-    prompt = (
+    parts = [
         "You are a TV channel programmer. The user has a self-hosted media library "
         "(attached as plex_library.csv) and has ALREADY built these channels:\n\n"
-        f"{listing}\n\n"
-        "Your job: suggest ADDITIONAL themed channels that make the lineup feel richer.\n\n"
-        "Rules:\n"
-        "1. Use ONLY exact titles from the attached plex_library.csv.\n"
-        "2. Do NOT duplicate or substantially overlap the existing channels above.\n"
-        "3. Favour themes that plain genre/decade filters miss — e.g. Heist Films, "
-        "Courtroom Dramas, Road Trip Movies, Time Travel, Mind-Benders, Feel-Good "
-        "Rainy Day, Whodunits, Coming-of-Age, Holiday/Christmas, Sports Underdogs.\n"
-        "4. Each channel needs at least 4 fitting titles to qualify.\n"
-        f"5. Number channels sequentially starting at {start}.\n\n"
-        "Output one channel per line as a JSON object (JSONL) — no commentary, no "
-        "markdown fences, just one {...} per line:\n"
-        f'{{"number": {start}, "name": "Heist Films", "shuffle": "shuffle", "content": ["Heat", "Ocean\'s Eleven", "The Italian Job"]}}\n'
+        f"{listing}",
+        "Use ONLY exact titles from the attached plex_library.csv. Do not invent titles "
+        "or duplicate the channels above. Each channel you output needs at least 4 fitting titles.",
+    ]
+
+    if opts.curate_pools:
+        pool_lines = "\n".join(f"- {p}" for p in opts.curate_pools)
+        parts.append(
+            "## Curate these pools by tone\n\n"
+            "Each pool below is too broad to feel hand-programmed — a single 'Comedy' channel "
+            "lurches from gross-out to rom-com. For EACH pool, replace it with 2–4 tighter "
+            "channels grouped by tone/mood/vibe so titles flow without jarring transitions "
+            "(e.g. split Comedy into 'Feel-Good Comedies', 'Raunchy Comedies', 'Dark Comedies'; "
+            "or trim to a tight best-of). Only use titles that match that pool's described filter.\n\n"
+            f"{pool_lines}"
+        )
+
+    if opts.discover:
+        parts.append(
+            "## Discover additional channels\n\n"
+            "Suggest ADDITIONAL themed channels that plain genre/decade filters miss — e.g. "
+            "Heist Films, Courtroom Dramas, Road Trip Movies, Time Travel, Mind-Benders, "
+            "Feel-Good Rainy Day, Whodunits, Coming-of-Age, Holiday/Christmas, Sports Underdogs."
+        )
+
+    parts.append(
+        f"Number every new channel sequentially starting at {start}. Output one channel per "
+        "line as a JSON object (JSONL) — no commentary, no markdown fences, just one {...} per line:\n"
+        f'{{"number": {start}, "name": "Feel-Good Comedies", "shuffle": "shuffle", "content": ["Groundhog Day", "Elf", "School of Rock"]}}'
     )
-    return {"content": prompt, "start": start, "existing_count": len(existing)}
+
+    return {"content": "\n\n".join(parts) + "\n", "start": start, "existing_count": len(existing)}
 
 
 # ── Planner v2: deterministic candidate composition ──────────────────────────────
