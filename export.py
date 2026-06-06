@@ -107,21 +107,30 @@ def build_tunarr_title_sets(tunarr_url):
         return None, None
 
     libs = plex_source.get("libraries", [])
-    movie_lib = next((l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")), None)
-    tv_lib = next((l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")), None)
+    # Collect ALL enabled libraries of each type
+    movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
+    tv_libs    = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
 
     movie_titles = set()
-    tv_titles = set()
+    tv_titles    = set()
 
-    if movie_lib:
-        programs = tunarr_get(tunarr_url, f"/api/media-libraries/{movie_lib['id']}/programs", timeout=120) or []
-        movie_titles = {p.get("program", {}).get("title", "").lower().strip() for p in programs}
-        print(f"  Tunarr has {len(movie_titles)} movies")
+    for lib in movie_libs:
+        programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+        titles   = {p.get("program", {}).get("title", "").lower().strip() for p in programs}
+        movie_titles |= titles
+        print(f"  Tunarr has {len(titles)} movies ({lib.get('name', lib['id'])})")
 
-    if tv_lib:
-        programs = tunarr_get(tunarr_url, f"/api/media-libraries/{tv_lib['id']}/programs", timeout=120) or []
-        tv_titles = {p.get("program", {}).get("show", {}).get("title", "").lower().strip() for p in programs if p.get("program", {}).get("show")}
-        print(f"  Tunarr has {len(tv_titles)} TV shows")
+    for lib in tv_libs:
+        programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+        titles   = {p.get("program", {}).get("show", {}).get("title", "").lower().strip()
+                    for p in programs if p.get("program", {}).get("show")}
+        tv_titles |= titles
+        print(f"  Tunarr has {len(titles)} TV shows ({lib.get('name', lib['id'])})")
+
+    if movie_titles:
+        print(f"  Tunarr movie total (all libraries): {len(movie_titles)}")
+    if tv_titles:
+        print(f"  Tunarr TV total (all libraries): {len(tv_titles)}")
 
     return movie_titles, tv_titles
 
@@ -196,15 +205,13 @@ def main():
         keys = {k.strip() for k in args.movie_sections.split(",") if k.strip()}
         movie_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "movie"]
     else:
-        first = next((s for s in sections if s.get("type") == "movie"), None)
-        movie_sections = [first] if first else []
+        movie_sections = [s for s in sections if s.get("type") == "movie"]
 
     if args.tv_sections is not None:
         keys = {k.strip() for k in args.tv_sections.split(",") if k.strip()}
         tv_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "show"]
     else:
-        first = next((s for s in sections if s.get("type") == "show"), None)
-        tv_sections = [first] if first else []
+        tv_sections = [s for s in sections if s.get("type") == "show"]
 
     if not movie_sections and not tv_sections:
         print("ERROR: No movie or TV library sections found or selected")
