@@ -15,8 +15,7 @@ be marked **live** to auto-update as the library grows.
 > and studio/director/actor channels — built deterministically via `/pipeline/compose`.
 > An optional "✨ Bring in AI" layer adds *discovery* (themed channels filters miss)
 > and *tonal curation* (split a broad pool by vibe), merged on top. The old
-> AI / No-AI / Collections tabs are gone. See the **Run.tsx** section and
-> [`docs/run-overhaul-design.md`](docs/run-overhaul-design.md).
+> AI / No-AI / Collections tabs are gone. See the **Run.tsx** section below.
 
 Two entry points: a **Docker web app** (primary — FastAPI + React on port 7979) and
 an interactive **CLI** (`python programmarr.py`, for power users — first-run config
@@ -399,7 +398,7 @@ documented in full in [`docs/live-channels-design.md`](docs/live-channels-design
 
 `frontend/src/pages/Run.tsx` is a **single unified stepper** (no tabs). The generation
 method is a *question* on the first screen, and the step list is built dynamically from
-the user's setup choices. Full design + rationale: [`docs/run-overhaul-design.md`](docs/run-overhaul-design.md).
+the user's setup choices.
 
 **Shared patterns:**
 - `streamPipeline(endpoint, params, onEvent, body?)` — SSE stream with optional JSON body for selective deploy
