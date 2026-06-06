@@ -529,15 +529,24 @@ async def validate(
                 existing = json.load(f)
         kept = existing.get("channels", [])
         used = {c.get("number") for c in kept}
+        seen_names = {(c.get("name") or "").strip().lower() for c in kept}
         next_free = (max(used) + 1) if used else 1
         added = 0
+        skipped_dupes = 0
         for ch in new_channels:
+            # Skip anything we already have by name (case-insensitive) — re-running the
+            # AI step shouldn't stack a second "Time Travel" channel.
+            nm = (ch.get("name") or "").strip().lower()
+            if nm and nm in seen_names:
+                skipped_dupes += 1
+                continue
             n = ch.get("number")
             if n in used or n is None:
                 while next_free in used:
                     next_free += 1
                 ch["number"] = next_free
             used.add(ch["number"])
+            seen_names.add(nm)
             next_free = max(next_free, ch["number"] + 1)
             kept.append(ch)
             added += 1
@@ -545,7 +554,8 @@ async def validate(
         data = existing
         with open(cpath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        return {"ok": True, "count": len(data["channels"]), "added": added, "channels": data["channels"]}
+        return {"ok": True, "count": len(data["channels"]), "added": added,
+                "skipped_dupes": skipped_dupes, "channels": data["channels"]}
 
     with open(DATA_DIR / "channels.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -619,6 +629,105 @@ def discover_prompt(opts: DiscoverOptions = DiscoverOptions()):
     )
 
     return {"content": "\n\n".join(parts) + "\n", "start": start, "existing_count": len(existing)}
+
+
+def _sample_titles(content, n=5):
+    titles = [c for c in (content or []) if isinstance(c, str)][:n]
+    return ", ".join(titles)
+
+
+@router.get("/pipeline/rename-prompt")
+def rename_prompt():
+    """Prompt asking the AI to punch up only the generically-named channels.
+
+    The AI sees every channel + a few sample titles and is told to rename only the
+    templated ones (clarity-first), leaving already-good names (marathons, studios,
+    directors, actors, themed channels) alone.
+    """
+    existing: list[dict] = []
+    cpath = DATA_DIR / "channels.json"
+    if cpath.exists():
+        try:
+            with open(cpath, encoding="utf-8") as f:
+                existing = json.load(f).get("channels", [])
+        except Exception:
+            existing = []
+    if not existing:
+        return {"content": "", "count": 0}
+
+    listing = "\n".join(
+        f'- #{c.get("number")} "{c.get("name")}"'
+        + (f' — e.g. {s}' if (s := _sample_titles(c.get("content"))) else "")
+        for c in sorted(existing, key=lambda c: c.get("number", 0))
+    )
+    prompt = (
+        "You are a TV channel programmer with sharp branding instincts. Below are the "
+        "user's channels, each with a few sample titles.\n\n"
+        "Rewrite ONLY the channels with generic, templated names — e.g. \"Comedy Movies\", "
+        "\"90s Comedy\", \"Action TV\", \"70s Drama\". Give each a name with a little "
+        "personality, but it MUST stay clear and instantly scannable in a TV guide (think "
+        "real cable branding, not cryptic in-jokes). Keep names short.\n\n"
+        "LEAVE UNCHANGED (do not output) channels that are already well-named: single-show "
+        "marathons, studios (e.g. A24), directors (e.g. Directed by Tarantino), actors "
+        "(e.g. Adam Sandler Movies), and already-themed channels (e.g. Heist & Con Films).\n\n"
+        "Output one line ONLY for each channel you are renaming, as JSON — no commentary, "
+        "no markdown fences:\n"
+        '{"number": 30, "name": "Comedy Cineplex"}\n\n'
+        "Channels:\n"
+        f"{listing}\n"
+    )
+    return {"content": prompt, "count": len(existing)}
+
+
+@router.post("/pipeline/apply-renames")
+async def apply_renames(file: Optional[UploadFile] = File(None), content: Optional[str] = Form(None)):
+    if file:
+        raw = (await file.read()).decode("utf-8", errors="replace")
+    elif content:
+        raw = content
+    else:
+        raise HTTPException(400, "Provide file or content")
+
+    # Parse {number, name} from a JSON array or JSONL.
+    renames: dict[int, str] = {}
+    try:
+        parsed = json.loads(raw)
+        items = parsed if isinstance(parsed, list) else parsed.get("channels", [])
+    except Exception:
+        items = []
+        for line in raw.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    items.append(json.loads(line))
+                except Exception:
+                    pass
+    for o in items:
+        if isinstance(o, dict) and "number" in o and o.get("name"):
+            try:
+                renames[int(o["number"])] = str(o["name"]).strip()
+            except (ValueError, TypeError):
+                pass
+    if not renames:
+        return {"ok": False, "error": "No valid {number, name} lines found"}
+
+    cpath = DATA_DIR / "channels.json"
+    if not cpath.exists():
+        raise HTTPException(404, "channels.json not found")
+    with open(cpath, encoding="utf-8") as f:
+        data = json.load(f)
+
+    applied = []
+    for c in data.get("channels", []):
+        num = c.get("number")
+        new = renames.get(num)
+        if new and new != c.get("name"):
+            applied.append({"number": num, "old": c.get("name"), "new": new})
+            c["name"] = new
+
+    with open(cpath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    return {"ok": True, "applied": applied, "count": len(applied)}
 
 
 # ── Planner v2: deterministic candidate composition ──────────────────────────────

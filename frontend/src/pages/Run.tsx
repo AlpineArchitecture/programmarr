@@ -12,7 +12,7 @@ import {
 import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
-  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
+  LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult, RenameResult,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -855,7 +855,10 @@ function DiscoverStep({ discover, curatePools, onDone }: { discover: boolean; cu
                 {pasteText && !result && <Button color="grape" onClick={validatePaste} loading={validating} style={{ alignSelf: 'flex-start' }}>Merge channels</Button>}
               </Stack>
             ) : (
-              <Text size="sm" c="green.4">✓ {result.added ?? 0} channel{(result.added ?? 0) !== 1 ? 's' : ''} merged in.</Text>
+              <Text size="sm" c="green.4">
+                ✓ {result.added ?? 0} channel{(result.added ?? 0) !== 1 ? 's' : ''} merged in.
+                {(result.skipped_dupes ?? 0) > 0 && <Text span c="yellow.5"> {result.skipped_dupes} skipped as duplicate{result.skipped_dupes !== 1 ? 's' : ''}.</Text>}
+              </Text>
             )}
           </Step>
         </Stack>
@@ -870,6 +873,106 @@ function DiscoverStep({ discover, curatePools, onDone }: { discover: boolean; cu
           <Button variant="subtle" color="gray" onClick={onDone}>Skip — deploy what I built</Button>
         )}
       </Group>
+    </Stack>
+  );
+}
+
+// ── Name polish — let AI punch up generic channel names ──────────────────────────
+
+function RenameStep({ onDone }: { onDone: () => void }) {
+  const [prompt, setPrompt] = useState('');
+  const [count, setCount] = useState(0);
+  const [pasteText, setPasteText] = useState('');
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<RenameResult | null>(null);
+
+  useEffect(() => {
+    api.getRenamePrompt().then(p => { setPrompt(p.content); setCount(p.count); }).catch(() => {});
+  }, []);
+
+  async function copyPrompt() {
+    await navigator.clipboard.writeText(prompt);
+    notifications.show({ message: 'Prompt copied', color: 'green', icon: <IconCheck size={14} /> });
+  }
+  async function apply() {
+    if (!pasteText.trim()) return;
+    setApplying(true); setResult(await api.applyRenames(pasteText)); setApplying(false);
+  }
+
+  function Step({ n, children }: { n: number; children: React.ReactNode }) {
+    return (
+      <Group gap="sm" wrap="nowrap" align="flex-start">
+        <ThemeIcon color="grape" variant="light" radius="xl" size="md" style={{ flexShrink: 0 }}><Text size="xs" fw={700}>{n}</Text></ThemeIcon>
+        <Box style={{ flex: 1, minWidth: 0 }}>{children}</Box>
+      </Group>
+    );
+  }
+
+  return (
+    <Stack gap="lg">
+      <Alert color="grape" variant="light" icon={<IconSparkles size={16} />}>
+        Optional. Let an AI punch up your <b>generic</b> channel names (like “Comedy Movies” or “90s Comedy”) while leaving
+        marathons, studios, directors, actors and themed channels alone. No library file needed — it only sees names + a few
+        sample titles. <b>You review every change before it sticks.</b> Skip if you're happy with your names.
+      </Alert>
+
+      <Card withBorder p="lg">
+        <Stack gap="lg">
+          <Step n={1}>
+            <Group justify="space-between" wrap="nowrap">
+              <Text size="sm" fw={600}>Copy the prompt ({count} channels)</Text>
+              <Button size="xs" variant="light" color="grape" leftSection={<IconCopy size={13} />} onClick={copyPrompt} disabled={!prompt}>Copy</Button>
+            </Group>
+            <ScrollArea h={150} mt="xs" style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--mantine-color-dark-4)' }}>
+              <Box p="sm"><Text size="xs" style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', color: '#d4d4d4' }}>{prompt || 'Building prompt…'}</Text></Box>
+            </ScrollArea>
+          </Step>
+          <Step n={2}>
+            <Text size="sm" fw={600} mb={4}>Paste it into your AI chat (no file needed)</Text>
+            <Group gap="xs">
+              <Button component="a" href="https://chatgpt.com" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>ChatGPT</Button>
+              <Button component="a" href="https://claude.ai" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Claude</Button>
+              <Button component="a" href="https://gemini.google.com" target="_blank" rel="noreferrer" size="xs" variant="default" rightSection={<IconExternalLink size={12} />}>Gemini</Button>
+            </Group>
+          </Step>
+          <Step n={3}>
+            <Text size="sm" fw={600} mb="xs">Paste the AI's renames back — just the JSON lines</Text>
+            <Stack gap="sm">
+              <Textarea placeholder='Paste lines like {"number": 30, "name": "Comedy Cineplex"}…' minRows={4} autosize maxRows={10}
+                value={pasteText} onChange={(e) => { setPasteText(e.currentTarget.value); setResult(null); }}
+                styles={{ input: { fontFamily: 'ui-monospace, monospace', fontSize: 12 } }} />
+              {result && !result.ok && <Alert color="red" icon={<IconX size={16} />} variant="light">{result.error}</Alert>}
+              {pasteText && !result?.ok && <Button color="grape" onClick={apply} loading={applying} style={{ alignSelf: 'flex-start' }}>Preview renames</Button>}
+            </Stack>
+          </Step>
+        </Stack>
+      </Card>
+
+      {result?.ok && result.applied && (
+        <ResultsCard title={`${result.count} channel${result.count !== 1 ? 's' : ''} renamed`} subtitle="Review the changes below">
+          <ScrollArea.Autosize mah={260} mb="md">
+            <Stack gap={4}>
+              {result.applied.map(a => (
+                <Group key={a.number} gap="xs" wrap="nowrap">
+                  <Text size="xs" c="dimmed" w={36} style={{ flexShrink: 0 }}>#{a.number}</Text>
+                  <Text size="xs" c="dimmed" td="line-through" lineClamp={1}>{a.old}</Text>
+                  <IconArrowRight size={12} style={{ flexShrink: 0 }} />
+                  <Text size="xs" fw={600} c="grape.4" lineClamp={1}>{a.new}</Text>
+                </Group>
+              ))}
+              {result.applied.length === 0 && <Text size="sm" c="dimmed">No changes applied (names already matched).</Text>}
+            </Stack>
+          </ScrollArea.Autosize>
+          <Group>
+            <Button color="grape" rightSection={<IconArrowRight size={15} />} onClick={onDone}>Continue</Button>
+            <Button variant="subtle" size="xs" color="gray" onClick={() => { setResult(null); setPasteText(''); }}>Redo</Button>
+          </Group>
+        </ResultsCard>
+      )}
+
+      {!result?.ok && (
+        <Group><Button variant="subtle" color="gray" onClick={onDone}>Skip — keep my names</Button></Group>
+      )}
     </Stack>
   );
 }
@@ -1267,6 +1370,7 @@ export default function Run() {
     steps.push({ key: 'export', label: 'Export', desc: 'Scan your library' });
     steps.push({ key: 'planner', label: 'Planner', desc: 'Compose your lineup' });
     if (aiExtras) steps.push({ key: 'discover', label: 'AI Extras', desc: 'Discover & curate' });
+    if (aiExtras) steps.push({ key: 'rename', label: 'Polish Names', desc: 'Punch up generic names' });
   }
   if (includeCollections || method === 'collections') {
     steps.push({ key: 'collections', label: 'Collections', desc: 'Choose collections' });
@@ -1289,6 +1393,7 @@ export default function Run() {
               {s.key === 'export' && <ExportStep onDone={next} />}
               {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} aiExtras={aiExtras} setAiExtras={setAiExtras} onDone={next} />}
               {s.key === 'discover' && <DiscoverStep discover curatePools={curatePools} onDone={next} />}
+              {s.key === 'rename' && <RenameStep onDone={next} />}
               {s.key === 'collections' && <CollectionsStep start={setup.start} onDone={next} />}
               {s.key === 'deploy' && <DeployStep setup={setup} />}
             </Box>
