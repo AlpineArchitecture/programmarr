@@ -579,6 +579,14 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         tighter cuts (90s Comedy, blends, a studio or director) feel more hand-programmed than one broad “Comedy”.
       </Text>
 
+      {/* AI toggle — at the top so the per-pick ✨ on broad/decade picks is discoverable. */}
+      <Card withBorder p="sm" style={{ borderColor: aiExtras ? 'var(--mantine-color-grape-6)' : undefined }}>
+        <Switch color="grape" checked={aiExtras}
+          onChange={(e) => { const v = e.currentTarget.checked; setAiExtras(v); if (!v) patch({ curate: {} }); }}
+          label={<Text size="sm" fw={600}>✨ Bring in AI (optional)</Text>}
+          description="Adds an AI step after building — discover channels your picks miss, and split broad pools by tone. With this ON, a grape ✨ appears on each checked broad-genre or decade pick; tap it to hand that pool to the AI instead of building it as one channel." />
+      </Card>
+
       {/* Ingredients */}
       <Card withBorder p="md">
         <Text fw={700} mb={4}>Genres in play</Text>
@@ -651,7 +659,12 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
 
       {/* Movie channels (~30s) */}
       <Box>
-        <Text fw={700} size="sm" mb={6}>Movie channels</Text>
+        <Group justify="space-between" mb={6}>
+          <Text fw={700} size="sm">Movie channels</Text>
+          {aiExtras && activeGenreTags.size > 0 && (
+            <Text size="xs" c="grape.4">✨ tap the sparkle on a checked genre/decade pick to let AI split it by tone</Text>
+          )}
+        </Group>
         {activeGenreTags.size === 0 ? (
           <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
         ) : (
@@ -713,13 +726,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         </Box>
       )}
 
-      {/* AI extras + Build bar */}
+      {/* Build bar */}
       <Card withBorder p="md">
-        <Switch mb="sm" color="grape" checked={aiExtras}
-          onChange={(e) => { const v = e.currentTarget.checked; setAiExtras(v); if (!v) patch({ curate: {} }); }}
-          label={<Text size="sm" fw={600}>✨ Bring in AI</Text>}
-          description="Adds an AI step after building: discover themed channels your picks miss (heist films, courtroom dramas…), and — tap the ✨ on a broad genre or decade pick — split that pool by tone (Feel-Good vs Raunchy Comedies). Suggestions merge on top." />
-        <Divider mb="sm" />
         <Group justify="space-between">
           <Box>
             <Text size="sm" fw={600}>{exactSpecs.length} channel{exactSpecs.length !== 1 ? 's' : ''} to build · start at #{setup.start}</Text>
