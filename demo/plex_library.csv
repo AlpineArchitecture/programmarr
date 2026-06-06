@@ -1,0 +1,155 @@
+Title,Year,Type,Rating,Genres,Director,Studio,Actors,Seasons,Episodes
+Airplane!,1980,Movie,G,Comedy,Steven Spielberg,A24,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+Caddyshack,1980,Movie,PG,Comedy,Christopher Nolan,Universal Pictures,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+Ghostbusters,1984,Movie,PG-13,Comedy|Fantasy,Quentin Tarantino,Warner Bros.,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Coming to America,1988,Movie,R,Comedy|Romance,Martin Scorsese,Paramount Pictures,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+Groundhog Day,1993,Movie,G,Comedy|Romance,Greta Gerwig,Walt Disney Pictures,Frances McDormand|Denzel Washington|Tilda Swinton,,
+Dumb and Dumber,1994,Movie,PG,Comedy,Denis Villeneuve,20th Century Studios,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+Happy Gilmore,1996,Movie,PG-13,Comedy,Kathryn Bigelow,New Line Cinema,Tilda Swinton|Oscar Isaac|Viola Davis,,
+The Big Lebowski,1998,Movie,R,Comedy|Crime,Jordan Peele,Blumhouse,Oscar Isaac|Viola Davis|Brad Pitt,,
+There's Something About Mary,1998,Movie,G,Comedy|Romance,Ridley Scott,A24,Viola Davis|Brad Pitt|Cate Blanchett,,
+Office Space,1999,Movie,PG,Comedy,The Coen Brothers,Universal Pictures,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+Galaxy Quest,1999,Movie,PG-13,Comedy|Science Fiction,Steven Spielberg,Warner Bros.,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Anchorman,2004,Movie,R,Comedy,Christopher Nolan,Paramount Pictures,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+Superbad,2007,Movie,G,Comedy,Quentin Tarantino,Walt Disney Pictures,Saoirse Ronan|Idris Elba|Florence Pugh,,
+Hot Fuzz,2007,Movie,PG,Comedy|Action,Martin Scorsese,20th Century Studios,Idris Elba|Florence Pugh|Tom Hanks,,
+Tropic Thunder,2008,Movie,PG-13,Comedy|Action,Greta Gerwig,New Line Cinema,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+Bridesmaids,2011,Movie,R,Comedy|Romance,Denis Villeneuve,Blumhouse,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+21 Jump Street,2012,Movie,G,Comedy|Action,Kathryn Bigelow,A24,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+The Grand Budapest Hotel,2014,Movie,PG,Comedy|Drama,Jordan Peele,Universal Pictures,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Game Night,2018,Movie,PG-13,Comedy|Crime,Ridley Scott,Warner Bros.,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+Palm Springs,2020,Movie,R,Comedy|Romance,The Coen Brothers,Paramount Pictures,Frances McDormand|Denzel Washington|Tilda Swinton,,
+Mad Max,1979,Movie,G,Action,Steven Spielberg,Walt Disney Pictures,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+The Road Warrior,1981,Movie,PG,Action|Science Fiction,Christopher Nolan,20th Century Studios,Tilda Swinton|Oscar Isaac|Viola Davis,,
+First Blood,1982,Movie,PG-13,Action,Quentin Tarantino,New Line Cinema,Oscar Isaac|Viola Davis|Brad Pitt,,
+The Terminator,1984,Movie,R,Action|Science Fiction,Martin Scorsese,Blumhouse,Viola Davis|Brad Pitt|Cate Blanchett,,
+Commando,1985,Movie,G,Action,Greta Gerwig,A24,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+Aliens,1986,Movie,PG,Action|Science Fiction,Denis Villeneuve,Universal Pictures,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Predator,1987,Movie,PG-13,Action|Science Fiction,Kathryn Bigelow,Warner Bros.,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+RoboCop,1987,Movie,R,Action|Science Fiction,Jordan Peele,Paramount Pictures,Saoirse Ronan|Idris Elba|Florence Pugh,,
+Die Hard,1988,Movie,G,Action|Thriller,Ridley Scott,Walt Disney Pictures,Idris Elba|Florence Pugh|Tom Hanks,,
+Lethal Weapon,1987,Movie,PG,Action|Crime,The Coen Brothers,20th Century Studios,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+Total Recall,1990,Movie,PG-13,Action|Science Fiction,Steven Spielberg,New Line Cinema,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+Point Break,1991,Movie,R,Action|Crime,Christopher Nolan,Blumhouse,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+Speed,1994,Movie,G,Action|Thriller,Quentin Tarantino,A24,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+The Rock,1996,Movie,PG,Action|Thriller,Martin Scorsese,Universal Pictures,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+Face/Off,1997,Movie,PG-13,Action|Thriller,Greta Gerwig,Warner Bros.,Frances McDormand|Denzel Washington|Tilda Swinton,,
+The Matrix,1999,Movie,R,Action|Science Fiction,Denis Villeneuve,Paramount Pictures,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+Gladiator,2000,Movie,G,Action|Drama,Kathryn Bigelow,Walt Disney Pictures,Tilda Swinton|Oscar Isaac|Viola Davis,,
+The Bourne Identity,2002,Movie,PG,Action|Thriller,Jordan Peele,20th Century Studios,Oscar Isaac|Viola Davis|Brad Pitt,,
+Casino Royale,2006,Movie,PG-13,Action|Thriller,Ridley Scott,New Line Cinema,Viola Davis|Brad Pitt|Cate Blanchett,,
+Mad Max: Fury Road,2015,Movie,R,Action|Science Fiction,The Coen Brothers,Blumhouse,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+John Wick,2014,Movie,G,Action|Crime,Steven Spielberg,A24,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+The Shining,1980,Movie,PG,Horror,Christopher Nolan,Universal Pictures,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+The Evil Dead,1981,Movie,PG-13,Horror,Quentin Tarantino,Warner Bros.,Saoirse Ronan|Idris Elba|Florence Pugh,,
+Poltergeist,1982,Movie,R,Horror,Martin Scorsese,Paramount Pictures,Idris Elba|Florence Pugh|Tom Hanks,,
+The Thing,1982,Movie,G,Horror|Science Fiction,Greta Gerwig,Walt Disney Pictures,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+A Nightmare on Elm Street,1984,Movie,PG,Horror,Denis Villeneuve,20th Century Studios,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+Re-Animator,1985,Movie,PG-13,Horror,Kathryn Bigelow,New Line Cinema,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+The Fly,1986,Movie,R,Horror|Science Fiction,Jordan Peele,Blumhouse,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Hellraiser,1987,Movie,G,Horror,Ridley Scott,A24,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+Child's Play,1988,Movie,PG,Horror|Thriller,The Coen Brothers,Universal Pictures,Frances McDormand|Denzel Washington|Tilda Swinton,,
+Scream,1996,Movie,PG-13,Horror|Thriller,Steven Spielberg,Warner Bros.,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+The Ring,2002,Movie,R,Horror|Thriller,Christopher Nolan,Paramount Pictures,Tilda Swinton|Oscar Isaac|Viola Davis,,
+28 Days Later,2002,Movie,G,Horror|Science Fiction,Quentin Tarantino,Walt Disney Pictures,Oscar Isaac|Viola Davis|Brad Pitt,,
+The Conjuring,2013,Movie,PG,Horror|Thriller,Martin Scorsese,20th Century Studios,Viola Davis|Brad Pitt|Cate Blanchett,,
+It Follows,2014,Movie,PG-13,Horror,Greta Gerwig,New Line Cinema,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+Get Out,2017,Movie,R,Horror|Thriller,Denis Villeneuve,Blumhouse,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Hereditary,2018,Movie,G,Horror|Drama,Kathryn Bigelow,A24,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+Midsommar,2019,Movie,PG,Horror|Drama,Jordan Peele,Universal Pictures,Saoirse Ronan|Idris Elba|Florence Pugh,,
+Alien,1979,Movie,PG-13,Science Fiction|Horror,Ridley Scott,Warner Bros.,Idris Elba|Florence Pugh|Tom Hanks,,
+Blade Runner,1982,Movie,R,Science Fiction,The Coen Brothers,Paramount Pictures,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+Back to the Future,1985,Movie,G,Science Fiction|Comedy,Steven Spielberg,Walt Disney Pictures,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+Jurassic Park,1993,Movie,PG,Science Fiction|Action,Christopher Nolan,20th Century Studios,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+Contact,1997,Movie,PG-13,Science Fiction|Drama,Quentin Tarantino,New Line Cinema,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Children of Men,2006,Movie,R,Science Fiction|Thriller,Martin Scorsese,Blumhouse,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+Inception,2010,Movie,G,Science Fiction|Action,Greta Gerwig,A24,Frances McDormand|Denzel Washington|Tilda Swinton,,
+Looper,2012,Movie,PG,Science Fiction|Thriller,Denis Villeneuve,Universal Pictures,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+Edge of Tomorrow,2014,Movie,PG-13,Science Fiction|Action,Kathryn Bigelow,Warner Bros.,Tilda Swinton|Oscar Isaac|Viola Davis,,
+Interstellar,2014,Movie,R,Science Fiction|Drama,Jordan Peele,Paramount Pictures,Oscar Isaac|Viola Davis|Brad Pitt,,
+Ex Machina,2014,Movie,G,Science Fiction|Drama,Ridley Scott,Walt Disney Pictures,Viola Davis|Brad Pitt|Cate Blanchett,,
+The Martian,2015,Movie,PG,Science Fiction|Drama,The Coen Brothers,20th Century Studios,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+Arrival,2016,Movie,PG-13,Science Fiction|Drama,Steven Spielberg,New Line Cinema,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Blade Runner 2049,2017,Movie,R,Science Fiction|Drama,Christopher Nolan,Blumhouse,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+Annihilation,2018,Movie,G,Science Fiction|Horror,Quentin Tarantino,A24,Saoirse Ronan|Idris Elba|Florence Pugh,,
+Dune,2021,Movie,PG,Science Fiction|Adventure,Martin Scorsese,Universal Pictures,Idris Elba|Florence Pugh|Tom Hanks,,
+Raging Bull,1980,Movie,PG-13,Drama,Greta Gerwig,Warner Bros.,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+Goodfellas,1990,Movie,R,Drama|Crime,Denis Villeneuve,Paramount Pictures,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+The Shawshank Redemption,1994,Movie,G,Drama,Kathryn Bigelow,Walt Disney Pictures,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+American Beauty,1999,Movie,PG,Drama,Jordan Peele,20th Century Studios,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Memento,2000,Movie,PG-13,Drama|Thriller,Ridley Scott,New Line Cinema,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+No Country for Old Men,2007,Movie,R,Drama|Crime,The Coen Brothers,Blumhouse,Frances McDormand|Denzel Washington|Tilda Swinton,,
+There Will Be Blood,2007,Movie,G,Drama,Steven Spielberg,A24,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+The Departed,2006,Movie,PG,Drama|Crime,Christopher Nolan,Universal Pictures,Tilda Swinton|Oscar Isaac|Viola Davis,,
+Zodiac,2007,Movie,PG-13,Drama|Crime,Quentin Tarantino,Warner Bros.,Oscar Isaac|Viola Davis|Brad Pitt,,
+The Social Network,2010,Movie,R,Drama,Martin Scorsese,Paramount Pictures,Viola Davis|Brad Pitt|Cate Blanchett,,
+Whiplash,2014,Movie,G,Drama,Greta Gerwig,Walt Disney Pictures,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+Moonlight,2016,Movie,PG,Drama,Denis Villeneuve,20th Century Studios,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Parasite,2019,Movie,PG-13,Drama|Thriller,Kathryn Bigelow,New Line Cinema,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+Nomadland,2020,Movie,R,Drama,Jordan Peele,Blumhouse,Saoirse Ronan|Idris Elba|Florence Pugh,,
+The Lion King,1994,Movie,G,Animation,Ridley Scott,A24,Idris Elba|Florence Pugh|Tom Hanks,,
+Toy Story,1995,Movie,PG,Animation|Comedy,The Coen Brothers,Universal Pictures,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+Spirited Away,2001,Movie,PG-13,Animation|Fantasy,Steven Spielberg,Warner Bros.,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+Finding Nemo,2003,Movie,R,Animation|Comedy,Christopher Nolan,Paramount Pictures,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+The Incredibles,2004,Movie,G,Animation|Action,Quentin Tarantino,Walt Disney Pictures,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Ratatouille,2007,Movie,PG,Animation|Comedy,Martin Scorsese,20th Century Studios,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+WALL-E,2008,Movie,PG-13,Animation|Science Fiction,Greta Gerwig,New Line Cinema,Frances McDormand|Denzel Washington|Tilda Swinton,,
+Up,2009,Movie,R,Animation|Drama,Denis Villeneuve,Blumhouse,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+Spider-Man: Into the Spider-Verse,2018,Movie,G,Animation|Action,Kathryn Bigelow,A24,Tilda Swinton|Oscar Isaac|Viola Davis,,
+Soul,2020,Movie,PG,Animation|Drama,Jordan Peele,Universal Pictures,Oscar Isaac|Viola Davis|Brad Pitt,,
+Hoop Dreams,1994,Movie,PG-13,Documentary,Ridley Scott,Warner Bros.,Viola Davis|Brad Pitt|Cate Blanchett,,
+Bowling for Columbine,2002,Movie,R,Documentary,The Coen Brothers,Paramount Pictures,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+March of the Penguins,2005,Movie,G,Documentary,Steven Spielberg,Walt Disney Pictures,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Man on Wire,2008,Movie,PG,Documentary,Christopher Nolan,20th Century Studios,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+Searching for Sugar Man,2012,Movie,PG-13,Documentary,Quentin Tarantino,New Line Cinema,Saoirse Ronan|Idris Elba|Florence Pugh,,
+Won't You Be My Neighbor?,2018,Movie,R,Documentary,Martin Scorsese,Blumhouse,Idris Elba|Florence Pugh|Tom Hanks,,
+Free Solo,2018,Movie,G,Documentary,Greta Gerwig,A24,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+My Octopus Teacher,2020,Movie,PG,Documentary,Denis Villeneuve,Universal Pictures,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+The Outlaw Josey Wales,1976,Movie,PG-13,Western,Kathryn Bigelow,Warner Bros.,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+Unforgiven,1992,Movie,R,Western|Drama,Jordan Peele,Paramount Pictures,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+Tombstone,1993,Movie,G,Western|Action,Ridley Scott,Walt Disney Pictures,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+3:10 to Yuma,2007,Movie,PG,Western|Action,The Coen Brothers,20th Century Studios,Frances McDormand|Denzel Washington|Tilda Swinton,,
+True Grit,2010,Movie,PG-13,Western|Drama,Steven Spielberg,New Line Cinema,Denzel Washington|Tilda Swinton|Oscar Isaac,,
+Django Unchained,2012,Movie,R,Western|Drama,Christopher Nolan,Blumhouse,Tilda Swinton|Oscar Isaac|Viola Davis,,
+The Hateful Eight,2015,Movie,G,Western|Crime,Quentin Tarantino,A24,Oscar Isaac|Viola Davis|Brad Pitt,,
+When Harry Met Sally,1989,Movie,PG,Romance|Comedy,Martin Scorsese,Universal Pictures,Viola Davis|Brad Pitt|Cate Blanchett,,
+Pretty Woman,1990,Movie,PG-13,Romance|Comedy,Greta Gerwig,Warner Bros.,Brad Pitt|Cate Blanchett|Michael B. Jordan,,
+Titanic,1997,Movie,R,Romance|Drama,Denis Villeneuve,Paramount Pictures,Cate Blanchett|Michael B. Jordan|Saoirse Ronan,,
+Notting Hill,1999,Movie,G,Romance|Comedy,Kathryn Bigelow,Walt Disney Pictures,Michael B. Jordan|Saoirse Ronan|Idris Elba,,
+Eternal Sunshine of the Spotless Mind,2004,Movie,PG,Romance|Science Fiction,Jordan Peele,20th Century Studios,Saoirse Ronan|Idris Elba|Florence Pugh,,
+La La Land,2016,Movie,PG-13,Romance|Drama,Ridley Scott,New Line Cinema,Idris Elba|Florence Pugh|Tom Hanks,,
+The Princess Bride,1987,Movie,R,Fantasy|Comedy,The Coen Brothers,Blumhouse,Florence Pugh|Tom Hanks|Samuel L. Jackson,,
+The Lord of the Rings: The Fellowship of the Ring,2001,Movie,G,Fantasy|Adventure,Steven Spielberg,A24,Tom Hanks|Samuel L. Jackson|Scarlett Johansson,,
+Pan's Labyrinth,2006,Movie,PG,Fantasy|Drama,Christopher Nolan,Universal Pictures,Samuel L. Jackson|Scarlett Johansson|Leonardo DiCaprio,,
+The Shape of Water,2017,Movie,PG-13,Fantasy|Drama,Quentin Tarantino,Warner Bros.,Scarlett Johansson|Leonardo DiCaprio|Frances McDormand,,
+The Green Knight,2021,Movie,R,Fantasy|Adventure,Martin Scorsese,Paramount Pictures,Leonardo DiCaprio|Frances McDormand|Denzel Washington,,
+The Simpsons,,TV,TV-14,Animation|Comedy,,,,35,768
+Friends,,TV,TV-14,Comedy|Romance,,,,10,236
+Seinfeld,,TV,TV-14,Comedy,,,,9,180
+The Office,,TV,TV-14,Comedy,,,,9,201
+Parks and Recreation,,TV,TV-14,Comedy,,,,7,126
+It's Always Sunny in Philadelphia,,TV,TV-14,Comedy,,,,16,170
+Cheers,,TV,TV-14,Comedy,,,,11,275
+Frasier,,TV,TV-14,Comedy,,,,11,264
+Breaking Bad,,TV,TV-14,Drama|Crime,,,,5,62
+Better Call Saul,,TV,TV-14,Drama|Crime,,,,6,63
+The Sopranos,,TV,TV-14,Drama|Crime,,,,6,86
+Mad Men,,TV,TV-14,Drama,,,,7,92
+The Wire,,TV,TV-14,Drama|Crime,,,,5,60
+Lost,,TV,TV-14,Drama|Science Fiction,,,,6,121
+The X-Files,,TV,TV-14,Drama|Science Fiction,,,,11,218
+Stranger Things,,TV,TV-14,Drama|Science Fiction,,,,4,34
+Game of Thrones,,TV,TV-14,Drama|Fantasy,,,,8,73
+Fargo,,TV,TV-14,Drama|Crime,,,,5,51
+True Detective,,TV,TV-14,Drama|Crime,,,,4,30
+Twin Peaks,,TV,TV-14,Drama|Mystery,,,,3,48
+Rick and Morty,,TV,TV-14,Animation|Comedy,,,,7,71
+Futurama,,TV,TV-14,Animation|Comedy,,,,8,140
+BoJack Horseman,,TV,TV-14,Animation|Comedy,,,,6,77
+Archer,,TV,TV-14,Animation|Comedy,,,,14,146
+Avatar: The Last Airbender,,TV,TV-14,Animation|Adventure,,,,3,61
+Planet Earth,,TV,TV-14,Documentary,,,,2,17
+Cosmos,,TV,TV-14,Documentary,,,,2,26
+Chernobyl,,TV,TV-14,Drama,,,,1,5
+Band of Brothers,,TV,TV-14,Drama,,,,1,10
+Sherlock,,TV,TV-14,Drama|Mystery,,,,4,15
