@@ -15,8 +15,7 @@ be marked **live** to auto-update as the library grows.
 > and studio/director/actor channels — built deterministically via `/pipeline/compose`.
 > An optional "✨ Bring in AI" layer adds *discovery* (themed channels filters miss)
 > and *tonal curation* (split a broad pool by vibe), merged on top. The old
-> AI / No-AI / Collections tabs are gone. See the **Run.tsx** section and
-> [`docs/run-overhaul-design.md`](docs/run-overhaul-design.md).
+> AI / No-AI / Collections tabs are gone. See the **Run.tsx** section below.
 
 Two entry points: a **Docker web app** (primary — FastAPI + React on port 7979) and
 an interactive **CLI** (`python programmarr.py`, for power users — first-run config
@@ -399,7 +398,7 @@ documented in full in [`docs/live-channels-design.md`](docs/live-channels-design
 
 `frontend/src/pages/Run.tsx` is a **single unified stepper** (no tabs). The generation
 method is a *question* on the first screen, and the step list is built dynamically from
-the user's setup choices. Full design + rationale: [`docs/run-overhaul-design.md`](docs/run-overhaul-design.md).
+the user's setup choices.
 
 **Shared patterns:**
 - `streamPipeline(endpoint, params, onEvent, body?)` — SSE stream with optional JSON body for selective deploy
@@ -470,32 +469,37 @@ Channel names do not appear as text in Plex's Live TV guide channel column — o
 
 ## Git Workflow
 
-This project follows **GitHub Flow**. `master` is the production branch — a push to it
-triggers CI → GHCR → Watchtower → a live redeploy, so treat `master` as always
-shippable and **never commit directly to it**.
+`master` is the production branch — a push to it triggers CI → GHCR → Watchtower → a
+live redeploy. So the discipline that matters is **test before you push**, not branch
+before you push. Work like a pragmatic solo pro: a branch is a tool, not a tax — use it
+when it *buys* something, otherwise commit straight to `master`.
 
-**For every change — no exceptions:**
-1. **Branch from an up-to-date `master`** with a descriptive, prefixed name:
-   `feature/…`, `fix/…`, `docs/…`, or `chore/…`. Never a generic name like `wip`.
-   One branch = one logical task; keep branches short-lived.
-   ```bash
-   git checkout master && git pull
-   git checkout -b feature/short-description
-   ```
-2. **Commit in small, focused chunks** with verbose messages that explain *what*
-   changed and *why* — not "fix bug" or "update script".
-3. **Push the branch and open a Pull Request** into `master`. Review the diff, let CI
-   run, then merge **only when ready to deploy**. Delete the branch after merging.
-   ```bash
-   git push -u origin feature/short-description   # then open the PR on GitHub
-   ```
-4. **Never commit secrets or personal data** — keys, passwords, internal IPs, the
-   user's library. These stay gitignored (`config*.json`, `channels*.json`, `*.csv`,
-   `PROMPT.personal.md`, etc.).
+(Worth knowing: CI only runs on push to `master`, so a feature branch/PR gets **no**
+pre-deploy build here — branching's value is staging/review, not validation. And docs
+aren't copied into the image, so doc-only commits build an identical image and Watchtower
+never redeploys them.)
 
-**Docs discipline:** update `CLAUDE.md` whenever a feature changes (new flags, API
-behavior, schema updates, new/removed scripts) — in the **same branch/PR** as the code
-change, so docs and code never drift apart.
+**Commit straight to `master`** for small, safe, self-contained changes:
+- Docs, comments, `*.md`, anything not baked into the Docker image (zero blast radius).
+- Runtime changes you've already **verified locally in Docker** against your own
+  Plex/Tunarr (the real safety step — see "Parity loop" above).
+
+**Branch + PR when it earns its keep** — i.e. the branch actually does work for you:
+- A large or risky change you want to stage, review as a diff, or keep easy to revert.
+- Work-in-progress you don't want live on `master` yet.
+- Anything you're genuinely unsure about and want to look at before it auto-deploys.
+
+When you do branch, use a descriptive prefixed name (`feature/…`, `fix/…`, `docs/…`,
+`chore/…`, never `wip`), keep it short-lived (one logical task), and delete it after merge.
+
+**Always, regardless of path:**
+- **Commit in small, focused chunks** with verbose messages explaining *what* changed
+  and *why* — not "fix bug" or "update script".
+- **Never commit secrets or personal data** — keys, passwords, internal IPs, the user's
+  library. These stay gitignored (`config*.json`, `channels*.json`, `*.csv`,
+  `PROMPT.personal.md`, etc.).
+- **Keep docs in sync:** update `CLAUDE.md` in the **same commit** as any feature change
+  (new flags, API behavior, schema updates, new/removed scripts) so docs never drift.
 
 ## Live Channels (Auto-Updating Channels)
 
