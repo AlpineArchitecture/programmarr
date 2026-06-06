@@ -62,8 +62,11 @@ export const api = {
     const res = await fetch(`${BASE}/pipeline/validate`, { method: 'POST', body: form });
     return res.json() as Promise<ValidateResult>;
   },
-  getDiscoverPrompt: () =>
-    req<{ content: string; start: number; existing_count: number }>('/pipeline/discover-prompt'),
+  getDiscoverPrompt: (discover = true, curate_pools: string[] = []) =>
+    req<{ content: string; start: number; existing_count: number }>('/pipeline/discover-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ discover, curate_pools }),
+    }),
 
   getLogs: () => req<LogEntry[]>('/logs'),
   getLog: (name: string) => req<{ name: string; content: string }>(`/logs/${name}`),
