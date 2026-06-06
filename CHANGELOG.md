@@ -4,6 +4,25 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.1] — 2026-06-05
+
+### Fixed
+
+- **Multi-library exports no longer silently drop content.** Two related bugs in
+  `export.py` where content vanished from `plex_library.csv` without any error:
+  - **Tunarr cross-reference checked only the first library of each type.** With more
+    than one enabled Tunarr movie (or TV) library — e.g. a main "Movies HD" plus a
+    "Crossovers HD" — only the first was loaded, so everything in the rest failed the
+    cross-ref check and was skipped. It now unions **all** enabled libraries of each
+    type, and prints per-library counts plus a combined total.
+  - **CLI auto-detect picked only the first Plex section of each type.** Running
+    `export.py` without `--movie-sections`/`--tv-sections` and with multiple Plex
+    libraries (e.g. "TV Shows" + "Cartoons") silently ignored the extras. Auto-detect
+    now collects **every** matching section. The explicit `--*-sections` flags and the
+    UI (which always passes keys) were unaffected.
+
+  No CSV schema or downstream changes — a single-library export is byte-identical.
+
 ## [0.3.0] — 2026-06-05
 
 ### The Planner — a ground-up rebuild of how you create channels

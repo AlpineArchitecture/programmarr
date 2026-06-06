@@ -227,7 +227,7 @@ See `config.json.example` for the template.
 - Fetches full metadata directly from Plex API (`/library/sections/{key}/all`)
 - Fields: title, year, contentRating, genres, directors, **studio**, **actors** (top-3 billed from Plex `Role`), season/episode counts. Studio + lead actors power the Planner v2 entity channels (studio/director/actor); both are present in the default `/all` response.
 - Cross-references against Tunarr to flag unsynced content
-- Supports multiple sections per type: `--movie-sections KEY1,KEY2` and `--tv-sections KEY1,KEY2` (comma-separated Plex section keys). Deduplicates titles across sections. Omit flags to auto-detect (first movie + first TV section).
+- Supports multiple sections per type: `--movie-sections KEY1,KEY2` and `--tv-sections KEY1,KEY2` (comma-separated Plex section keys). Deduplicates titles across sections. Omit flags to auto-detect (**all** movie + **all** TV sections). Tunarr cross-referencing likewise unions **all** enabled Tunarr libraries of each type.
 - Output: `plex_library.csv` + `export_summary.json` (movies/tv_shows/skipped counts for the UI stats card)
 
 **`generate_no_ai.py`** (Option B — no AI required)
