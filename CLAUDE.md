@@ -65,9 +65,79 @@ data/             Bind-mounted volume — config.json, channels.json, plex_libra
 - `asyncio.WindowsProactorEventLoopPolicy` is set at startup in `main.py` — required on Windows for `asyncio.create_subprocess_exec` to work; no-op on Linux/Docker
 - **Deferred (Tier 3):** drag-to-reorder channels, autocomplete from plex_library.csv, inline Plex validation
 
-## Local Development (Docker)
+## Local Development
 
-The recommended local dev loop is Docker — it gives exact production parity and avoids Windows asyncio/subprocess issues:
+There are two loops. Use the **fast loop** for iterating on code, and the **parity loop**
+(Docker) for the final check before shipping.
+
+### Fast loop — hot reload (`dev.ps1`)
+
+For day-to-day iteration. Frontend edits are instant (Vite HMR); backend edits reload in
+~1s (`uvicorn --reload`). No Docker rebuild per tweak.
+
+```powershell
+# From repo root — opens two windows: Vite (:5173) + uvicorn (:7979)
+.\dev.ps1
+```
+
+Then open **http://localhost:5173** in the browser (not 7979). Vite serves the SPA with HMR
+and proxies `/api` → the reload backend on `:7979`. Both read/write the real `./data` files
+(`config.json`, `channels.json`, `plex_library.csv`), so behavior matches Docker. Requires a
+local Python env with the backend `requirements.txt` installed and `npm install` already run
+in `frontend/`. Close the two windows (or Ctrl+C in each) to stop.
+
+The script just sets `PROGRAMMARR_DATA=./data` + `PROGRAMMARR_SCRIPTS=.` (so the backend reads
+the same files Docker mounts) and launches `python -m uvicorn main:app --reload` plus
+`npm run dev`. The Vite `/api` proxy lives in `frontend/vite.config.ts`.
+
+This is for **iteration speed, not the final word** — always run the parity loop below before
+shipping. (Windows note: `asyncio.create_subprocess_exec` needs the Proactor loop, already set
+in `main.py`; auth still reads `./data/config.json`.)
+
+### Backend smoke tests (pytest)
+
+A fast `pytest` suite over the deterministic backend logic lives in `backend/tests/`.
+Each test points the pipeline router at a temp `DATA_DIR` seeded with a synthetic
+`plex_library.csv` (via the `seed` fixture in `conftest.py`), so nothing touches a real
+Plex export or Tunarr.
+
+```powershell
+pip install -r backend/requirements-dev.txt   # one-time (pytest)
+pytest                                         # reads pytest.ini -> backend/tests
+```
+
+Covers: `library_facets` (genre/decade/blend/entity/marathon counts + thresholds),
+`compose_channels` (each `CandidateSpec` kind, soft-block numbering + spill, skip/report),
+`validate(append=True)` (collision renumber + case-insensitive name-dedup), `discover_prompt`
+(seeds from `channels.json`, numbers from `max+1`, curate/discover sections), and
+`generate_no_ai` flags (run as a subprocess against a temp CSV). `requirements-dev.txt` is
+**not** baked into the Docker image — these are dev-only deps.
+
+### Demo dataset (screenshots / try-it-without-Plex)
+
+`scripts/make_demo_data.py` generates a synthetic, **committed** data dir at `demo/`
+(`plex_library.csv` + `channels.json` + a safe `config.json`, no real tokens or library).
+The titles are real public films/shows; genres/years are tuned so every Planner section
+(genres, decades, genre×decade, blends, studios, directors, actors, TV genres, marathons)
+populates. It's deterministic, so doc screenshots come out identical every run.
+
+```powershell
+python scripts/make_demo_data.py            # (re)generate demo/
+# launch the app against it instead of your real ./data:
+$env:PROGRAMMARR_DATA="$PWD\demo"; $env:PROGRAMMARR_SCRIPTS="$PWD"
+python -m uvicorn main:app --app-dir backend --port 7979
+```
+
+Pages that read local files (Channels, Settings) and the Planner's facets render fully from
+the demo data. Pages that need a live Plex/Tunarr (Export step, Dashboard) show their offline
+state, since `demo/config.json` points at unreachable placeholder hosts. The `docs/*.png`
+screenshots for **channels / settings / onboarding** are generated this way; **run / dashboard**
+still need a live backend. The demo files are re-included in `.gitignore` (the global
+`*.csv` / `config*.json` / `channels*.json` rules would otherwise ignore them).
+
+### Parity loop — Docker (run before shipping)
+
+Docker gives exact production parity and avoids Windows asyncio/subprocess surprises:
 
 ```powershell
 # From repo root — builds frontend, bakes into image, runs on localhost:7979
