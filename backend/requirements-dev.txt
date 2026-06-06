@@ -1,0 +1,4 @@
+# Dev/test dependencies (not baked into the Docker image).
+#   pip install -r backend/requirements-dev.txt
+-r requirements.txt
+pytest>=8.0.0
