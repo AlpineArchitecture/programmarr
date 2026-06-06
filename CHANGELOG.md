@@ -4,6 +4,86 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] — 2026-06-05
+
+### The Planner — a ground-up rebuild of how you create channels
+
+The biggest release since the web app shipped. The old three-tab Run pipeline
+(AI / No-AI / Collections) is **gone**, replaced by a single unified **Planner**
+that composes curated, hand-programmed-feeling channels from your library —
+**deterministically** — with AI demoted from "the engine" to an optional layer on
+top. The result feels like a TV lineup a person with taste assembled, not a wall
+of `Comedy Movies (140)` blocks.
+
+### Added
+
+- **The Planner: ingredients → curated candidates.** Pick which genres and decades
+  are "in play," then check the exact channels you want from a live, **counted**
+  candidate list. Everything is built by precise filters — no AI required, no
+  guesswork:
+  - **Per-show TV Marathons** — one 24/7 channel per show; every show in your
+    library is offered, sorted by episode count.
+  - **TV genre Blocks** — themed multi-show channels (Comedy TV, Crime TV…).
+  - **Genre × Decade** — tight era cuts like "90s Comedy" and "80s Horror," nested
+    under each decade.
+  - **Named Sub-genres** — a curated, recognizable set (Rom-Coms, Dark Comedies,
+    Horror Comedies, Crime Thrillers…) instead of arbitrary genre pairs.
+  - **Studio / Director / Actor channels** — A24, "Directed by Tarantino," "Adam
+    Sandler Movies" — the most curated-TV channels there are.
+  - **Bulk picking** — "Top 10" and "Add all" on every section, and sections that
+    fold away once handled so the list never becomes a wall of checkboxes.
+- **Optional AI layer (✨ Bring in AI).** Two things filters can't do, both seeded
+  with your built lineup and **merged on top** via a copy-prompt / paste-back
+  hand-off:
+  - **Discovery** — the AI suggests themed channels your filters miss (Heist Films,
+    Courtroom Dramas, Time Travel, Sports Underdogs…), and is told what you already
+    have so it never duplicates it.
+  - **Tonal curation** — flag a broad pool (a ✨ on any genre or decade pick) and
+    the AI splits it by *tone* (Feel-Good vs Raunchy vs Dark Comedies) — the "one
+    comedy doesn't blend into the next" fix that genre tags alone can't make.
+- **New library metadata for entity channels.** `export.py` now captures **Studio**
+  and the top-3 billed **actors** per title (both already present in Plex's
+  response), so studio/director/actor channels work out of the box.
+- **Facets API.** One pass over your library powers the entire candidate list with
+  live counts — genres, decades, the genre×decade matrix, sub-genre blends, and
+  the studio/director/actor/marathon lists.
+
+### Changed
+
+- **One unified flow:** Setup → Export → Planner → [AI Extras] → [Collections] →
+  Deploy. The generation "method" is no longer three separate tabs; it's a single
+  Planner, with **Collections-only** kept as a quick path.
+- **Every decision is up front.** Keep-vs-wipe of existing channels, whether to add
+  collections, and whether to fetch art are all answered on the first screen — the
+  rest of the flow is review-and-go.
+- **Deploy is one cascade.** It auto-probes on entry, you review/renumber, hit
+  **Deploy** once, and channel art + Plex sync run automatically — with an
+  always-completes status summary.
+- **Soft-block channel numbering.** Marathons ~10s, TV blocks ~20s, movie channels
+  ~30s+, entity channels ~50s+ — assigned sequentially and spilling gracefully
+  instead of overflowing fixed 20-slot blocks.
+- **Clearer AI hand-off.** The walkthrough now spells out "paste the JSON only,"
+  and the prompt is generated from your exact picks.
+
+### Fixed
+
+- **Merge dedup.** Pasting AI suggestions skips any channel whose name already
+  exists, so re-running the AI step can no longer stack duplicate channels.
+- **Collections numbering.** Collections now append *above* your composed lineup
+  rather than at a fixed ~80 block, so they never overwrite the channels you just
+  built.
+- **Prominent Plex-sync fallback.** When Plex can't auto-add the DVR (common in
+  many setups), the end-of-run summary now shows exactly what to do — with a
+  one-click-copy XMLTV URL — instead of a quiet status line.
+
+### Notes
+
+- The deterministic Planner is a strict superset of the old No-AI path. The
+  standalone scripts (`generate_no_ai.py`, `generate_from_collections.py`) and the
+  `programmarr.py` CLI remain for power users.
+- Live Channels (v0.2.x) is unchanged and fully compatible — channels built in the
+  Planner can still be marked "live" to auto-update as your library grows.
+
 ## [0.2.3] — 2026-06-04
 
 Follow-up to the Live Channels release: per-channel visibility and control that the

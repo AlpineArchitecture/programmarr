@@ -4,10 +4,19 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## What This Is
 
-A Python 3 pipeline + web app that exports a Plex library, curates themed virtual
-TV channels (via an LLM, auto-generation, or Plex collections), and deploys them to
-[Tunarr](https://github.com/chrisbenincasa/tunarr). Channels can be marked **live**
-to auto-update as the library grows.
+A Python 3 pipeline + web app that exports a Plex library, **composes curated themed
+virtual TV channels** in a deterministic Planner (with an optional AI layer on top),
+and deploys them to [Tunarr](https://github.com/chrisbenincasa/tunarr). Channels can
+be marked **live** to auto-update as the library grows.
+
+> **v0.3.0 — the Planner.** The web app's channel-creation experience was rebuilt
+> around a single **Planner** (`Run.tsx`): pick genres/decades "in play," then check
+> exact curated candidates — per-show marathons, genre×decade cuts, named sub-genres,
+> and studio/director/actor channels — built deterministically via `/pipeline/compose`.
+> An optional "✨ Bring in AI" layer adds *discovery* (themed channels filters miss)
+> and *tonal curation* (split a broad pool by vibe), merged on top. The old
+> AI / No-AI / Collections tabs are gone. See the **Run.tsx** section and
+> [`docs/run-overhaul-design.md`](docs/run-overhaul-design.md).
 
 Two entry points: a **Docker web app** (primary — FastAPI + React on port 7979) and
 an interactive **CLI** (`python programmarr.py`, for power users — first-run config
@@ -36,7 +45,7 @@ frontend/         React + Mantine SPA (built to backend/static/)
   src/pages/
     Onboarding.tsx  First-run wizard (shown when config.json missing/unconfigured)
     Dashboard.tsx   Live Tunarr channel grid + connection status
-    Run.tsx         Pipeline stepper — AI / No-AI / Collections tabs
+    Run.tsx         Unified Planner stepper — deterministic compose + optional AI layer (v0.3.0)
     Channels.tsx    channels.json editor (Tier 2: click-to-edit)
     Settings.tsx    config.json editor (masked sensitive fields)
     Logs.tsx        Per-run log viewer
@@ -214,6 +223,12 @@ See `config.json.example` for the template.
 | Franchise    | 50–69 | Ordered series (MCU, Batman, etc.) |
 | Specialty    | 70–79 | Single-movie loops, holiday, niche |
 
+In the v0.3.0 Planner these ranges are **soft category hints**, not hard blocks:
+`/pipeline/compose` assigns numbers sequentially per category from the chosen start
+(marathons ~10s, TV blocks ~20s, movie channels ~30s+, **entity channels —
+studio/director/actor — ~50s+**) and **spills into the next gap on overflow**. The CLI
+`generate_no_ai.py` still uses the fixed-block layout above.
+
 ## channels.json Schema
 
 ```json
@@ -323,10 +338,11 @@ the user's setup choices. Full design + rationale: [`docs/run-overhaul-design.md
 - Stepper navigation is locked: only completed steps are clickable
 
 **Flow:** `Setup → Export → Planner → [AI Extras] → [Collections] → Deploy`. Export/Planner are
-skipped for *Collections-only*; **AI Extras** appears only when the Planner's "✨ also let AI suggest
-extra channels" toggle is on; Collections only if opted in. (The **AI layer** ships in two parts:
-*discovery* — built — and per-pick *tonal curate* — still designed-only; see
-[`docs/run-overhaul-design.md`](docs/run-overhaul-design.md) § Planner v2.)
+skipped for *Collections-only*; **AI Extras** appears only when the Planner's "✨ Bring in AI"
+toggle is on; Collections only if opted in. The **AI layer** (both halves shipped in v0.3.0) does
+*discovery* (themed channels filters miss) **and** per-pick *tonal curate* (split a flagged pool by
+tone), merged on top via the append endpoint. (An AI *name-polish* prototype was built and then
+removed — clarity beat cute; not in the flow.)
 
 1. **Setup** (`SetupStep`) — upfront decisions: **method** cards (**Build a lineup** / **Collections-only**),
    *include collections?*, *fetch TMDB art?* (checkbox **disabled** + tooltip when `config.has_tmdb` is false),

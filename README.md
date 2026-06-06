@@ -13,9 +13,11 @@
 
 ---
 
-Programmarr is a self-hosted web app that exports your Plex library, lets you feed it to an LLM, and deploys the results as themed virtual TV channels in Tunarr — with a web UI that feels like Sonarr or Radarr.
+Programmarr is a self-hosted web app that turns your Plex library into a **curated lineup of themed virtual TV channels** in Tunarr — with a web UI that feels like Sonarr or Radarr.
 
-Channels can be **self-maintaining**: mark one "live" and Programmarr re-checks it against your library on a schedule and patches it in place — new episodes and new franchise films appear on their own, no redeploy.
+You **compose** the lineup in a **Planner**: pick the genres, decades, studios, directors, and actors you want, check the exact channels from a live, counted list, and deploy. It's all deterministic — no AI required — with an **optional** AI layer that discovers themed channels your filters miss (Heist Films, Time Travel, Sports Underdogs) and splits broad pools by *tone* (Feel-Good vs Raunchy Comedies).
+
+Channels can also be **self-maintaining**: mark one "live" and Programmarr re-checks it against your library on a schedule and patches it in place — new episodes and new franchise films appear on their own, no redeploy.
 
 **Requires:** [Tunarr](https://github.com/chrisbenincasa/tunarr) + Plex
 
@@ -119,8 +121,8 @@ Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your pool.
       <p align="center"><em>First-run setup wizard — credentials and connections in two steps</em></p>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/run.png" alt="Run Pipeline stepper with AI, No-AI, and Collections tabs" width="100%" />
-      <p align="center"><em>Run Pipeline — choose AI, No-AI, or Collections path; live terminal output streams to the browser</em></p>
+      <img src="docs/run.png" alt="Run Pipeline stepper" width="100%" />
+      <p align="center"><em>Run — compose a curated lineup in the Planner, then deploy; live output streams to the browser</em></p>
     </td>
   </tr>
   <tr>
@@ -137,19 +139,38 @@ Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your pool.
 
 ---
 
-## What it does
+## The Planner 🆕
 
-| Path | How it works |
-|------|-------------|
-| **AI Path** | Export your library → copy prompt + CSV into any LLM → paste the result back → deploy |
-| **No-AI Path** | Auto-generates decade, genre, and TV marathon channels from your metadata |
-| **Collections** | Turns each Plex collection (Kometa, Trakt, Letterboxd) into its own channel |
+The heart of Programmarr. Instead of one mushy `Comedy (140)` channel, you build a lineup that feels **hand-programmed** — and you do it in a few clicks.
 
-All three paths end with a probe (dry run) → deploy to Tunarr. The app streams live output to the browser so you can watch it work.
+Pick which **genres and decades** are in play, and the Planner shows you a live, counted list of candidate channels. Check the ones you want:
+
+| Candidate | Examples |
+|-----------|----------|
+| **TV Marathons** | A 24/7 channel for any show — *Cheers*, *The Office*, *It's Always Sunny* |
+| **TV Blocks** | Themed multi-show channels — Comedy TV, Crime TV |
+| **Genre × Decade** | Tight era cuts — *90s Comedy*, *80s Horror*, *2000s Action* |
+| **Sub-genres** | Curated, named blends — *Rom-Coms*, *Dark Comedies*, *Crime Thrillers* |
+| **Studios / Directors / Actors** | *A24*, *Directed by Tarantino*, *Adam Sandler Movies* |
+
+Every section has **Top 10** and **Add all** for fast picking, and folds away once you've handled it. Hit **Build** and the channels are written instantly — no AI, no waiting.
+
+### ✨ Optional: bring in AI
+
+Flip one switch and an AI layer does the two things plain filters can't — seeded with the lineup you just built, and **merged on top** (it never duplicates what you have):
+
+- **Discovery** — themed channels your filters miss: *Heist Films*, *Courtroom Dramas*, *Time Travel*, *Sports Underdogs*.
+- **Tonal curation** — tap the ✨ on a broad pick and the AI splits it by *vibe*: *Feel-Good* vs *Raunchy* vs *Dark* Comedies — so one title flows into the next.
+
+No API key needed — you copy a ready-made prompt into ChatGPT/Claude/Gemini and paste the result back.
+
+### Then deploy
+
+Setup → Export → Planner → (AI) → (Collections) → **Deploy**. The deploy step dry-runs first, lets you review and renumber, then pushes to Tunarr and syncs the Plex guide — all in one click, with live output streamed to the browser. **Plex collections** (Kometa, Trakt, Letterboxd) can be folded in as their own channels along the way.
 
 ---
 
-## Live Channels (auto-updating) 🆕
+## Live Channels (auto-updating)
 
 Channels are normally static snapshots — you build them, deploy them, and they go stale as your library grows. **Mark a channel "live"** and Programmarr keeps it fresh for you: on a schedule it re-resolves the channel against your current library and patches it **in place**, only when something actually changed.
 
