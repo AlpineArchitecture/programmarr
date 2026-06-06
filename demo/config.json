@@ -1,0 +1,8 @@
+{
+  "tunarr_url": "http://tunarr.demo.local:8000",
+  "plex_url": "http://plex.demo.local:32400",
+  "plex_token": "DEMO-TOKEN-NOT-A-REAL-SECRET",
+  "tmdb_api_key": "",
+  "auth_username": "",
+  "auth_password": ""
+}

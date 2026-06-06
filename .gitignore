@@ -12,6 +12,13 @@ gemresults.json
 data/*
 !data/.gitkeep
 
+# Synthetic demo dataset (committed on purpose — no real library or secrets).
+# Re-include the demo files the global patterns above would otherwise ignore.
+!demo/
+!demo/plex_library.csv
+!demo/channels.json
+!demo/config.json
+
 # Python
 __pycache__/
 *.pyc
@@ -28,3 +35,6 @@ generate_ai.py
 PROMPT.personal.md
 screenshot_*.png
 *.log
+
+# Playwright MCP scratch output (snapshots, console logs, ad-hoc screenshots)
+.playwright-mcp/
