@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code when working with this repository.
 
+> **Keep this lean and current.** Point at code and docs; don't restate them — paraphrased
+> code is the #1 source of drift. Behavior changes update this file in the **same commit**.
+> History → `CHANGELOG.md`; full designs → `docs/`; exhaustive endpoint/flag reference →
+> [`docs/api.md`](docs/api.md) & each script's `--help`. If a section outgrows its job,
+> relocate the detail and leave a pointer.
+
 ## What This Is
 
 A Python 3 pipeline + web app that exports a Plex library, **composes curated themed
@@ -9,21 +15,20 @@ virtual TV channels** in a deterministic Planner (with an optional AI layer on t
 and deploys them to [Tunarr](https://github.com/chrisbenincasa/tunarr). Channels can
 be marked **live** to auto-update as the library grows.
 
-> **v0.3.0 — the Planner.** The web app's channel-creation experience was rebuilt
-> around a single **Planner** (`Run.tsx`): pick genres/decades "in play," then check
-> exact curated candidates — per-show marathons, genre×decade cuts, named sub-genres,
-> and studio/director/actor channels — built deterministically via `/pipeline/compose`.
-> An optional "✨ Bring in AI" layer adds *discovery* (themed channels filters miss)
-> and *tonal curation* (split a broad pool by vibe), merged on top. The old
-> AI / No-AI / Collections tabs are gone. See the **Run.tsx** section below.
+The web app's channel-creation experience is a single **Planner** (`Run.tsx`): pick
+genres/decades "in play," then check exact curated candidates — per-show marathons,
+genre×decade cuts, named sub-genres, and studio/director/actor channels — built
+deterministically via `/pipeline/compose`. An optional "✨ Bring in AI" layer adds
+*discovery* (themed channels filters miss) and *tonal curation* (split a broad pool by
+vibe), merged on top.
 
 Two entry points: a **Docker web app** (primary — FastAPI + React on port 7979) and
 an interactive **CLI** (`python programmarr.py`, for power users — first-run config
 setup, always probes before deploying, offers Plex sync at the end).
 
-> **Audience note:** user-facing docs (install, quick start, screenshots) live in
+> **Audience:** user-facing docs (install, quick start, screenshots) live in
 > [`README.md`](README.md). **This file is the developer/agent reference** —
-> architecture, scripts, endpoints, schema, conventions. Keep it describing **what
+> architecture, conventions, the rules an agent must not break. It describes **what
 > exists today**; planned/unbuilt ideas go in [`docs/ideas.md`](docs/ideas.md).
 
 ## Web UI Architecture
@@ -33,21 +38,11 @@ setup, always probes before deploying, offers Plex sync at the end).
 **Directory layout:**
 ```
 backend/          FastAPI app + routers
-  main.py         Entry point — auth middleware, SPA fallback, lifespan
-  routers/
-    config_router.py    GET/POST /api/config, /api/config/status
-    status_router.py    GET /api/status (Plex+Tunarr ping), /api/tunarr/channels
-    channels_router.py  CRUD /api/channels, /api/channels/{n}, /api/library/titles
-    pipeline_router.py  SSE-streaming pipeline endpoints (export, probe, deploy, deploy-selective, collections, etc.)
-    logs_router.py      GET /api/logs, /api/logs/{name}
+  main.py         Entry point — auth middleware, SPA fallback, lifespan, scheduler start
+  scheduler.py    In-process asyncio loop for live channels (see Live Channels)
+  routers/        config / status / channels / pipeline / recipes / logs routers
 frontend/         React + Mantine SPA (built to backend/static/)
-  src/pages/
-    Onboarding.tsx  First-run wizard (shown when config.json missing/unconfigured)
-    Dashboard.tsx   Live Tunarr channel grid + connection status
-    Run.tsx         Unified Planner stepper — deterministic compose + optional AI layer (v0.3.0)
-    Channels.tsx    channels.json editor (Tier 2: click-to-edit)
-    Settings.tsx    config.json editor (masked sensitive fields)
-    Logs.tsx        Per-run log viewer
+  src/pages/      Onboarding, Dashboard, Run (the Planner stepper), Channels, Settings, Logs
 data/             Bind-mounted volume — config.json, channels.json, plex_library.csv, logs/
 ```
 
@@ -55,232 +50,93 @@ data/             Bind-mounted volume — config.json, channels.json, plex_libra
 - `PROGRAMMARR_DATA` — path where data files live (default: `/data`)
 - `PROGRAMMARR_SCRIPTS` — path where Python scripts live (default: `/app`)
 
-**Key design decisions:**
-- Pipeline scripts (`export.py`, `create.py`, etc.) run as subprocesses with `cwd=DATA_DIR` so their relative file opens work correctly without modification
-- SSE (Server-Sent Events) streams subprocess stdout line-by-line to the browser inline terminal
-- Auth middleware reads `config.json` on every request — no restart needed to enable/disable auth
-- Onboarding shown automatically when `config_status.configured` is false (no Tunarr/Plex/token set)
-- Channels page reads from `channels.json` (local file), Dashboard reads live from Tunarr API
-- `asyncio.WindowsProactorEventLoopPolicy` is set at startup in `main.py` — required on Windows for `asyncio.create_subprocess_exec` to work; no-op on Linux/Docker
-- **Deferred (Tier 3):** drag-to-reorder channels, autocomplete from plex_library.csv, inline Plex validation
+**Key design decisions (non-obvious — don't undo these):**
+- Pipeline scripts (`export.py`, `create.py`, etc.) run as subprocesses with `cwd=DATA_DIR` so their relative file opens work unmodified.
+- SSE (Server-Sent Events) streams subprocess stdout line-by-line to the browser inline terminal.
+- Auth middleware reads `config.json` on every request — no restart needed to enable/disable auth.
+- Onboarding shows automatically when `config_status.configured` is false (no Tunarr/Plex/token set).
+- Channels page reads `channels.json` (local file); Dashboard reads live from the Tunarr API.
+- `asyncio.WindowsProactorEventLoopPolicy` is set at startup in `main.py` — **required** on Windows for `asyncio.create_subprocess_exec`; no-op on Linux/Docker. (This is the one place it's stated; don't duplicate it.)
+- **Deferred (Tier 3):** drag-to-reorder channels, autocomplete from plex_library.csv, inline Plex validation.
 
 ## Local Development
 
-There are two loops. Use the **fast loop** for iterating on code, and the **parity loop**
-(Docker) for the final check before shipping.
+Two loops: the **fast loop** for iterating, the **parity loop** (Docker) for the final
+check before shipping. Always run the parity loop before a release.
 
-### Fast loop — hot reload (`dev.ps1`)
-
-For day-to-day iteration. Frontend edits are instant (Vite HMR); backend edits reload in
-~1s (`uvicorn --reload`). No Docker rebuild per tweak.
-
+**Fast loop — hot reload:**
 ```powershell
-# From repo root — opens two windows: Vite (:5173) + uvicorn (:7979)
-.\dev.ps1
+.\dev.ps1          # opens Vite (:5173) + uvicorn --reload (:7979)
 ```
+Open **http://localhost:5173** (not 7979). Vite serves the SPA with HMR and proxies `/api`
+→ the reload backend. Both read/write the real `./data` files, so behavior matches Docker.
+Requires a local Python env with backend `requirements.txt` and `npm install` in `frontend/`.
 
-Then open **http://localhost:5173** in the browser (not 7979). Vite serves the SPA with HMR
-and proxies `/api` → the reload backend on `:7979`. Both read/write the real `./data` files
-(`config.json`, `channels.json`, `plex_library.csv`), so behavior matches Docker. Requires a
-local Python env with the backend `requirements.txt` installed and `npm install` already run
-in `frontend/`. Close the two windows (or Ctrl+C in each) to stop.
-
-The script just sets `PROGRAMMARR_DATA=./data` + `PROGRAMMARR_SCRIPTS=.` (so the backend reads
-the same files Docker mounts) and launches `python -m uvicorn main:app --reload` plus
-`npm run dev`. The Vite `/api` proxy lives in `frontend/vite.config.ts`.
-
-This is for **iteration speed, not the final word** — always run the parity loop below before
-shipping. (Windows note: `asyncio.create_subprocess_exec` needs the Proactor loop, already set
-in `main.py`; auth still reads `./data/config.json`.)
-
-### Backend smoke tests (pytest)
-
-A fast `pytest` suite over the deterministic backend logic lives in `backend/tests/`.
-Each test points the pipeline router at a temp `DATA_DIR` seeded with a synthetic
-`plex_library.csv` (via the `seed` fixture in `conftest.py`), so nothing touches a real
-Plex export or Tunarr.
-
+**Parity loop — Docker (run before shipping):**
 ```powershell
-pip install -r backend/requirements-dev.txt   # one-time (pytest)
+docker compose build && docker compose up    # localhost:7979
+```
+`docker-compose.yml` mounts `./data` as a volume so config/channels/csv persist. Rebuild to
+pick up code changes. `backend/static/` is **gitignored** — the Dockerfile builds the frontend
+inside the image (`npm run build` during `docker build`); **never commit files under `backend/static/`.**
+
+**Tests:**
+```powershell
+pip install -r backend/requirements-dev.txt   # one-time (pytest; dev-only, not in the image)
 pytest                                         # reads pytest.ini -> backend/tests
 ```
+Each test seeds a temp `DATA_DIR` with a synthetic `plex_library.csv` (the `seed` fixture in
+`conftest.py`) — nothing touches a real Plex/Tunarr. Covers `library_facets`, `compose_channels`,
+`validate(append=True)`, `discover_prompt`, and `generate_no_ai`.
 
-Covers: `library_facets` (genre/decade/blend/entity/marathon counts + thresholds),
-`compose_channels` (each `CandidateSpec` kind, soft-block numbering + spill, skip/report),
-`validate(append=True)` (collision renumber + case-insensitive name-dedup), `discover_prompt`
-(seeds from `channels.json`, numbers from `max+1`, curate/discover sections), and
-`generate_no_ai` flags (run as a subprocess against a temp CSV). `requirements-dev.txt` is
-**not** baked into the Docker image — these are dev-only deps.
+**Environments:** **localhost:7979** = local Docker before pushing. **TrueNAS** = production,
+runs `ghcr.io/alpinearchitecture/programmarr:latest` with Watchtower (new image on GHCR ~1 min
+after a master push; Watchtower picks it up within ~5 min).
 
-### Demo dataset (screenshots / try-it-without-Plex)
-
-`scripts/make_demo_data.py` generates a synthetic, **committed** data dir at `demo/`
-(`plex_library.csv` + `channels.json` + a safe `config.json`, no real tokens or library).
-The titles are real public films/shows; genres/years are tuned so every Planner section
-(genres, decades, genre×decade, blends, studios, directors, actors, TV genres, marathons)
-populates. It's deterministic, so doc screenshots come out identical every run.
-
-```powershell
-python scripts/make_demo_data.py            # (re)generate demo/
-# launch the app against it instead of your real ./data:
-$env:PROGRAMMARR_DATA="$PWD\demo"; $env:PROGRAMMARR_SCRIPTS="$PWD"
-python -m uvicorn main:app --app-dir backend --port 7979
-```
-
-Pages that read local files (Channels, Settings) and the Planner's facets render fully from
-the demo data. Pages that need a live Plex/Tunarr (Export step, Dashboard) show their offline
-state, since `demo/config.json` points at unreachable placeholder hosts. The `docs/*.png`
-screenshots for **channels / settings / onboarding** are generated this way; **run / dashboard**
-still need a live backend. The demo files are re-included in `.gitignore` (the global
-`*.csv` / `config*.json` / `channels*.json` rules would otherwise ignore them).
-
-### Parity loop — Docker (run before shipping)
-
-Docker gives exact production parity and avoids Windows asyncio/subprocess surprises:
-
-```powershell
-# From repo root — builds frontend, bakes into image, runs on localhost:7979
-docker compose build && docker compose up
-```
-
-The `docker-compose.yml` mounts `./data` as a volume, so your `config.json`, `channels.json`, and `plex_library.csv` persist between runs. To pick up code changes, rebuild: `docker compose build && docker compose up`.
-
-Note: `backend/static/` is **gitignored** — the Dockerfile builds the frontend from source inside the container (`npm run build` runs during `docker build`). Never commit files under `backend/static/`.
-
-Two environments:
-- **localhost:7979** — local Docker build for testing before pushing
-- **TrueNAS** — production, runs `ghcr.io/alpinearchitecture/programmarr:latest` with Watchtower for automatic updates. New images land on GHCR within ~1 min of a master push; Watchtower picks them up within 5 min.
+**Demo dataset:** `python scripts/make_demo_data.py` (re)generates the committed `demo/` dir
+(synthetic `plex_library.csv` + `channels.json` + safe `config.json`) used for deterministic doc
+screenshots. See the script's header for usage and which pages render offline.
 
 ## Workflow
 
 ```
 export.py  ->  LLM (Gemini/Claude/ChatGPT)  ->  create.py
                or
-export.py  ->  generate_no_ai.py  ->  create.py
+export.py  ->  generate_no_ai.py             ->  create.py
 ```
 
-Plex collections (managed by Kometa/Trakt/Letterboxd) can be turned into
-channels directly without the export/LLM step:
+Plex collections (managed by Kometa/Trakt/Letterboxd) can become channels directly,
+skipping the export/LLM step:
 
 ```
 generate_from_collections.py --apply  ->  create.py
 ```
 
-## Running the Scripts (advanced / direct use)
-
-```powershell
-# Step 1 — export Plex library to CSV
-python export.py
-
-# Step 2a — AI path: paste plex_library.csv + PROMPT.md into any LLM, save output as channels.json
-# Step 2b — no-AI path: auto-generate starter channels.json from metadata
-python generate_no_ai.py
-
-# Step 2c — collection path: generate one channel per Plex collection (80+ block)
-python generate_from_collections.py              # preview
-python generate_from_collections.py --apply      # write to channels.json
-python generate_from_collections.py --condense   # skip collections matching existing channel names
-python generate_from_collections.py --min-items 5  # skip tiny collections
-python generate_from_collections.py --base 90    # start at channel 90 instead of 80
-
-# Step 3 — create channels in Tunarr
-python create.py --probe    # dry run first
-python create.py            # apply
-```
+For direct CLI use of any script (flags, dry-run/probe, scoping), see its `--help`.
 
 ## Configuration
 
-All config lives in `config.json` (gitignored — lives in `data/` for Docker, project root for CLI):
+All config lives in `config.json` (gitignored — in `data/` for Docker, project root for CLI).
+See `config.json.example` for the full shape. Keys:
 
-```json
-{
-    "tunarr_url":     "http://your-tunarr:8000",
-    "plex_url":       "http://your-plex:32400",
-    "plex_token":     "your-token",
-    "tmdb_api_key":   "your-tmdb-key",
-    "auth_username":  "admin",
-    "auth_password":  "yourpassword"
-}
-```
-
-- `tmdb_api_key` — optional, only for `fetch_images.py`. Free key at https://www.themoviedb.org/settings/api
-- `auth_username` / `auth_password` — optional HTTP Basic Auth. Set via onboarding wizard or Settings page. When set, every request to the FastAPI backend requires these credentials. Leave both blank to disable auth.
-
-See `config.json.example` for the template.
+- `tunarr_url`, `plex_url`, `plex_token` — required connection settings.
+- `tmdb_api_key` — optional; only `fetch_images.py` uses it. Free key at https://www.themoviedb.org/settings/api
+- `auth_username` / `auth_password` — optional HTTP Basic Auth. **Both blank = auth disabled.** When set, every backend request requires them.
+- `recipes_enabled` (bool, default `false`), `recipe_interval_hours` (number, default `12`) — live-channel scheduler (see Live Channels).
 
 ## Architecture
 
-**`programmarr.py`** (main entry point)
-- Flat main menu: `1` AI path, `2` No-AI path, `3` Collections, `i` fetch images, `s` sync Plex, `q` quit — no submenus
-- Detects missing `config.json` on first run and walks through interactive setup
-- Always runs `create.py --probe` before deploying; asks confirmation before applying
-- **Full pipeline (options 1 & 2):** build `channels.json` → optionally append collections → check Tunarr for existing channels → user picks deploy scope → probe → deploy → optionally fetch images → sync Plex → pause for manual Plex steps
-- **Pre-deploy scope check:** fetches live channel list from Tunarr before the probe; if channels exist, asks the user to choose between a full wipe-and-rebuild or preserving channels below a given number (passes `--from N` to protect manually-created or lower-block channels and their custom images)
-- **Collections in pipeline:** smart base number is computed from AI/No-AI channels only (ignores existing collection-reference channels so re-running doesn't push the base higher each time); same base/min-items/condense prompts as the standalone path
-- **Collections standalone (option 3):** generates collection block → probe → deploy (`--from <base>`, preserves lower channels and their images) → optionally fetch images → sync Plex
-- **Image fetch standalone (`i`):** dry-run preview → confirm → apply
-- **End of every workflow:** pauses after Plex sync with a tip about deleting and re-adding the Tunarr DVR in Plex if channels aren't showing; user presses Enter to return to the main menu
-- **AI path prompt generation:** asks for target channel count (replaces `{TARGET}` in prompt) and optional theme/channel preferences (injected as a `## User Preferences` section before channel numbering rules); writes personalised prompt to `prompt_for_llm.md` (gitignored); `PROMPT.md` stays as the clean reusable template
-- **LLM output format:** expects JSONL (one channel object per line); `validate_and_fix_channels_json()` auto-detects and converts bare JSON arrays and JSONL to the internal `{"channels": [...]}` dict format before any script reads it — old-format files continue to work
+Each script's role and the gotcha worth knowing. Flags and exact behavior live in `--help`
+and the code — don't restate them here.
 
-**`export.py`**
-- Fetches full metadata directly from Plex API (`/library/sections/{key}/all`)
-- Fields: title, year, contentRating, genres, directors, **studio**, **actors** (top-3 billed from Plex `Role`), season/episode counts. Studio + lead actors power the Planner v2 entity channels (studio/director/actor); both are present in the default `/all` response.
-- Cross-references against Tunarr to flag unsynced content
-- Supports multiple sections per type: `--movie-sections KEY1,KEY2` and `--tv-sections KEY1,KEY2` (comma-separated Plex section keys). Deduplicates titles across sections. Omit flags to auto-detect (**all** movie + **all** TV sections). Tunarr cross-referencing likewise unions **all** enabled Tunarr libraries of each type.
-- Output: `plex_library.csv` + `export_summary.json` (movies/tv_shows/skipped counts for the UI stats card)
-
-**`generate_no_ai.py`** (Option B — no AI required)
-- Reads `plex_library.csv`
-- Auto-generates decade channels (year filtering) and genre channels (genre tag matching)
-- Auto-generates TV marathon channels for shows with 50+ episodes
-- Writes placeholder entries for franchise/themed channels (user fills manually)
-- `--start N` — offsets all block ranges by `N - 10` (default: 10). E.g. `--start 30` shifts TV Marathons to 30–39, TV Blocks to 40–49, etc., leaving lower numbers free for pre-existing channels. Passed automatically by the web UI.
-- **Toggle flags** (omit any flag to keep its default = "all"): `--genres TAG,TAG` (Plex genre tags to build movie channels for — canonical tags get friendly names like "Sci-Fi Movies", others are named "<tag> Movies"), `--decades YEAR,YEAR` (decade start years), `--types TYPE,TYPE` (any of `marathons, tv_blocks, movies, franchise, specialty`), `--min-items N` (min titles for a genre/decade channel, default 5). Movie-block channel numbers (30–49) are assigned **dynamically/sequentially** so an arbitrary set of toggles never collides or leaves fixed gaps. `marathons` + `movies` are data-driven; `tv_blocks`/`franchise`/`specialty` are placeholder scaffolds (AI-only in the new Planner UI).
-- Output: `channels.json`
-
-**`generate_from_collections.py`** (Option C — Plex collections as channels)
-- Fetches all Plex collections via the Plex API
-- Generates one channel per collection using `{"collection": "Name"}` syntax
-- Manages the collection block (default ch 80+): keeps all channels below `--base`, fully regenerates from `--base` upward
-- Collections with the same name in multiple Plex sections are deduplicated (first section wins)
-- Flags: `--apply`, `--base N`, `--condense` (skip collections matching existing channel names), `--min-items N`
-- Re-run any time Kometa adds/removes collections to keep the block in sync
-
-**`channel_engine.py`** (shared resolution engine)
-- Pure, importable building blocks shared by `create.py` (CLI deploy), the `/api/recipes/preview` endpoint, and — going forward — the live-channel scheduler
-- Resolution: `api`/`plex_get` HTTP helpers, `build_library_index`, `resolve_title`, `get_plex_sections`, `resolve_collection`, `resolve_content`, `build_schedule`, `set_programming`, `SHUFFLE_MAP`, `ChannelEngineError`
-- `resolve_content(content_list, movie_map, show_map, …)` → `(resolved, missing)`. Handles plain title strings, `{"collection": "Name"}` refs (Plex expansion), and `{"match": "title_contains", "value", "order", "exclude"}` franchise refs
-- Franchise matching (live recipes): `match_titles(value, movie_map, show_map, order, exclude)` → `(resolved_items, preview)`. **Word-boundary** match (not raw substring — "It" matches "It Follows", not "Little Women"); `order="release_date"` sorts movies by the Tunarr program's `releaseDate` (epoch ms), unknown dates last; `exclude` is a case-insensitive title drop-list. `preview` is `[{title, year}]` for the author-time confirm UI
-- In-place updates (live recipes, never delete/recreate): `find_channel_by_number`, `read_channel_programming` (returns the set of currently-scheduled program IDs from `GET /api/channels/{id}/programming` — the `programs` dict keys, same id-space as the library index; the "current" side of the change-detection diff), and `update_channel_in_place(tunarr_url, number, shuffle, resolved)` (looks up the channel by number, rebuilds the schedule, POSTs programming — preserves the Tunarr id + Plex DVR mapping)
-- Every function is parameterized by `tunarr_url`/`plex_url`/`token` — nothing reads `config.json`, touches argv, or calls `sys.exit`, so it is safe to import into the long-lived FastAPI process
-- Must be listed in the Dockerfile `COPY` line alongside the other pipeline scripts (imported by `create.py` at runtime inside the image, and imported in-process by `recipes_router.py`)
-
-**`create.py`**
-- Thin CLI wrapper around `channel_engine.py`; keeps CLI-only concerns (`load_config`, `delete_channels`, `create_channel`, argparse `main()`)
-- Reads `channels.json`
-- Indexes Tunarr library (exact title matching, case-insensitive)
-- Deletes all existing channels then creates new ones (use `--from N` to scope to channels >= N, preserving lower channels and their custom images)
-- `--protect N1,N2,...` — comma-separated channel numbers to skip during deletion; these channels remain in Tunarr untouched regardless of scope. Printed as "Preserving #N name (protected)" during the run.
-- Builds Tunarr random-schedule payloads (30-day rolling window — channels loop forever, no dead air)
-- Output: channels live in Tunarr
-
-**`fetch_images.py`**
-- Reads `channels.json`, finds channels with exactly one content item (solo TV show or solo movie)
-- Searches TMDB for the title (TV first, then movie), picks the best English clearlogo by vote score
-- Updates the Tunarr channel via `PUT /api/channels/{id}` with `icon.path` set to the TMDB image URL
-- Tunarr then serves that URL in its XMLTV output, so Plex displays the real show/movie logo in the guide
-- Multi-title channels (genre blocks, decade collections, themed rotations) are skipped — handle separately
-- Default is dry run; use `--apply` to commit changes
-- Flags: `--apply`, `--channel <number>`, `--clear` (removes all custom icons)
-- Requires `tmdb_api_key` in `config.json`
-
-**`sync_plex.py`**
-- Compares Tunarr's XMLTV channel list against Plex's DVR channel mappings
-- Attempts a soft update (PUT to device endpoint) to add missing channels
-- Verifies the update actually took effect by re-fetching Plex state
-- If auto-sync fails or no DVR is configured, prints the XMLTV URL and manual setup steps
-- Never deletes the Plex DVR — read-then-update only
+- **`programmarr.py`** — CLI entry point. Flat menu (AI / No-AI / Collections / images / sync / quit). Walks first-run config setup, **always probes before deploying**, and pre-deploy asks whether to wipe-and-rebuild or preserve channels below a number (so manual/lower channels and their custom images survive). Accepts JSONL or bare-array LLM output and normalizes to the internal `{"channels":[...]}` dict.
+- **`export.py`** — pulls full metadata from the Plex API. Includes **studio** + top-3 billed **actors** (both in the default `/all` response) which power the Planner's entity channels. Auto-detects all movie+TV sections (or scope with `--movie-sections`/`--tv-sections`); cross-references Tunarr to flag unsynced content. Output: `plex_library.csv` + `export_summary.json`.
+- **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/themed). Uses the **fixed-block** numbering layout below; movie-block numbers are assigned sequentially so any toggle set avoids collisions. `--start N` offsets all blocks.
+- **`generate_from_collections.py`** — one channel per Plex collection via `{"collection":"Name"}`. Manages the collection block (default ch 80+): keeps everything below `--base`, regenerates from `--base` up. Re-run any time Kometa changes collections.
+- **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**.
+- **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels.
+- **`fetch_images.py`** — for solo-title channels, finds the best TMDB clearlogo and sets the Tunarr channel `icon.path` so Plex shows a real logo in the guide. Multi-title channels are skipped. Dry-run by default; `--apply` to commit. Requires `tmdb_api_key`.
+- **`sync_plex.py`** — reconciles Tunarr's XMLTV channel list into Plex's DVR mapping (read-then-update; **never deletes** the DVR). Falls back to printing the XMLTV URL + manual steps.
 
 ## Channel Numbering Scheme
 
@@ -292,11 +148,10 @@ See `config.json.example` for the template.
 | Franchise    | 50–69 | Ordered series (MCU, Batman, etc.) |
 | Specialty    | 70–79 | Single-movie loops, holiday, niche |
 
-In the v0.3.0 Planner these ranges are **soft category hints**, not hard blocks:
-`/pipeline/compose` assigns numbers sequentially per category from the chosen start
-(marathons ~10s, TV blocks ~20s, movie channels ~30s+, **entity channels —
-studio/director/actor — ~50s+**) and **spills into the next gap on overflow**. The CLI
-`generate_no_ai.py` still uses the fixed-block layout above.
+In the Planner these are **soft category hints**, not hard blocks: `/pipeline/compose`
+assigns numbers sequentially per category from the chosen start (marathons ~10s, TV blocks
+~20s, movie channels ~30s+, entities — studio/director/actor — ~50s+) and **spills into the
+next gap on overflow**. The CLI `generate_no_ai.py` still uses the fixed-block layout above.
 
 ## channels.json Schema
 
@@ -317,232 +172,100 @@ studio/director/actor — ~50s+**) and **spills into the next gap on overflow**.
 
 **shuffle values:** `ordered` | `shuffle` | `block`
 
-Content items can be plain title strings **or** Plex collection references:
+Content items can be plain title strings **or** Plex collection references
+(`{"collection": "Name"}`), freely mixed. Collection refs are expanded to member titles at
+deploy time via the Plex API; a not-found collection is warned and skipped. Plain titles must
+match Plex names exactly (case-insensitive). A title may appear on multiple channels —
+intentional. Live channels add one more content-ref type (`{"match": "title_contains", …}`),
+documented under Live Channels.
 
-```json
-"content": [
-  "Breaking Bad",
-  {"collection": "Criterion Collection"}
-]
-```
+## API Endpoints
 
-Collection references are expanded to their member titles at deploy time via the Plex API. Plain strings and collection objects can be freely mixed in the same channel. If a named collection is not found in Plex, a warning is printed and the entry is skipped.
-
-Plain title strings must match Plex library names exactly (case-insensitive).
-A title can appear on multiple channels — this is intentional and expected.
-
-## Tunarr API Endpoints Used
-
-- `GET /api/media-sources` — discover Plex source and library IDs
-- `GET /api/media-libraries/{id}/programs` — all episodes/movies in a library
-- `GET /api/transcode_configs` — fetch transcode config ID at runtime
-- `GET /api/channels` — list existing channels
-- `POST /api/channels` — create channel
-- `DELETE /api/channels/{id}` — delete channel
-- `POST /api/channels/{id}/programming` — set rolling schedule (body: `{"type":"random","programs":[...],"schedule":{...}}`; schedule requires `padStyle` and `randomDistribution` as of current Tunarr version)
-- `PUT /api/channels/{id}` — update channel settings (used by `fetch_images.py` to set `icon.path`)
-
-## TMDB API Endpoints Used
-
-- `GET /3/search/tv?query=...` — search for TV show by title
-- `GET /3/search/movie?query=...` — search for movie by title
-- `GET /3/tv/{id}/images?include_image_language=en,null` — fetch logo images for a TV show
-- `GET /3/movie/{id}/images?include_image_language=en,null` — fetch logo images for a movie
-- Images served from `https://image.tmdb.org/t/p/original/{file_path}`
-
-## Pipeline API Endpoints (backend/routers/pipeline_router.py)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/pipeline/libraries` | List Plex library sections filtered to `movie` and `show` types (`{key, title, type}`) |
-| POST | `/api/pipeline/export` | SSE-stream `export.py`; JSON body `{"no_crossref": bool, "movie_sections": ["1","2"], "tv_sections": ["3"]}` — sections are Plex section keys; `null` = auto-detect, `[]` = skip that type |
-| GET | `/api/pipeline/csv` | Download `plex_library.csv` |
-| GET | `/api/pipeline/csv/info` | Stats: rows, movies, tv_shows, skipped counts, preview lines |
-| GET | `/api/pipeline/facets` | **Facets v2** — one CSV pass returning everything the Planner candidate list needs: `genres:{canonical,more}` (canonical always present; `more` ≥ `min_items`), `decades`, `genre_decade` matrix (≥6), `blends` genre-pairs (≥6), entity lists `studios`(≥4)/`directors`(≥3)/`actors`(≥4, capped 60), `tv_genres`(≥3), `marathons` (every show with ≥2 episodes, `{title,episodes,seasons}` sorted desc — drives the per-show marathon candidates), plus `movies`/`tv_shows`/`marathon_count`. Thresholds are module constants in `pipeline_router.py`. |
-| POST | `/api/pipeline/compose` | **Planner v2 deterministic resolver.** Body `ComposeRequest{specs:[CandidateSpec], start}`. Each `CandidateSpec{kind, …}` (`kind` ∈ genre / genre_decade / blend / studio / director / actor / tv_genre / marathon) is resolved against `plex_library.csv` into a title list; empties skipped + reported. Writes `channels.json` with **soft-block numbering** (marathons ~10s, TV blocks ~20s, movie channels ~30s+, entities ~50s+, sequential from `start`, spilling on overflow). Returns `{count, channels:[{number,name,items}], skipped}`. |
-| GET | `/api/pipeline/prompt` | **Legacy** — fetch full `PROMPT.md` (meta header included) with `{TARGET}`, preferences, and `start` (block offset) injected; query params: `target`, `preferences`, `start`. Used by the current Run UI; kept until the new flow ships. |
-| POST | `/api/pipeline/prompt` | New flow — body `PromptOptions{target, preferences, start, include_genres, exclude_genres, include_decades, exclude_decades, include_types, exclude_types}`. Strips the meta header above the first `---` (the UI walkthrough carries that guidance) and injects a `## What To Build` section (must-include / never-create lists + an explicit invite to discover additional channels) before the numbering scheme. |
-| POST | `/api/pipeline/validate` | Parse/validate LLM output (file upload or raw text), write `channels.json`. With form field `append=true`, **merges** the parsed channels on top of the existing `channels.json` instead of overwriting — colliding numbers are bumped to the next free slot, and incoming channels whose **name already exists (case-insensitive) are skipped** so re-running the AI step can't stack duplicates; returns `added` + `skipped_dupes`. |
-| POST | `/api/pipeline/discover-prompt` | Build the AI-extras prompt, seeded with the current `channels.json` lineup (so the AI avoids duplicates) and numbering new suggestions from `max+1`. Body `DiscoverOptions{discover, curate_pools}`: `discover` adds a "suggest additional themed channels" section; `curate_pools` (human pool descriptions) adds a "split these pools by tone" section (PR-D per-pick AI-curate). Returns `{content, start, existing_count}`. |
-| POST | `/api/pipeline/no-ai` | SSE-stream `generate_no_ai.py`; query params `start`, `genres`, `decades`, `types`, `min_items` passed through as the matching `--` flags (the Planner toggles drive these) |
-| GET | `/api/pipeline/collections` | Fetch all Plex collections (id, name, count, section, summary, has_poster) |
-| GET | `/api/pipeline/collections/{id}/poster` | Proxy Plex collection poster image |
-| POST | `/api/pipeline/collections/apply` | Write selected collections into `channels.json` |
-| POST | `/api/pipeline/probe` | SSE-stream `create.py --probe` |
-| POST | `/api/pipeline/deploy` | SSE-stream `create.py`; query params: `protected` (comma-separated channel numbers to preserve), `no_delete` (bool) |
-| POST | `/api/pipeline/deploy-selective` | JSON body `DeployRequest{selections, protected_numbers, no_delete}`; filters channels.json to selected entries, writes `deploy_temp.json`, SSE-streams `create.py --json deploy_temp.json [--protect N1,N2,...] [--no-delete]` |
-| POST | `/api/pipeline/images` | SSE-stream `fetch_images.py --apply` |
-| POST | `/api/pipeline/sync` | SSE-stream `sync_plex.py` |
-
-## Recipe API Endpoints (backend/routers/recipes_router.py)
-
-Live-channel endpoints. Unlike the pipeline router (which spawns scripts as subprocesses), this
-router imports `channel_engine` **in-process** — it adds `PROGRAMMARR_SCRIPTS` to `sys.path` so the
-engine module (which lives at `/app`, not `/app/backend`) is importable. This is the same wiring the
-future scheduler will reuse.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/recipes/preview` | JSON body `{value, exclude?, order?}`; runs `match_titles` against the live Tunarr library and returns `{value, order, count, matches:[{title, year}]}` — the author-time confirm list for a `title_contains` franchise rule (word-boundary match, release-date ordered) |
-| GET | `/api/recipes/status` | Scheduler state: `{enabled, paused, running, interval_hours, next_run_seconds, live_count, last_cycle, channels}`. `next_run_seconds` = seconds to next auto cycle (null if disabled/paused); `channels` = per-channel sync metadata from `recipe_state.json` |
-| POST | `/api/recipes/run` | Run one cycle on demand. `apply=true` (default) patches; `apply=false` is a dry run (detect + log, no Tunarr writes). `only=<number>` scopes the cycle to one live channel (the per-channel "Sync now"). Same code path the background loop uses |
-| POST | `/api/recipes/pause` | `paused=true\|false` — runtime kill switch; halts/resumes the loop without a restart |
-| POST | `/api/recipes/config` | JSON body `{enabled, interval_hours}`; **merge-writes** config.json (`recipes_enabled`, `recipe_interval_hours`) so it never clobbers connection/auth keys — unlike the strict `/config` `ConfigModel`. Returns the new status |
-
-The UI surfaces (live-channel authoring in `Channels.tsx`, the Settings "Live
-Channels" card, the Dashboard "Auto-Updates" card) and the scheduler
-(`backend/scheduler.py`) are summarized in the **Live Channels** section below and
-documented in full in [`docs/live-channels-design.md`](docs/live-channels-design.md).
+All endpoint tables — **Pipeline**, **Recipe**, **Tunarr**, **TMDB**, **Plex** — live in
+[`docs/api.md`](docs/api.md). The router source (`backend/routers/`) is the source of truth.
 
 ## Run.tsx — Pipeline Stepper UI
 
 `frontend/src/pages/Run.tsx` is a **single unified stepper** (no tabs). The generation
-method is a *question* on the first screen, and the step list is built dynamically from
-the user's setup choices.
+method is a question on the first screen; the step list is built from the user's choices.
 
-**Shared patterns:**
-- `streamPipeline(endpoint, params, onEvent, body?)` — SSE stream with optional JSON body for selective deploy
-- `parseProbeChannels(lines)` — parses `[PROBE] #N name | shuffle=X | summary` lines into `ChannelSel[]`
-- `cid` — stable candidate-id helpers (`g:`, `gd:`, `b:`, `studio:`, …) keying the Planner's `selected` map
-- Stepper navigation is locked: only completed steps are clickable
+**Flow:** `Setup → Export → Planner → [AI Extras] → [Collections] → Deploy`. Export/Planner
+are skipped for *Collections-only*; **AI Extras** appears only when the Planner's "✨ Bring in
+AI" toggle is on; Collections only if opted in.
 
-**Flow:** `Setup → Export → Planner → [AI Extras] → [Collections] → Deploy`. Export/Planner are
-skipped for *Collections-only*; **AI Extras** appears only when the Planner's "✨ Bring in AI"
-toggle is on; Collections only if opted in. The **AI layer** (both halves shipped in v0.3.0) does
-*discovery* (themed channels filters miss) **and** per-pick *tonal curate* (split a flagged pool by
-tone), merged on top via the append endpoint. (An AI *name-polish* prototype was built and then
-removed — clarity beat cute; not in the flow.)
+**Durable rules (these outlive any refactor of the step components):**
+- **Channel protection is decided once, on the Setup screen** (keep/wipe the existing Tunarr
+  lineup). Kept = protected; protected numbers pass to `create.py` via `--protect N1,N2,...`.
+  The start number auto-computes as the highest kept rounded up to the next 10. Deploy does
+  **not** re-ask protection — it only flags conflicts between kept numbers and deploy numbers.
+- **The Planner is deterministic:** selected candidates post as `CandidateSpec[]` to
+  `POST /pipeline/compose`, which writes `channels.json`. Candidates are unchecked by default.
+- **The AI layer merges on top** via `POST /pipeline/validate` with `append=true` (collisions
+  renumbered, name-duplicates skipped) — it never overwrites the deterministic lineup.
+- **Deploy runs a cascade that always completes:** `deploy-selective` → (if art opted in)
+  `images` → `sync`, each streamed inline, ending in a per-stage summary.
 
-1. **Setup** (`SetupStep`) — upfront decisions: **method** cards (**Build a lineup** / **Collections-only**),
-   *include collections?*, *fetch TMDB art?* (checkbox **disabled** + tooltip when `config.has_tmdb` is false),
-   and the **keep/wipe existing Tunarr lineup** list (checked = keep = protected; auto-computes the start
-   number = highest kept rounded up to the next 10). `protectedNums` + `start` flow through the rest of the flow.
-2. **Export** (`ExportStep`) — "Libraries to scan" checkboxes grouped Movies / TV; runs `export.py`; compact stats on success.
-3. **Planner v2** (`PlannerStep`) — **ingredients → curated candidates** from `GET /pipeline/facets` (v2).
-   Top: **genres + decades "in play"** (chips with counts + "More genres" expander). Below, **collapsible
-   candidate sections** ordered by channel number: **TV** (per-show *Marathons* + genre *Blocks*) → **Movies**
-   (genre×decade nested per decade · curated named *Sub-genres* like Rom-Coms/Dark Comedies, **not** arbitrary
-   pairs · *Broad* genres) → **Studios / Directors / Actors** (searchable). Every section header carries **Top 10**
-   (when >10) + **Add all** (`BulkButtons`), an "N added" badge, and folds away after a bulk add. Candidates are
-   all **unchecked** by default. The **Build N Channels** button posts the selected `CandidateSpec[]` to
-   `POST /pipeline/compose`, which deterministically writes `channels.json`, then advances.
-   `CandRow` / `CollapsibleSection` / `EntitySection` are top-level components (avoid remount/focus bugs).
-   A "✨ Bring in AI" **Switch** sets `aiExtras` (Run-root state), which (a) inserts the AI Extras step and (b) reveals a
-   per-pick **✨ curate** toggle on broad-genre and genre×decade rows. A curated pick is **excluded from `compose`** and
-   instead handed to the AI to **split by tone** (Feel-Good vs Raunchy Comedies); `curatePoolDescription()` builds the
-   human pool description, and `planner.curate` tracks which picks are flagged.
-4. **AI Extras** (`DiscoverStep`, only when `aiExtras`) — numbered walkthrough seeded by `POST /pipeline/discover-prompt`
-   with `{discover:true, curate_pools}` (knows your built lineup; asks the AI to split the flagged pools by tone **and**
-   discover non-duplicate themed channels, numbered from `max+1`). Paste the AI's JSONL → `POST /pipeline/validate` with
-   `append=true` **merges** it on top of `channels.json` (collisions renumbered; **name-duplicates skipped** → `skipped_dupes`). Skippable.
-5. **Collections** (`CollectionsStep`) — poster/checkbox/editable-number picker; appends to `channels.json` above the current max (`max(start, ceil((maxNum+1)/10)*10)`).
-6. **Deploy** (`DeployStep`) — **auto-probes on entry**, shows a review list (include/renumber, red "conflict" badge when a deploy number
-   collides with a kept channel). One **Deploy** button runs the **cascade**: `deploy-selective` → (if art opted in) `images` → `sync`,
-   each streamed inline. The cascade **always completes**; the final summary shows per-stage status (✓ deployed N · ✓/skip art · ✓/⚠ sync)
-   with the art and sync output collapsible (sync's manual-step instructions/XMLTV URL live there).
-
-**Channel protection model:** decided **once**, on the Setup screen (keep/wipe). Protected numbers pass to `create.py` via `--protect N1,N2,...`.
-Deploy no longer has its own protection panel — it only does conflict detection between kept numbers and the deploy numbers.
-
-**`deploy_temp.json`:** Written by `/pipeline/deploy-selective` when channels are excluded from a deploy session. The original `channels.json` is not modified — only the chosen channels are deployed.
-
-## Plex API Endpoints Used
-
-- `GET /library/sections` — discover library section keys
-- `GET /library/sections/{key}/all?type=1` — all movies with full metadata
-- `GET /library/sections/{key}/all?type=2` — all TV shows with full metadata
-
-No dependencies beyond the Python standard library.
+The blow-by-blow of each step's components and props is the code's job — read the `.tsx`.
 
 ## Known Limitations
 
-### Plex Live TV Guide — Channel Names Not Displaying as Text
-Channel names do not appear as text in Plex's Live TV guide channel column — only the channel icon image is shown. This is **not a bug in Programmarr**.
-
-**Root cause:** When Plex receives a channel with any icon in the XMLTV feed, it renders only the icon in the guide's left column and suppresses the text label entirely. Tunarr injects its default `tunarr.png` for every channel, so without custom icons the guide shows a wall of identical color-bar icons with no names.
-
-**Current state (after `fetch_images.py`):** Solo-title channels (TV marathons ch 10–19, single-movie specialty channels) now display their real TMDB clearlogo in the guide instead of the generic Tunarr icon. Multi-title channels (genre/decade/themed blocks) still show the Tunarr default until a logo strategy is implemented for them.
-
-**What doesn't fix the text-label issue:** Refreshing the Plex guide, restarting Plex, updating `startTime`, tweaking channel settings. The text suppression is a Plex design decision when any icon is present.
-
-**The `startTime` fix (commit c9d52d6):** Channels were being created with `startTime=0` (Unix epoch / Dec 31 1969). This was a real bug — Plex's guide rendered nothing at all in the channel slot until a guide refresh — but fixing it does not make channel names appear. The names issue is a separate Plex design limitation.
+**Plex guide shows channel icons, not text names.** When Plex receives a channel with any icon
+in the XMLTV feed, it renders only the icon and suppresses the text label — a Plex design
+decision, not a Programmarr bug. Tunarr injects a default icon for every channel, so without
+custom icons the guide is a wall of identical icons. `fetch_images.py` gives solo-title channels
+real TMDB logos; multi-title channels still show the Tunarr default until a logo strategy exists
+for them. Refreshing/restarting Plex does not change this.
 
 ## Git Workflow
 
-`master` is the production branch — a push to it triggers CI → GHCR → Watchtower → a
-live redeploy. So the discipline that matters is **test before you push**, not branch
-before you push. Work like a pragmatic solo pro: a branch is a tool, not a tax — use it
-when it *buys* something, otherwise commit straight to `master`.
+`master` is **production**: every push triggers CI → GHCR → Watchtower → live redeploy within
+~5 min. So master is **release-gated** — it receives only tagged, versioned releases, never raw
+dev work. Two tracks keep that true:
 
-(Worth knowing: CI only runs on push to `master`, so a feature branch/PR gets **no**
-pre-deploy build here — branching's value is staging/review, not validation. And docs
-aren't copied into the image, so doc-only commits build an identical image and Watchtower
-never redeploys them.)
+1. **Branch track — daily work (`/ship`).** All image-affecting work (anything baked into the
+   image: `backend/`, `frontend/`, root `*.py`, `Dockerfile`, `docker-compose.yml`,
+   `requirements*.txt`) happens on a short-lived `feature/…`/`fix/…`/`chore/…` branch. `/ship`
+   commits and pushes to that branch — **never master**. Branches don't deploy.
+2. **Release track — going live (`/release`).** The single gate to master: Docker-verifies, asks
+   for the new semantic version, bumps `frontend/package.json` + `CHANGELOG.md`, merges the
+   branch, tags `vX.Y.Z`, and cuts the GitHub Release (firing the versioned GHCR build).
 
-**Commit straight to `master`** for small, safe, self-contained changes:
-- Docs, comments, `*.md`, anything not baked into the Docker image (zero blast radius).
-- Runtime changes you've already **verified locally in Docker** against your own
-  Plex/Tunarr (the real safety step — see "Parity loop" above).
+**SemVer:** patch = fixes/tweaks; minor = new features/UI/flags/endpoints; major = breaking
+pipeline/schema/API changes. `/release` suggests the bump and always asks you to confirm.
 
-**Branch + PR when it earns its keep** — i.e. the branch actually does work for you:
-- A large or risky change you want to stage, review as a diff, or keep easy to revert.
-- Work-in-progress you don't want live on `master` yet.
-- Anything you're genuinely unsure about and want to look at before it auto-deploys.
+**The one carve-out — docs straight to master.** Doc-/comment-/repo-meta-only changes (`*.md`,
+`docs/`, `.gitignore`, `README`) build an identical image (Watchtower never redeploys them), so
+they may go straight to master with no branch and no version bump.
 
-When you do branch, use a descriptive prefixed name (`feature/…`, `fix/…`, `docs/…`,
-`chore/…`, never `wip`), keep it short-lived (one logical task), and delete it after merge.
-
-**Always, regardless of path:**
-- **Commit in small, focused chunks** with verbose messages explaining *what* changed
-  and *why* — not "fix bug" or "update script".
-- **Never commit secrets or personal data** — keys, passwords, internal IPs, the user's
-  library. These stay gitignored (`config*.json`, `channels*.json`, `*.csv`,
-  `PROMPT.personal.md`, etc.).
-- **Keep docs in sync:** update `CLAUDE.md` in the **same commit** as any feature change
-  (new flags, API behavior, schema updates, new/removed scripts) so docs never drift.
+**Always:** commit in small focused chunks with verbose *what + why* messages; **never commit
+secrets or personal data** (keys, passwords, IPs, the user's library — kept gitignored:
+`config*.json`, `channels*.json`, `*.csv`, `PROMPT.personal.md`); and **keep this file in sync in
+the same commit** as any behavior change.
 
 ## Live Channels (Auto-Updating Channels)
 
-A **live channel** (`"live": true` in `channels.json`) is re-resolved against the
-Tunarr library on a schedule and patched **in place**, so it stays fresh as the
-library grows — new episodes, new franchise films, and new collection members appear
-on their own. Ships **off** by default (`recipes_enabled: false`).
+A **live channel** (`"live": true` in `channels.json`) is re-resolved against the Tunarr library
+on a schedule and patched **in place**, so it stays fresh as the library grows. Ships **off** by
+default (`recipes_enabled: false`).
 
 **Two rules that must never be broken:**
-1. **Update in place.** Look the channel up by number and `set_programming` on the
-   existing Tunarr id. **Never** delete-and-recreate a live channel — that changes the
-   Tunarr id and breaks the Plex DVR mapping. (`create.py`'s delete/recreate path is
-   for *initial* deploy only; the scheduler must never use it.)
-2. **Tunarr is the source of truth.** Each cycle diffs freshly-resolved program ids
-   against the channel's *current* Tunarr programming and patches **only on a
-   difference**. No state file drives correctness — `data/recipe_state.json` is
-   cosmetic UI-only metadata (last-synced badges), never read by the diff.
+1. **Update in place.** Look the channel up by number and `set_programming` on the existing
+   Tunarr id. **Never** delete-and-recreate a live channel — that changes the Tunarr id and
+   breaks the Plex DVR mapping. (`create.py`'s delete/recreate path is for *initial* deploy
+   only; the scheduler must never use it.)
+2. **Tunarr is the source of truth.** Each cycle diffs freshly-resolved program ids against the
+   channel's *current* Tunarr programming and patches **only on a difference**. No state file
+   drives correctness — `data/recipe_state.json` is cosmetic UI-only metadata (last-synced
+   badges), never read by the diff.
 
-**Moving parts:**
-- `backend/scheduler.py` — one in-process asyncio loop started from `main.py`'s
-  lifespan; wakes every 60s and runs a cycle when enabled, not paused, and
-  `recipe_interval_hours` has elapsed. Shares `deploy_lock` with the pipeline
-  endpoints so a manual deploy and a cycle never touch Tunarr concurrently. Skips
-  (logs, never fatal) on 404 / unreadable programming / resolve-to-empty.
-- `channel_engine.py` — `match_titles` (word-boundary franchise match),
-  `read_channel_programming`, `update_channel_in_place`, plus the shared resolution
-  helpers. Imported in-process by `recipes_router.py`.
-- `recipes_router.py` — the `/api/recipes/*` endpoints (table above).
-- Authoring lives in `Channels.tsx` (per-channel Live toggle + franchise builder);
-  status shows on the Dashboard "Auto-Updates" card and the Settings "Live Channels" card.
-
-**New content-ref type** — a franchise auto-match, the one new item allowed in a
-channel's `content` list:
+**Franchise content-ref** — the one new item allowed in a channel's `content` list:
 ```json
 {"match": "title_contains", "value": "Bad Boys", "order": "release_date", "exclude": []}
 ```
-Word-boundary match (so "It" does not match "Little Women"); `order: "release_date"`
-sorts by the Tunarr program's `releaseDate`; `exclude` drops false positives.
-Author-time preview (`POST /api/recipes/preview`) requires human confirmation before
-saving — the LLM never auto-authors these.
+Word-boundary match (so "It" does not match "Little Women"); `order: "release_date"` sorts by the
+Tunarr program's `releaseDate`; `exclude` drops false positives. Author-time preview
+(`POST /api/recipes/preview`) requires human confirmation before saving — the LLM never auto-authors these.
 
-**Config keys** (`config.json`): `recipes_enabled` (bool, default false),
-`recipe_interval_hours` (number, default 12).
-
-> **Full design, rationale, rejected alternatives, and history** —
-> [`docs/live-channels-design.md`](docs/live-channels-design.md).
+**Moving parts** (scheduler loop, `channel_engine` updaters, `recipes_router`, the `Channels.tsx`
+authoring UI and status cards), full rationale, rejected alternatives, and history:
+[`docs/live-channels-design.md`](docs/live-channels-design.md).
