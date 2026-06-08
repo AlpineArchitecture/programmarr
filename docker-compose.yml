@@ -1,7 +1,6 @@
 services:
   programmarr:
     image: ghcr.io/alpinearchitecture/programmarr:latest
-    # build: .   # uncomment for local testing
     container_name: programmarr
     restart: unless-stopped
     ports:
