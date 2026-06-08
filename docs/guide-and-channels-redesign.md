@@ -242,7 +242,7 @@ from a real `/api/xmltv.xml`). Assert: the `C10.97.tunarr.com`→`10` number ext
 **Replace** the "Live Channels" `SimpleGrid` of `ChannelCard`s (lines ~251–279) with an EPG grid.
 
 **Build a new `GuideGrid` component** (new file `frontend/src/components/GuideGrid.tsx`, or inline if
-small). Match the look in `ScreenshotGUIDE.jpg`:
+small). Match the look in `docs/ScreenshotGUIDE.jpg`:
 
 - **Left rail:** one row per channel — icon (when present) + number + name. Sort by number.
 - **Time axis:** header row of time labels. Anchor the left edge at **now, rounded down to the
@@ -638,4 +638,4 @@ Setup; deterministic compose; AI merges on top; deploy cascade completes).
 | Channels page root + deep-link | `frontend/src/pages/Channels.tsx:550`, deep-link effect `:572` |
 | API client | `frontend/src/api/client.ts` |
 | Live-channels invariants (never recreate) | `CLAUDE.md` → Live Channels; `docs/live-channels-design.md` |
-| Target look | `ScreenshotGUIDE.jpg` (repo root) |
+| Target look | `docs/ScreenshotGUIDE.jpg` |
