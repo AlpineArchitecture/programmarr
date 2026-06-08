@@ -4,6 +4,39 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] — 2026-06-07
+
+### Added
+
+- **Commercials.** Any channel can play commercials in the gap between shows — real-TV
+  style. Turn it on with the new **📺 Add commercials** toggle in the Planner (applies to
+  every channel you build) or per-channel in the channel editor, and pick which Tunarr
+  **filler list** to pull clips from. A short pad after each program opens the gap; Tunarr's
+  filler picker fills it (varied selection, no back-to-back repeats). Density self-adjusts —
+  a break between movies on a movie channel, between episodes on a TV channel. `channels.json`
+  gains an optional per-channel `commercials` object. (Mid-roll ads *inside* a show were
+  investigated and deliberately left out — they don't stream on hardware-accelerated Tunarr;
+  see [`docs/tunarr-commercials-findings.md`](docs/tunarr-commercials-findings.md).)
+- **Auto-update toggle in the Planner.** A **🔄 Keep channels fresh** switch marks the
+  channels you build as live, so new episodes and matching films appear on their own as your
+  library grows (runs on the live-channel schedule).
+- **Advanced config (optional, `config.json`).** `tunarr_channel_group` and
+  `tunarr_stream_mode` set the Tunarr group/folder and streaming mode for generated channels.
+  See README → Advanced Configuration.
+- **Filler-list picker endpoint** — `GET /api/tunarr/filler-lists`.
+
+### Fixed
+
+- **Settings saves no longer clobber config-file-only keys.** `config.json` is now
+  merge-written, so hand-edited keys (the advanced ones above, and the live-channel
+  `recipes_*` keys) survive a save from the Settings form instead of being dropped.
+
+### Changed
+
+- **Export step warns about filler libraries.** A clearer, more visible note to leave
+  commercials / trailers / bumper libraries out of the content scan — Plex labels them as
+  "movies," so they'd otherwise sneak into your channel candidates.
+
 ## [0.3.1] — 2026-06-05
 
 ### Fixed
