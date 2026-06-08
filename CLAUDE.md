@@ -127,9 +127,11 @@ See `config.json.example` for the full shape. Keys:
 - `recipes_enabled` (bool, default `false`), `recipe_interval_hours` (number, default `12`) — live-channel scheduler (see Live Channels).
 - `tunarr_channel_group` (string, optional) — Tunarr `groupTitle` for all created channels (default `"tunarr"`).
 - `tunarr_stream_mode` (string, optional) — Tunarr `streamMode`, lowercase enum: `hls`|`hls_slower`|`mpegts`|`hls_direct`|`hls_direct_v2` (default `"hls"`). Applied by `create.py` at channel creation; **not** exposed in the UI.
+- `channel_blocks` (object, optional) — per-category block sizes, e.g. `{"marathon":10,"tv_block":10,"movie":20,"franchise":20,"specialty":10}`. How many channel numbers each category reserves; omit for defaults. **Editable in Settings.** See Channel Numbering Scheme.
 
 > `config_router.save_config` **merge-writes** `config.json`, so editing these (or the `recipes_*`) keys
-> by hand survives a Settings save — the UI form only overwrites the keys it manages.
+> by hand survives a Settings save — the UI form only overwrites the keys it manages. (`channel_blocks`
+> is preserved on an empty save, never wiped — see `save_config`.)
 
 ## Architecture
 
@@ -138,7 +140,8 @@ and the code — don't restate them here.
 
 - **`programmarr.py`** — CLI entry point. Flat menu (AI / No-AI / Collections / images / sync / quit). Walks first-run config setup, **always probes before deploying**, and pre-deploy asks whether to wipe-and-rebuild or preserve channels below a number (so manual/lower channels and their custom images survive). Accepts JSONL or bare-array LLM output and normalizes to the internal `{"channels":[...]}` dict.
 - **`export.py`** — pulls full metadata from the Plex API. Includes **studio** + top-3 billed **actors** (both in the default `/all` response) which power the Planner's entity channels. Auto-detects all movie+TV sections (or scope with `--movie-sections`/`--tv-sections`); cross-references Tunarr to flag unsynced content. Output: `plex_library.csv` + `export_summary.json`.
-- **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/themed). Uses the **fixed-block** numbering layout below; movie-block numbers are assigned sequentially so any toggle set avoids collisions. `--start N` offsets all blocks.
+- **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/themed). Numbers each block from the shared `channel_blocks` layout (sizes come from config when invoked by the backend; `--block-sizes K=N,…` for standalone use); movie-block numbers are assigned sequentially so any toggle set avoids collisions. `--start N` sets the first block's number.
+- **`channel_blocks.py`** — shared, **pure, importable** channel-numbering layout (no `config.json`/argv). `resolve_layout(sizes, start)` accumulates per-category block sizes from a base so resizing a block shifts the rest. Single source of truth for compose, the LLM prompt, and `generate_no_ai`. **Must stay in the Dockerfile `COPY` line.**
 - **`generate_from_collections.py`** — one channel per Plex collection via `{"collection":"Name"}`. Manages the collection block (default ch 80+): keeps everything below `--base`, regenerates from `--base` up. Re-run any time Kometa changes collections.
 - **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**.
 - **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels.
@@ -147,18 +150,28 @@ and the code — don't restate them here.
 
 ## Channel Numbering Scheme
 
-| Block  | Range | Content |
-|--------|-------|---------|
-| TV Marathons | 10–19 | 24/7 single-show loops (50+ episodes) |
-| TV Blocks    | 20–29 | Themed multi-show rotations |
-| Movies       | 30–49 | Genre and decade channels |
-| Franchise    | 50–69 | Ordered series (MCU, Batman, etc.) |
-| Specialty    | 70–79 | Single-movie loops, holiday, niche |
+Five ordered blocks, each reserving a configurable number of channel slots. Block starts are
+**derived by accumulating sizes from a base** (`channel_blocks.resolve_layout`), so enlarging
+one block shifts every later block down — there are no fixed absolute lanes. Default sizes
+(`10/10/20/20/10`) reproduce the historical layout when the base is 10:
 
-In the Planner these are **soft category hints**, not hard blocks: `/pipeline/compose`
-assigns numbers sequentially per category from the chosen start (marathons ~10s, TV blocks
-~20s, movie channels ~30s+, entities — studio/director/actor — ~50s+) and **spills into the
-next gap on overflow**. The CLI `generate_no_ai.py` still uses the fixed-block layout above.
+| Block  | Default size | Default range (base 10) | Content |
+|--------|------|-------|---------|
+| TV Marathons | 10 | 10–19 | 24/7 single-show loops (50+ episodes) |
+| TV Blocks    | 10 | 20–29 | Themed multi-show rotations |
+| Movies       | 20 | 30–49 | Genre and decade channels |
+| Franchise    | 20 | 50–69 | Ordered series (MCU, Batman, etc.) |
+| Specialty    | 10 | 70–79 | Single-movie loops, holiday, niche |
+
+**Sizes are configurable** per category via the `channel_blocks` config key (Settings →
+Channel Numbering) — scale a category up for a large library (e.g. 100 movie channels). The
+Planner's entity channels (studio/director/actor) share the **Franchise** block's start.
+
+**The base is the start number, default 1.** A fresh deploy (nothing kept) numbers from channel
+**1**; keeping existing channels rounds the start up above the highest kept one. In the Planner
+the block starts are **soft hints**: `/pipeline/compose` assigns sequentially per category and
+**spills into the next gap on overflow** rather than colliding. All three generators (compose,
+the LLM prompt, `generate_no_ai`) read the same `channel_blocks` layout, so they stay in sync.
 
 ## channels.json Schema
 

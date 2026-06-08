@@ -1,6 +1,6 @@
 import {
-  Alert, Box, Button, Card, Divider, Group, NumberInput,
-  PasswordInput, Stack, Switch, Text, TextInput, Title,
+  Alert, Box, Button, Card, Code, Divider, Group, NumberInput,
+  PasswordInput, SimpleGrid, Stack, Switch, Text, TextInput, Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { IconAlertCircle, IconCheck, IconDeviceFloppy, IconRepeat } from '@tabler/icons-react';
@@ -8,6 +8,31 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 
 const MASK = '••••••••';
+
+// Mirrors channel_blocks.py (CANONICAL_ORDER, DEFAULT_SIZES). Keep in sync.
+const BLOCKS: { key: string; label: string }[] = [
+  { key: 'marathon', label: 'TV Marathons' },
+  { key: 'tv_block', label: 'TV Blocks' },
+  { key: 'movie', label: 'Movie Channels' },
+  { key: 'franchise', label: 'Franchise & Series' },
+  { key: 'specialty', label: 'Specialty' },
+];
+const BLOCK_DEFAULTS: Record<string, number> = {
+  marathon: 10, tv_block: 10, movie: 20, franchise: 20, specialty: 10,
+};
+
+// Range each block occupies when numbering starts at 1 (a fresh deploy). Blocks are
+// placed by accumulating sizes, so on a deploy that keeps existing channels the whole
+// layout shifts up by the start number.
+function blockRanges(sizes: Record<string, number>): { label: string; range: string }[] {
+  let cursor = 1;
+  return BLOCKS.map(({ key, label }) => {
+    const size = Math.max(1, sizes[key] || BLOCK_DEFAULTS[key]);
+    const range = `${cursor}–${cursor + size - 1}`;
+    cursor += size;
+    return { label, range };
+  });
+}
 
 export default function Settings() {
   const [values, setValues] = useState({
@@ -21,6 +46,8 @@ export default function Settings() {
   const [recipeInterval, setRecipeInterval] = useState(12);
   const [savingRecipes, setSavingRecipes] = useState(false);
 
+  const [blockSizes, setBlockSizes] = useState<Record<string, number>>({ ...BLOCK_DEFAULTS });
+
   useEffect(() => {
     api.getConfig().then((cfg) => {
       setValues({
@@ -31,6 +58,8 @@ export default function Settings() {
         auth_username: cfg.auth_username || '',
         auth_password: cfg.auth_password || '',
       });
+      const cb = cfg.channel_blocks || {};
+      setBlockSizes({ ...BLOCK_DEFAULTS, ...cb });
       setLoaded(true);
     });
     api.getRecipesStatus().then((s) => {
@@ -63,7 +92,7 @@ export default function Settings() {
   async function save() {
     setSaving(true);
     try {
-      await api.saveConfig(values);
+      await api.saveConfig({ ...values, channel_blocks: blockSizes });
       notifications.show({
         title: 'Saved',
         message: 'Configuration updated',
@@ -146,6 +175,35 @@ export default function Settings() {
             After saving, you'll need to reload the page and enter these credentials.
           </Alert>
         )}
+      </Card>
+
+      {/* Channel numbering */}
+      <Card p="lg">
+        <Text fw={700} mb={4}>Channel Numbering</Text>
+        <Text size="xs" c="dimmed" mb="md">
+          How many channel numbers each category reserves. Blocks are placed back-to-back, so
+          enlarge a category to fit more channels (handy for big libraries). Defaults are 10/10/20/20/10.
+        </Text>
+        <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
+          {BLOCKS.map(({ key, label }) => (
+            <NumberInput
+              key={key}
+              label={label}
+              value={blockSizes[key]}
+              onChange={(v) => setBlockSizes((s) => ({ ...s, [key]: Math.max(1, Number(v) || 1) }))}
+              min={1}
+              max={1000}
+            />
+          ))}
+        </SimpleGrid>
+        <Text size="xs" c="dimmed" mt="md">
+          On a fresh deploy (numbering from 1):{' '}
+          {blockRanges(blockSizes).map(({ label, range }, i) => (
+            <Text span key={label}>
+              {i > 0 && ' · '}{label} <Code>{range}</Code>
+            </Text>
+          ))}
+        </Text>
       </Card>
 
       <Group>

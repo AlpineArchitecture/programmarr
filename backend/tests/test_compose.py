@@ -61,16 +61,44 @@ def test_unknown_kind_reported(pr, seed):
     assert "unknown kind" in out["skipped"][0]["reason"]
 
 
-def test_soft_block_numbering(pr, seed):
-    # A marathon lands in the 10s; a movie genre in the 30s — regardless of input order.
+def test_fresh_deploy_starts_at_one(pr, seed):
+    # start=1 (a fresh deploy with nothing kept) truly begins at channel 1 — no 10 floor.
     seed([show("Loop Show", episodes=300), movie("Funny", genres="Comedy")])
     out = _compose(pr, [
         {"kind": "genre", "genre": "Comedy"},
         {"kind": "marathon", "value": "Loop Show"},
     ])
     by_name = {c["name"]: c["number"] for c in out["channels"]}
+    # Default sizes 10/10/20: marathon block 1–10, movie block 21–40.
+    assert by_name["Loop Show 24/7"] == 1
+    assert by_name["Comedy Movies"] == 21
+
+
+def test_classic_layout_when_starting_at_ten(pr, seed):
+    # Keeping existing channels rounds the start up (e.g. to 10) → the historical layout.
+    seed([show("Loop Show", episodes=300), movie("Funny", genres="Comedy")])
+    out = _compose(pr, [
+        {"kind": "genre", "genre": "Comedy"},
+        {"kind": "marathon", "value": "Loop Show"},
+    ], start=10)
+    by_name = {c["name"]: c["number"] for c in out["channels"]}
     assert by_name["Loop Show 24/7"] == 10
     assert by_name["Comedy Movies"] == 30
+
+
+def test_custom_block_sizes_from_config(pr, seed):
+    # A config-set block size scales a category; later blocks shift to accommodate it.
+    (pr._test_data_dir / "config.json").write_text(
+        json.dumps({"channel_blocks": {"marathon": 100}}), encoding="utf-8")
+    seed([show("Loop Show", episodes=300), movie("Funny", genres="Comedy")])
+    out = _compose(pr, [
+        {"kind": "genre", "genre": "Comedy"},
+        {"kind": "marathon", "value": "Loop Show"},
+    ])
+    by_name = {c["name"]: c["number"] for c in out["channels"]}
+    # marathon 1–100, then default tv_block 101–110, so the movie block starts at 111.
+    assert by_name["Loop Show 24/7"] == 1
+    assert by_name["Comedy Movies"] == 111
 
 
 def test_marathon_overflow_spills_sequentially(pr, seed):
@@ -79,8 +107,8 @@ def test_marathon_overflow_spills_sequentially(pr, seed):
     specs = [{"kind": "marathon", "value": f"Show {i}"} for i in range(12)]
     out = _compose(pr, specs)
     numbers = sorted(c["number"] for c in out["channels"])
-    # 12 marathons spill past 19 into 20, 21 — contiguous from the 10s hint.
-    assert numbers == list(range(10, 22))
+    # Default marathon block is 1–10; 12 marathons spill past into 11, 12 — contiguous.
+    assert numbers == list(range(1, 13))
 
 
 def test_writes_channels_draft(pr, seed):

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -13,6 +14,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 import scheduler  # noqa: E402  (backend/ on sys.path) — shared deploy_lock
+
+# scheduler's import added SCRIPTS_DIR to sys.path, so the pure pipeline modules
+# at the repo root (e.g. channel_blocks) are importable in-process here.
+if str(Path(os.environ.get("PROGRAMMARR_SCRIPTS", Path(__file__).parent.parent.parent))) not in sys.path:
+    sys.path.insert(0, str(Path(os.environ.get("PROGRAMMARR_SCRIPTS", Path(__file__).parent.parent.parent))))
+import channel_blocks  # noqa: E402
 
 router = APIRouter()
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent.parent))
@@ -371,6 +378,20 @@ TYPE_LABELS = {
     "franchise": "Franchise series", "specialty": "Specialty channels",
 }
 
+# Per-block scheme descriptions, keyed by channel_blocks.CANONICAL_ORDER. The
+# numbering ranges are regenerated from the resolved layout; only the prose is fixed.
+_BLOCK_DESC = {
+    "marathon": "TV Marathons — 24/7 single-show loops (needs 50+ episodes to qualify)",
+    "tv_block": "TV Blocks — themed multi-show rotations (era blocks, genre blocks, etc.)",
+    "movie": "Movie Channels — genre and decade-based pools",
+    "franchise": "Franchise & Curated Series — ordered collections (film series in release order, etc.)",
+    "specialty": "Specialty — single-movie loops, holiday, niche themes",
+}
+# Matches the bullet list under the scheme heading, regardless of the ranges in it.
+_SCHEME_BULLETS_RE = re.compile(
+    r"(Assign channel numbers following this cable TV block structure:\n)(?:-[^\n]*\n)+"
+)
+
 
 def _read_prompt_source() -> str:
     for candidate in [DATA_DIR / "PROMPT.md", SCRIPTS_DIR / "PROMPT.md"]:
@@ -392,6 +413,27 @@ def _strip_meta(content: str) -> str:
     return content
 
 
+def _regen_numbering_scheme(content: str, start: int) -> str:
+    """Rewrite PROMPT.md's numbering bullets + example numbers from the live layout.
+
+    Both the per-block ranges and the JSONL example numbers are derived from the
+    configured block sizes (channel_blocks) and `start`, so the prompt the LLM sees
+    always matches what compose/create will actually produce. PROMPT.md's static text
+    is only the default (used verbatim by the CLI).
+    """
+    layout = channel_blocks.resolve_layout(_load_config().get("channel_blocks"), start)
+    bullets = "\n".join(
+        f"- **{layout[k]['start']}–{layout[k]['end']}**: {_BLOCK_DESC[k]}"
+        for k in channel_blocks.CANONICAL_ORDER
+    )
+    content = _SCHEME_BULLETS_RE.sub(lambda m: m.group(1) + bullets + "\n", content)
+    # Example JSONL lines use the marathon/tv_block/movie block starts (10/20/30 by default).
+    content = content.replace('"number": 10,', f'"number": {layout["marathon"]["start"]},')
+    content = content.replace('"number": 20,', f'"number": {layout["tv_block"]["start"]},')
+    content = content.replace('"number": 30,', f'"number": {layout["movie"]["start"]},')
+    return content
+
+
 def _apply_target_prefs_start(content: str, target: str, preferences: str, start: int) -> str:
     if target:
         content = content.replace("{TARGET}", target)
@@ -404,17 +446,7 @@ def _apply_target_prefs_start(content: str, target: str, preferences: str, start
             f"{preferences}\n"
         )
         content = content.replace(ANCHOR, inj + "\n" + ANCHOR)
-    if start != 10:
-        o = start - 10
-        content = content.replace("**10–19**", f"**{10+o}–{19+o}**")
-        content = content.replace("**20–29**", f"**{20+o}–{29+o}**")
-        content = content.replace("**30–49**", f"**{30+o}–{49+o}**")
-        content = content.replace("**50–69**", f"**{50+o}–{69+o}**")
-        content = content.replace("**70–79**", f"**{70+o}–{79+o}**")
-        content = content.replace('"number": 10,', f'"number": {10+o},')
-        content = content.replace('"number": 20,', f'"number": {20+o},')
-        content = content.replace('"number": 30,', f'"number": {30+o},')
-    return content
+    return _regen_numbering_scheme(content, start)
 
 
 @router.get("/pipeline/prompt")
@@ -663,7 +695,9 @@ _CATEGORY = {
     "actor":        ("entity", 50, "shuffle"),
 }
 _CATEGORY_ORDER = ["marathon", "tv_block", "movie", "entity"]
-_CATEGORY_HINT = {"marathon": 10, "tv_block": 20, "movie": 30, "entity": 50}
+# Which channel_blocks block each compose category lands in. Entities
+# (studio/director/actor) share the Franchise block start — historically ch 50.
+_CATEGORY_BLOCK = {"marathon": "marathon", "tv_block": "tv_block", "movie": "movie", "entity": "franchise"}
 _DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
 
 
@@ -766,14 +800,18 @@ def compose_channels(req: ComposeRequest):
     if req.commercials and req.commercials.get("filler_list_id"):
         extras["commercials"] = req.commercials
 
-    # Soft-block numbering: each category starts at max(its hint, running cursor, start).
+    # Soft-block numbering: each category starts at its configured block start (derived
+    # by accumulating per-category sizes from req.start), or the running cursor if a
+    # previous category already overflowed past it — so it spills, never collides. The
+    # layout starts at req.start, so a fresh deploy (req.start == 1) truly begins at 1.
+    layout = channel_blocks.resolve_layout(_load_config().get("channel_blocks"), req.start)
     channels: list[dict] = []
     cursor = req.start
     for category in _CATEGORY_ORDER:
         items = buckets[category]
         if not items:
             continue
-        base = max(_CATEGORY_HINT[category], cursor, req.start)
+        base = max(layout[_CATEGORY_BLOCK[category]]["start"], cursor)
         for i, ch in enumerate(items):
             channels.append({"number": base + i, **ch, **extras})
         cursor = base + len(items)
@@ -809,6 +847,9 @@ async def run_no_ai(
         args += ["--types", types]
     if min_items is not None:
         args += ["--min-items", str(min_items)]
+    # Pass the configured block sizes so the CLI generator and the Planner agree on layout.
+    blocks = channel_blocks.normalize_sizes(_load_config().get("channel_blocks"))
+    args += ["--block-sizes", ",".join(f"{k}={v}" for k, v in blocks.items())]
     return _sse(_stream("generate_no_ai.py", args, "no_ai"))
 
 

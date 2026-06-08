@@ -21,6 +21,10 @@ and uses the context window more efficiently.
 Paste the prompt, then paste the full contents of `plex_library.csv` directly
 after it. Works with any LLM or interface that doesn't support file uploads.
 
+> **Note on the Channel Numbering Scheme below:** the ranges shown are the defaults. When you
+> copy the prompt from the web app, it regenerates that section to match your configured block
+> sizes (Settings → Channel Numbering) and start number. The static text here is what the CLI uses.
+
 ---
 
 You are a TV channel programmer. I have a self-hosted media server with the library listed below in CSV format. Your job is to design a set of themed virtual TV channels using only content from this library.

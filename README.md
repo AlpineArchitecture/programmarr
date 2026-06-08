@@ -215,6 +215,15 @@ These optional keys can be added directly to `config.json` (they're not in the U
 | `tunarr_channel_group` | `tunarr` | Group/folder all generated channels are assigned to in Tunarr |
 | `tunarr_stream_mode` | `hls` | Streaming mode for generated channels. One of `hls`, `hls_slower`, `mpegts`, `hls_direct`, `hls_direct_v2` |
 
+### Channel Numbering
+
+Channels are grouped into five blocks — TV Marathons, TV Blocks, Movie Channels, Franchise &
+Series, Specialty — placed one after another. **Settings → Channel Numbering** lets you set how
+many channel numbers each block reserves (defaults `10/10/20/20/10`); enlarge a block to fit
+more channels if you have a big library. Numbering on a fresh deploy starts at channel **1**, and
+keeping existing channels shifts new ones above the highest you kept. (Stored as `channel_blocks`
+in `config.json`.)
+
 ### Commercials
 
 Any channel can play commercials in the gaps between shows. In Tunarr, create a **filler list** of commercial/bumper clips (a [Plex "Other Videos" library](https://support.plex.tv/articles/200265256-adding-content-to-plex/) works well). Then in Programmarr, open a channel → **Commercials** → turn it on and pick that list. On the next deploy, that channel plays a short ad break between each show.

@@ -6,5 +6,14 @@
 
     "_advanced": "Optional keys below — most users can omit them. See README 'Advanced Configuration'.",
     "tunarr_channel_group": "programmarr",
-    "tunarr_stream_mode": "hls"
+    "tunarr_stream_mode": "hls",
+
+    "_channel_blocks": "Per-category block sizes — how many channel numbers each category reserves. Omit for defaults (10/10/20/20/10). Scale a category up for a large library. Editable in Settings.",
+    "channel_blocks": {
+        "marathon": 10,
+        "tv_block": 10,
+        "movie": 20,
+        "franchise": 20,
+        "specialty": 10
+    }
 }
