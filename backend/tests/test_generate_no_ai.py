@@ -77,5 +77,5 @@ def test_start_offset_shifts_blocks(tmp_path):
     chans = _run(tmp_path, rows, "--types", "movies",
                  "--genres", "Comedy", "--decades", "1990",
                  "--min-items", "1", "--start", "30")
-    # offset = 30 - 10 = 20, so the movie block (normally 30s) shifts into the 50s.
+    # Blocks accumulate from --start 30: marathon 30s, tv_block 40s, so movies land at 50+.
     assert all(c["number"] >= 50 for c in chans)

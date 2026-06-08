@@ -3,10 +3,12 @@
 generate_no_ai.py — Generate a starter channels.json without any AI.
 
 Reads plex_library.csv and auto-generates:
-  - Decade movie channels (30s block) from year metadata
-  - Genre movie channels (30s block) from genre metadata
-  - TV Marathon placeholders (10s block) for shows with 50+ episodes
+  - Decade movie channels (Movie block) from year metadata
+  - Genre movie channels (Movie block) from genre metadata
+  - TV Marathon channels (Marathon block) for shows with 50+ episodes
   - Placeholder entries for franchise/themed channels for manual editing
+
+Block numbers come from the shared channel_blocks layout (see --start / --block-sizes).
 
 Output is a valid channels.json ready for create.py, but franchise channels
 will have empty content lists that you fill in manually.
@@ -25,6 +27,8 @@ Toggle flags (omit any flag to keep its default = "all"):
     --types    comma-separated content types: marathons, tv_blocks, movies,
                franchise, specialty
     --min-items minimum titles for a genre/decade channel (default 5)
+    --start    first channel number (default 10); blocks accumulate from here
+    --block-sizes  per-category sizes, e.g. 'marathon=10,movie=20' (default 10/10/20/20/10)
 """
 
 import argparse
@@ -32,6 +36,8 @@ import csv
 import json
 import sys
 from collections import defaultdict
+
+import channel_blocks
 
 DEFAULT_CSV = "plex_library.csv"
 DEFAULT_OUT = "channels.json"
@@ -64,10 +70,25 @@ TAG_TO_DISPLAY = {tag.lower(): disp for disp, tag in CANONICAL_GENRES}
 # (data-driven); tv_blocks/franchise/specialty are placeholder scaffolds.
 ALL_TYPES = ["marathons", "tv_blocks", "movies", "franchise", "specialty"]
 
-TV_MARATHON_START = 10
-MOVIE_BLOCK_START = 30
-MOVIE_BLOCK_END = 49
 DEFAULT_MIN_ITEMS = 5
+
+
+def parse_block_sizes(val):
+    """Parse a 'marathon=10,movie=20,...' CLI string into a size dict.
+
+    Partial maps are fine — channel_blocks.normalize_sizes fills the rest from
+    defaults. Malformed pairs are ignored (defaults apply).
+    """
+    sizes = {}
+    for pair in parse_list(val):
+        if "=" not in pair:
+            continue
+        key, _, num = pair.partition("=")
+        try:
+            sizes[key.strip()] = int(num)
+        except ValueError:
+            pass
+    return sizes
 
 
 def load_csv(path):
@@ -109,7 +130,11 @@ def main():
     parser.add_argument("--csv", default=DEFAULT_CSV, help="Input CSV from export.py")
     parser.add_argument("--out", default=DEFAULT_OUT, help="Output JSON path")
     parser.add_argument("--start", type=int, default=10, metavar="N",
-                        help="Starting channel number — offsets all block ranges by N-10 (default: 10)")
+                        help="Starting channel number — the first block begins here (default: 10)")
+    parser.add_argument("--block-sizes", default=None, metavar="K=N,K=N",
+                        help="Per-category block sizes, e.g. 'marathon=10,movie=20'. Omitted "
+                             "categories use defaults (10/10/20/20/10). Blocks are placed by "
+                             "accumulating sizes from --start.")
     parser.add_argument("--genres", default=None, metavar="TAG,TAG",
                         help="Comma-separated Plex genre tags to build movie channels for "
                              "(e.g. 'Comedy,Science Fiction,Western'). Default: all canonical genres.")
@@ -124,7 +149,7 @@ def main():
                         help=f"Minimum titles for a genre/decade movie channel (default: {DEFAULT_MIN_ITEMS}).")
     args = parser.parse_args()
 
-    offset = args.start - 10
+    layout = channel_blocks.resolve_layout(parse_block_sizes(args.block_sizes), args.start)
 
     # Resolve toggle selections (None = use defaults / all).
     sel_genres = parse_list(args.genres) if args.genres is not None else [tag for _, tag in CANONICAL_GENRES]
@@ -137,15 +162,16 @@ def main():
     shows = [r for r in rows if r["Type"] == "TV"]
 
     print(f"Loaded {len(movies)} movies, {len(shows)} TV shows from {args.csv}")
-    if offset:
-        print(f"Channel offset: +{offset} (all blocks shifted, starting at {args.start})")
+    print("Channel blocks: " + " · ".join(
+        f"{channel_blocks.BLOCK_LABELS[k]} {layout[k]['start']}–{layout[k]['end']}"
+        for k in channel_blocks.CANONICAL_ORDER))
 
     channels = []
 
     # ── TV Marathons (10s): shows with 50+ episodes ────────────────────────────
     if "marathons" in sel_types:
         print("\nBuilding TV Marathon channels (50+ episodes)...")
-        ch_num = TV_MARATHON_START + offset
+        ch_num = layout["marathon"]["start"]
         marathon_shows = sorted(
             [s for s in shows if parse_year(s.get("Episodes")) and int(s["Episodes"]) >= 50],
             key=lambda s: -int(s["Episodes"])
@@ -160,16 +186,16 @@ def main():
             })
             print(f"  #{ch_num} {show['Title']} 24/7 ({show['Episodes']} eps)")
             ch_num += 1
-            if ch_num > 19 + offset:
-                print(f"  ({args.start}s block full — remaining marathon candidates skipped)")
+            if ch_num > layout["marathon"]["end"]:
+                print("  (TV Marathon block full — remaining marathon candidates skipped)")
                 break
 
     # ── Movie channels (30–49): decades then genres, numbered sequentially ──────
     # Decade and genre channels share the movie block; numbers are assigned in
     # order so an arbitrary set of toggles never collides or leaves fixed gaps.
     if "movies" in sel_types:
-        next_num = MOVIE_BLOCK_START + offset
-        block_end = MOVIE_BLOCK_END + offset
+        next_num = layout["movie"]["start"]
+        block_end = layout["movie"]["end"]
 
         def emit_movie_channel(name, titles):
             nonlocal next_num
@@ -214,15 +240,16 @@ def main():
             ]
             emit_movie_channel(genre_channel_name(genre_tag), titles)
 
-    # ── Franchise placeholders (50s) ──────────────────────────────────────────
+    # ── Franchise placeholders ────────────────────────────────────────────────
     if "franchise" in sel_types:
         print("\nAdding franchise placeholder channels (edit content manually)...")
+        _base = layout["franchise"]["start"]
         placeholders = [
-            (50 + offset, "Marvel MCU",     "ordered", []),
-            (51 + offset, "Star Wars",      "ordered", []),
-            (52 + offset, "Indiana Jones",  "ordered", []),
-            (53 + offset, "James Bond",     "ordered", []),
-            (54 + offset, "The Matrix",     "ordered", []),
+            (_base + 0, "Marvel MCU",     "ordered", []),
+            (_base + 1, "Star Wars",      "ordered", []),
+            (_base + 2, "Indiana Jones",  "ordered", []),
+            (_base + 3, "James Bond",     "ordered", []),
+            (_base + 4, "The Matrix",     "ordered", []),
         ]
         for num, name, shuffle, content in placeholders:
             channels.append({
@@ -234,13 +261,14 @@ def main():
             })
             print(f"  #{num} {name} (placeholder)")
 
-    # ── TV Block placeholders (20s) ────────────────────────────────────────────
+    # ── TV Block placeholders ──────────────────────────────────────────────────
     if "tv_blocks" in sel_types:
         print("\nAdding TV block placeholder channels (edit content manually)...")
+        _base = layout["tv_block"]["start"]
         tv_placeholders = [
-            (20 + offset, "TGIF",                      "block", []),
-            (21 + offset, "Saturday Morning Cartoons",  "block", []),
-            (22 + offset, "Animated TV Block",          "block", []),
+            (_base + 0, "TGIF",                      "block", []),
+            (_base + 1, "Saturday Morning Cartoons",  "block", []),
+            (_base + 2, "Animated TV Block",          "block", []),
         ]
         for num, name, shuffle, content in tv_placeholders:
             channels.append({
@@ -252,12 +280,13 @@ def main():
             })
             print(f"  #{num} {name} (placeholder)")
 
-    # ── Specialty placeholders (70s) ──────────────────────────────────────────
+    # ── Specialty placeholders ────────────────────────────────────────────────
     if "specialty" in sel_types:
         print("\nAdding specialty placeholder channels...")
+        _base = layout["specialty"]["start"]
         specialty = [
-            (70 + offset, "Hackers 24/7",  "ordered", ["Hackers"]),
-            (71 + offset, "Holiday Cheer", "shuffle", []),
+            (_base + 0, "Hackers 24/7",  "ordered", ["Hackers"]),
+            (_base + 1, "Holiday Cheer", "shuffle", []),
         ]
         for num, name, shuffle, content in specialty:
             channels.append({

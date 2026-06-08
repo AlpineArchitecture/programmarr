@@ -10,8 +10,8 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getConfig: () => req<Record<string, string>>('/config'),
-  saveConfig: (data: Record<string, string>) =>
+  getConfig: () => req<Record<string, any>>('/config'),
+  saveConfig: (data: Record<string, any>) =>
     req('/config', { method: 'POST', body: JSON.stringify(data) }),
   getConfigStatus: () =>
     req<{ configured: boolean; has_tmdb: boolean; has_auth: boolean }>('/config/status'),
