@@ -295,7 +295,12 @@ function ExportStep({ onDone }: { onDone: () => void }) {
   return (
     <Stack gap="md">
       <Card withBorder p="md">
-        <Text fw={700} mb="sm">Libraries to scan</Text>
+        <Text fw={700} mb={4}>Libraries to scan</Text>
+        <Text size="xs" c="dimmed" mb="sm">
+          Pick the libraries holding your movies &amp; shows. <b>Leave out any commercials, trailers,
+          or bumper libraries</b> — those go in Tunarr as a filler list for the Commercials feature,
+          not here as channel content. (Plex labels them as “movies,” so they’d otherwise be scanned.)
+        </Text>
         {libLoading && <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Fetching Plex libraries…</Text></Group>}
         {!libLoading && libError && (
           <Alert color="yellow" variant="light" icon={<IconAlertCircle size={16} />}>

@@ -75,8 +75,15 @@ def delete_channels(tunarr_url, probe, from_ch=None, protect=None):
         print(f"    {'[PROBE] ' if probe else ''}Preserving #{ch['number']} {ch['name']} (protected)")
 
 
-def create_channel(tunarr_url, number, name, transcode_id):
+def create_channel(tunarr_url, number, name, transcode_id, filler_list_id=None,
+                   channel_group=None, stream_mode=None):
     channel_id = str(uuid.uuid4())
+    # Commercials: attach a filler list at the channel level. Tunarr's FillerPicker
+    # fills the schedule's flex gaps (opened by build_schedule's pad_ms) with these
+    # clips at playback. Empty list = no commercials (default).
+    filler_collections = (
+        [{"id": filler_list_id, "weight": 100, "cooldownSeconds": 30}] if filler_list_id else []
+    )
     body = {
         "type": "new",
         "channel": {
@@ -85,12 +92,13 @@ def create_channel(tunarr_url, number, name, transcode_id):
             "name": name,
             "startTime": int(datetime.now(timezone.utc).timestamp() * 1000),
             "duration": 0,
-            "groupTitle": "tunarr",
+            "groupTitle": channel_group or "tunarr",
             "guideMinimumDuration": 30000,
             "fillerRepeatCooldown": 30000,
+            "fillerCollections": filler_collections,
             "disableFillerOverlay": False,
             "transcodeConfigId": transcode_id,
-            "streamMode": "hls",
+            "streamMode": stream_mode or "hls",
             "stealth": False,
             "subtitlesEnabled": False,
             "icon": {"path": "", "width": 0, "duration": 0, "position": "bottom-right"},
@@ -133,6 +141,10 @@ def main():
     tunarr_url = cfg["tunarr_url"].rstrip("/")
     plex_url = cfg.get("plex_url", "").rstrip("/")
     plex_token = cfg.get("plex_token", "")
+    # Optional advanced config (absent = Tunarr defaults). streamMode is a lowercase
+    # enum (hls|hls_slower|mpegts|hls_direct|hls_direct_v2); normalize user input.
+    channel_group = cfg.get("tunarr_channel_group") or None
+    stream_mode = (cfg.get("tunarr_stream_mode") or "").strip().lower() or None
 
     # ── Load channel definitions ───────────────────────────────────────────────
     try:
@@ -206,6 +218,11 @@ def main():
         shuffle = SHUFFLE_MAP.get(ch.get("shuffle", "shuffle"), "shuffle")
         content_list = ch.get("content", [])
 
+        # Commercials (optional): attach a filler list + pad episodes to open the gap.
+        comm = ch.get("commercials") or {}
+        comm_filler = comm.get("filler_list_id")
+        comm_pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm_filler else 0
+
         resolved, missing = resolve_content(
             content_list, movie_map, show_map,
             plex_url=plex_url, plex_token=plex_token,
@@ -223,15 +240,17 @@ def main():
             tv_count = sum(1 for r in resolved if r["type"] == "TV")
             movie_count = sum(1 for r in resolved if r["type"] == "Movie")
             ep_count = sum(len(r["programs"]) for r in resolved if r["type"] == "TV")
+            comm_note = f" | commercials ({comm.get('pad_minutes', 5)}m gaps)" if comm_filler else ""
             print(f"  [PROBE] #{number} {name} | shuffle={shuffle} | "
-                  f"{tv_count} shows ({ep_count} eps) + {movie_count} movies")
+                  f"{tv_count} shows ({ep_count} eps) + {movie_count} movies{comm_note}")
             if missing:
                 print(f"    Missing: {', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}")
             stats["created"] += 1
             continue
 
         # Create channel
-        ch_result = create_channel(tunarr_url, number, name, transcode_id)
+        ch_result = create_channel(tunarr_url, number, name, transcode_id, filler_list_id=comm_filler,
+                                   channel_group=channel_group, stream_mode=stream_mode)
         if not ch_result:
             print(f"  FAIL #{number} {name} — channel creation failed")
             stats["skipped"] += 1
@@ -239,8 +258,8 @@ def main():
 
         channel_id = ch_result.get("id")
 
-        # Build and post schedule
-        schedule = build_schedule(shuffle, resolved)
+        # Build and post schedule (pad opens the commercial gap when enabled)
+        schedule = build_schedule(shuffle, resolved, pad_ms=comm_pad_ms)
         if not schedule:
             print(f"  FAIL #{number} {name} — could not build schedule")
             stats["skipped"] += 1

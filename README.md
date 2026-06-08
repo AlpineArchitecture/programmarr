@@ -206,6 +206,19 @@ Everything is set through the UI. Config is stored in `./data/config.json` (bind
 | Plex Token | Yes | [How to find yours](https://www.plexopedia.com/plex-media-server/general/plex-token/) |
 | TMDB API Key | No | Free at [themoviedb.org](https://www.themoviedb.org/settings/api) — only needed for channel logos |
 
+### Advanced Configuration
+
+These optional keys can be added directly to `config.json` (they're not in the UI). Most setups don't need them, and they're safe to leave out — Tunarr's defaults apply. They survive UI saves.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `tunarr_channel_group` | `tunarr` | Group/folder all generated channels are assigned to in Tunarr |
+| `tunarr_stream_mode` | `hls` | Streaming mode for generated channels. One of `hls`, `hls_slower`, `mpegts`, `hls_direct`, `hls_direct_v2` |
+
+### Commercials
+
+Any channel can play commercials in the gaps between shows. In Tunarr, create a **filler list** of commercial/bumper clips (a [Plex "Other Videos" library](https://support.plex.tv/articles/200265256-adding-content-to-plex/) works well). Then in Programmarr, open a channel → **Commercials** → turn it on and pick that list. On the next deploy, that channel plays a short ad break between each show.
+
 ---
 
 ## CLI (advanced)

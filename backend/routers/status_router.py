@@ -57,3 +57,21 @@ def tunarr_channels():
             return json.loads(r.read())
     except Exception:
         return []
+
+
+@router.get("/tunarr/filler-lists")
+def tunarr_filler_lists():
+    """Filler lists in Tunarr — powers the Commercials picker in the channel editor.
+
+    Returns [{id, name, contentCount}]. The user creates/manages these in Tunarr;
+    Programmarr only references one by id when a channel has commercials enabled.
+    """
+    cfg = load_config()
+    url = cfg.get("tunarr_url", "").rstrip("/")
+    if not url:
+        return []
+    try:
+        with urllib.request.urlopen(f"{url}/api/filler-lists", timeout=10) as r:
+            return json.loads(r.read())
+    except Exception:
+        return []

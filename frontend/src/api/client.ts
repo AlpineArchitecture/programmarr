@@ -19,6 +19,7 @@ export const api = {
   getStatus: () =>
     req<{ tunarr: ConnStatus; plex: ConnStatus }>('/status'),
   getTunarrChannels: () => req<TunarrChannel[]>('/tunarr/channels'),
+  getFillerLists: () => req<FillerList[]>('/tunarr/filler-lists'),
 
   getChannels: () => req<ChannelsFile>('/channels'),
   updateChannels: (data: object) =>
@@ -104,6 +105,10 @@ export const api = {
 
 export interface ConnStatus { ok: boolean; url: string; error?: string }
 export interface TunarrChannel { number: number; name: string; id?: string }
+export interface FillerList { id: string; name: string; contentCount: number }
+// Commercials: a channel can pull from a Tunarr filler list, played in gaps
+// between shows (pad_minutes controls the gap size). Absent = commercials off.
+export interface Commercials { filler_list_id: string; filler_list_name?: string; pad_minutes?: number }
 export interface MatchRef { match: 'title_contains'; value: string; order?: string | null; exclude?: string[] }
 export type ContentItem = string | { collection: string } | MatchRef;
 export function isMatchRef(c: ContentItem): c is MatchRef {
@@ -118,6 +123,7 @@ export interface Channel {
   shuffle: 'ordered' | 'shuffle' | 'block';
   content: ContentItem[];
   live?: boolean;
+  commercials?: Commercials;
 }
 
 // ── Live channels (recipes) ──
