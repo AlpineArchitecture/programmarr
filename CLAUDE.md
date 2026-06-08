@@ -123,6 +123,11 @@ See `config.json.example` for the full shape. Keys:
 - `tmdb_api_key` — optional; only `fetch_images.py` uses it. Free key at https://www.themoviedb.org/settings/api
 - `auth_username` / `auth_password` — optional HTTP Basic Auth. **Both blank = auth disabled.** When set, every backend request requires them.
 - `recipes_enabled` (bool, default `false`), `recipe_interval_hours` (number, default `12`) — live-channel scheduler (see Live Channels).
+- `tunarr_channel_group` (string, optional) — Tunarr `groupTitle` for all created channels (default `"tunarr"`).
+- `tunarr_stream_mode` (string, optional) — Tunarr `streamMode`, lowercase enum: `hls`|`hls_slower`|`mpegts`|`hls_direct`|`hls_direct_v2` (default `"hls"`). Applied by `create.py` at channel creation; **not** exposed in the UI.
+
+> `config_router.save_config` **merge-writes** `config.json`, so editing these (or the `recipes_*`) keys
+> by hand survives a Settings save — the UI form only overwrites the keys it manages.
 
 ## Architecture
 
@@ -178,6 +183,20 @@ deploy time via the Plex API; a not-found collection is warned and skipped. Plai
 match Plex names exactly (case-insensitive). A title may appear on multiple channels —
 intentional. Live channels add one more content-ref type (`{"match": "title_contains", …}`),
 documented under Live Channels.
+
+**Commercials (optional).** A channel may carry
+`"commercials": {"filler_list_id": "…", "filler_list_name": "…", "pad_minutes": 5}`. At deploy,
+`create.py` attaches that Tunarr filler list to the channel (`fillerCollections`) and pads each
+show up to the next `pad_minutes` boundary (`build_schedule(pad_ms=…)`), opening a gap that
+Tunarr's FillerPicker fills with the clips **between shows** at playback. Absent = off. Applies to
+**every** channel type (TV and movie) — density self-adjusts since the gap is per-program (a break
+between movies vs. between episodes). The filler list itself is created/managed in Tunarr; the
+picker is fed by `GET /api/tunarr/filler-lists`. The field is **per-channel by design**: the
+Planner toggle is a blanket convenience that writes the same list onto every channel in a batch,
+but each channel can point at a different filler list (the Channels editor already allows this) —
+the basis for future era-matched pooling (90s ads → 90s channel; see `docs/ideas.md`).
+**Mid-roll (ads inside a show) is deliberately not used — it doesn't stream on hardware-accelerated
+(QSV) Tunarr; see [`docs/tunarr-commercials-findings.md`](docs/tunarr-commercials-findings.md).**
 
 ## API Endpoints
 

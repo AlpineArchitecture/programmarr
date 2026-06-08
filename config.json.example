@@ -2,5 +2,9 @@
     "tunarr_url": "http://your-tunarr-server:8000",
     "plex_url": "http://your-plex-server:32400",
     "plex_token": "your-plex-token-here",
-    "tmdb_api_key": "your-tmdb-api-key-here"
+    "tmdb_api_key": "your-tmdb-api-key-here",
+
+    "_advanced": "Optional keys below — most users can omit them. See README 'Advanced Configuration'.",
+    "tunarr_channel_group": "programmarr",
+    "tunarr_stream_mode": "hls"
 }

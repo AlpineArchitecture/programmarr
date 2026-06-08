@@ -217,8 +217,12 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
                 summary["skipped"].append({"number": number, "name": name, "reason": "resolved to empty — not patched"})
                 continue
             try:
+                # Preserve the commercial gap on live channels (filler stays attached;
+                # only the pad needs re-applying each cycle).
+                comm = ch.get("commercials") or {}
+                pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm.get("filler_list_id") else 0
                 channel_engine.update_channel_in_place(
-                    tunarr_url, number, ch.get("shuffle", "shuffle"), resolved)
+                    tunarr_url, number, ch.get("shuffle", "shuffle"), resolved, pad_ms=pad_ms)
                 change["applied"] = True
             except channel_engine.ChannelEngineError as e:
                 summary["skipped"].append({"number": number, "name": name, "reason": str(e)})

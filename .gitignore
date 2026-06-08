@@ -38,3 +38,6 @@ screenshot_*.png
 
 # Playwright MCP scratch output (snapshots, console logs, ad-hoc screenshots)
 .playwright-mcp/
+
+# graphify knowledge-graph output (generated artifact — graph.html/json + report)
+graphify-out/

@@ -10,7 +10,7 @@ import {
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, Channel, ChannelSyncState, ContentItem, isMatchRef, RecipeMatch } from '../api/client';
+import { api, Channel, ChannelSyncState, ContentItem, FillerList, isMatchRef, RecipeMatch } from '../api/client';
 
 function syncedAgo(iso?: string): string {
   if (!iso) return 'never';
@@ -181,6 +181,17 @@ function ChannelModal({
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Commercials
+  const [commEnabled, setCommEnabled] = useState(false);
+  const [commListId, setCommListId] = useState<string | null>(null);
+  const [commPad, setCommPad] = useState('5');
+  const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
+
+  // Filler lists live in Tunarr; fetch once so the picker can offer them.
+  useEffect(() => {
+    api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([]));
+  }, []);
+
   useEffect(() => {
     if (!channel) return;
     setName(channel.name);
@@ -188,6 +199,10 @@ function ChannelModal({
     setShuffle(channel.shuffle || 'shuffle');
     setLive(!!channel.live);
     setBuilding(false);
+    const comm = channel.commercials;
+    setCommEnabled(!!comm?.filler_list_id);
+    setCommListId(comm?.filler_list_id ?? null);
+    setCommPad(String(comm?.pad_minutes ?? 5));
 
     const mref = channel.content.find(isMatchRef);
     setMatchRef(mref ? { value: mref.value, order: mref.order || 'release_date', exclude: mref.exclude || [] } : null);
@@ -223,6 +238,13 @@ function ChannelModal({
     }
     const payload: any = { number: Number(number), name, shuffle, content: rawContent };
     if (live) payload.live = true;
+    if (commEnabled && commListId) {
+      payload.commercials = {
+        filler_list_id: commListId,
+        filler_list_name: fillerLists.find((f) => f.id === commListId)?.name,
+        pad_minutes: Number(commPad),
+      };
+    }
     await api.updateChannel(channel!.number, payload);
   }
 
@@ -378,6 +400,49 @@ function ChannelModal({
           </Button>
         )}
 
+        <Divider label="Commercials" labelPosition="left" />
+
+        <Switch
+          checked={commEnabled}
+          onChange={(e) => {
+            const on = e.currentTarget.checked;
+            setCommEnabled(on);
+            if (on && !commListId && fillerLists.length) setCommListId(fillerLists[0].id);
+          }}
+          color="orange"
+          label="Play commercials between shows"
+          description="Pulls clips from a Tunarr filler list and plays them in a short gap after each show — like real TV."
+        />
+
+        {commEnabled && (
+          fillerLists.length === 0 ? (
+            <Text size="xs" c="yellow.4">
+              No filler lists found in Tunarr. Create one in Tunarr first (a library of
+              commercial / bumper clips), then reopen this editor.
+            </Text>
+          ) : (
+            <Group grow align="start">
+              <Select
+                label="Filler list"
+                data={fillerLists.map((f) => ({ value: f.id, label: `${f.name} (${f.contentCount})` }))}
+                value={commListId}
+                onChange={setCommListId}
+                allowDeselect={false}
+              />
+              <Select
+                label="Break length"
+                data={[
+                  { value: '5', label: 'Short (~3 min)' },
+                  { value: '30', label: 'Long (~8 min)' },
+                ]}
+                value={commPad}
+                onChange={(v) => setCommPad(v || '5')}
+                allowDeselect={false}
+              />
+            </Group>
+          )
+        )}
+
         <Divider />
 
         <Group justify="flex-end">
@@ -456,6 +521,9 @@ function ChannelRow({
             )}
             {channel.live && (
               <Text size="xs" c="dimmed">synced {syncedAgo(sync?.checked_at)}</Text>
+            )}
+            {channel.commercials?.filler_list_id && (
+              <Badge size="xs" color="grape" variant="light">commercials</Badge>
             )}
           </Group>
         </Box>

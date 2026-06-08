@@ -304,7 +304,14 @@ def resolve_content(content_list, movie_map, show_map,
 
 # ── Schedule builder ───────────────────────────────────────────────────────────
 
-def build_schedule(shuffle_type, resolved_items):
+def build_schedule(shuffle_type, resolved_items, pad_ms=0):
+    """Build a rolling random schedule.
+
+    pad_ms > 0 rounds each program up to the next pad_ms boundary, opening a flex
+    gap after it (flexPreference="end"). That gap is what the channel's attached
+    filler list ("commercials") fills at playback — see the Commercials feature.
+    pad_ms == 0 (default) keeps episodes back-to-back, unchanged from before.
+    """
     all_programs = [p for item in resolved_items for p in item["programs"]]
     if not all_programs:
         return None
@@ -348,7 +355,7 @@ def build_schedule(shuffle_type, resolved_items):
             "type": "random",
             "flexPreference": "end",
             "maxDays": 30,
-            "padMs": 0,
+            "padMs": pad_ms,
             "padStyle": "episode",
             "randomDistribution": "uniform",
             "slots": slots,
@@ -387,18 +394,22 @@ def read_channel_programming(tunarr_url, channel_id):
     return {i["id"] for i in pr.get("lineup", []) if i.get("type") == "content" and i.get("id")}
 
 
-def update_channel_in_place(tunarr_url, number, shuffle, resolved):
+def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0):
     """Patch an existing channel's programming in place — never delete/recreate.
 
     Looks the channel up by number (preserving its Tunarr id and Plex DVR mapping),
     rebuilds the schedule from `resolved`, and POSTs it. This is the primitive the
     live-channel scheduler calls after detecting a content change. Raises
     ChannelEngineError if the channel is missing or no schedule can be built.
+
+    pad_ms preserves a commercials channel's gap on live updates (the attached filler
+    list survives — only programming is replaced — but the pad must be re-applied or the
+    gap, and thus the commercials, would vanish after a cycle).
     """
     ch = find_channel_by_number(tunarr_url, number)
     if not ch:
         raise ChannelEngineError(f"Channel #{number} not found in Tunarr")
-    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved)
+    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved, pad_ms=pad_ms)
     if not schedule:
         raise ChannelEngineError(f"Channel #{number}: no schedule could be built (no content resolved)")
     return set_programming(tunarr_url, ch["id"], schedule)

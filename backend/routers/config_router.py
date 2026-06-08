@@ -51,9 +51,18 @@ def save_config(config: ConfigModel):
     for field in ("auth_password", "plex_token", "tmdb_api_key"):
         if data.get(field) == MASK:
             data[field] = existing.get(field, "")
-    data = {k: v for k, v in data.items() if v}
+    # Merge onto existing so keys the UI form doesn't manage are preserved — e.g.
+    # the live-channel keys (recipes_enabled, recipe_interval_hours) and the advanced
+    # config keys (tunarr_channel_group, tunarr_stream_mode), which are edited directly
+    # in config.json and must survive a Settings save. UI fields left empty are removed.
+    merged = dict(existing)
+    for k, v in data.items():
+        if v:
+            merged[k] = v
+        else:
+            merged.pop(k, None)
     with open(_path(), "w") as f:
-        json.dump(data, f, indent=4)
+        json.dump(merged, f, indent=4)
     return {"ok": True}
 
 
