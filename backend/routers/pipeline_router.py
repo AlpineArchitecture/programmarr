@@ -520,10 +520,10 @@ async def validate(
 
     new_channels = data.get("channels", [])
     if append:
-        # Merge AI-discovered channels on top of the existing deterministic lineup,
+        # Merge AI-discovered channels on top of the in-progress draft lineup,
         # renumbering any collisions to the next free slot so nothing is overwritten.
         existing = {"channels": [], "orphaned": [], "suggested_channels": []}
-        cpath = DATA_DIR / "channels.json"
+        cpath = DATA_DIR / "channels.draft.json"
         if cpath.exists():
             with open(cpath, encoding="utf-8") as f:
                 existing = json.load(f)
@@ -557,7 +557,7 @@ async def validate(
         return {"ok": True, "count": len(data["channels"]), "added": added,
                 "skipped_dupes": skipped_dupes, "channels": data["channels"]}
 
-    with open(DATA_DIR / "channels.json", "w", encoding="utf-8") as f:
+    with open(DATA_DIR / "channels.draft.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
     return {"ok": True, "count": len(new_channels), "channels": new_channels}
@@ -580,7 +580,7 @@ def discover_prompt(opts: DiscoverOptions = DiscoverOptions()):
     any collisions anyway.
     """
     existing: list[dict] = []
-    cpath = DATA_DIR / "channels.json"
+    cpath = DATA_DIR / "channels.draft.json"
     if cpath.exists():
         try:
             with open(cpath, encoding="utf-8") as f:
@@ -779,7 +779,7 @@ def compose_channels(req: ComposeRequest):
         cursor = base + len(items)
 
     data = {"channels": channels, "orphaned": [], "suggested_channels": []}
-    with open(DATA_DIR / "channels.json", "w", encoding="utf-8") as f:
+    with open(DATA_DIR / "channels.draft.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
     return {
@@ -850,13 +850,74 @@ class DeployRequest(BaseModel):
     no_delete: bool = False
 
 
+def _reconcile_channels_json(protected_numbers: list[int]) -> None:
+    """Write channels.json to mirror what create.py ACTUALLY pushed, then clear staging files.
+
+    The deployed set is deploy_temp.json — the selected, number-remapped subset that
+    deploy-selective built and create.py read.  Do NOT read channels.draft.json here:
+    the draft may still contain channels the user DESELECTED and pre-remap numbers.
+      wipe (no protected) -> channels.json = deployed set.
+      keep (protected)    -> channels.json = existing protected entries merged with deployed set.
+    Called ONLY after a successful create.py run.
+    """
+    deployed_path = DATA_DIR / "deploy_temp.json"
+    canon_path = DATA_DIR / "channels.json"
+    draft_path = DATA_DIR / "channels.draft.json"
+
+    with open(deployed_path, encoding="utf-8") as f:
+        deployed = json.load(f)
+    deployed_channels = deployed.get("channels", [])
+
+    if protected_numbers:
+        protected = set(protected_numbers)
+        try:
+            with open(canon_path, encoding="utf-8") as f:
+                existing = json.load(f).get("channels", [])
+        except FileNotFoundError:
+            existing = []
+        by_num = {c["number"]: c for c in existing if c.get("number") in protected}
+        for c in deployed_channels:
+            by_num[c["number"]] = c  # just-deployed wins on collision
+        out = {**deployed, "channels": sorted(by_num.values(), key=lambda c: c["number"])}
+    else:
+        out = deployed
+
+    with open(canon_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+
+    for p in (draft_path, deployed_path):
+        if p.exists():
+            p.unlink()
+
+
+async def _deploy_and_reconcile(args: list[str], protected_numbers: list[int]):
+    """Stream create.py; reconcile channels.json from the deployed set on success.
+
+    Reconcile runs BEFORE forwarding the terminal 'done' event so any client
+    acting on 'done' already sees a consistent channels.json.  A failed deploy
+    never writes channels.json.
+    """
+    async for chunk in _locked_stream("create.py", args, "deploy"):
+        if chunk.startswith("data: "):
+            try:
+                payload = json.loads(chunk[6:].strip())
+            except Exception:
+                payload = None
+            if payload and payload.get("type") == "done" and payload.get("returncode") == 0:
+                try:
+                    _reconcile_channels_json(protected_numbers)
+                except Exception as e:
+                    yield f"data: {json.dumps({'type': 'line', 'text': f'WARNING: reconcile failed: {e}'})}\n\n"
+        yield chunk
+
+
 @router.post("/pipeline/deploy-selective")
 async def run_deploy_selective(req: DeployRequest):
-    channels_path = DATA_DIR / "channels.json"
-    if not channels_path.exists():
-        raise HTTPException(404, "channels.json not found")
+    draft_path = DATA_DIR / "channels.draft.json"
+    if not draft_path.exists():
+        raise HTTPException(404, "channels.draft.json not found — compose a lineup first")
 
-    with open(channels_path, encoding="utf-8") as f:
+    with open(draft_path, encoding="utf-8") as f:
         data = json.load(f)
 
     sel_map = {s.original_number: s for s in req.selections if s.include}
@@ -876,7 +937,7 @@ async def run_deploy_selective(req: DeployRequest):
         args.append("--no-delete")
     if req.protected_numbers:
         args += ["--protect", ",".join(str(n) for n in req.protected_numbers)]
-    return _sse(_locked_stream("create.py", args, "deploy"))
+    return _sse(_deploy_and_reconcile(args, req.protected_numbers))
 
 
 @router.post("/pipeline/images")
@@ -945,7 +1006,7 @@ def collection_poster(collection_id: str):
 
 @router.post("/pipeline/collections/apply")
 def apply_collections(selections: list[CollectionSelection]):
-    channels_path = DATA_DIR / "channels.json"
+    channels_path = DATA_DIR / "channels.draft.json"
     if channels_path.exists():
         with open(channels_path, encoding="utf-8") as f:
             data = json.load(f)

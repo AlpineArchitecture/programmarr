@@ -2,6 +2,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -57,6 +59,72 @@ def tunarr_channels():
             return json.loads(r.read())
     except Exception:
         return []
+
+
+def _parse_xmltv_time(s: str) -> str:
+    return datetime.strptime(s.strip(), "%Y%m%d%H%M%S %z").isoformat()
+
+
+def _num_from_cid(cid: str) -> int | None:
+    try:
+        return int(cid.split(".")[0][1:])
+    except (ValueError, IndexError):
+        return None
+
+
+def parse_guide_xml(xml_text: str) -> dict:
+    """Pure: XMLTV string -> {channels:[...], programmes:[...]}. No network. Unit-tested directly."""
+    root = ET.fromstring(xml_text)
+
+    channels = []
+    for ch in root.findall("channel"):
+        num = _num_from_cid(ch.get("id", ""))
+        if num is None:
+            continue
+        name_el = ch.find("display-name")
+        icon_el = ch.find("icon")
+        channels.append({
+            "number": num,
+            "name": (name_el.text or "").strip() if name_el is not None else f"Channel {num}",
+            "icon": icon_el.get("src") if icon_el is not None else None,
+        })
+
+    programmes = []
+    for pr in root.findall("programme"):
+        num = _num_from_cid(pr.get("channel", ""))
+        if num is None:
+            continue
+        title_el = pr.find("title")
+        sub_el = pr.find("sub-title")
+        try:
+            start = _parse_xmltv_time(pr.get("start", ""))
+            stop = _parse_xmltv_time(pr.get("stop", ""))
+        except ValueError:
+            continue
+        programmes.append({
+            "number": num,
+            "start": start,
+            "stop": stop,
+            "title": (title_el.text or "").strip() if title_el is not None else "",
+            "episode": (sub_el.text or "").strip() if sub_el is not None else "",
+        })
+
+    channels.sort(key=lambda c: c["number"])
+    return {"channels": channels, "programmes": programmes}
+
+
+@router.get("/guide")
+def get_guide():
+    cfg = load_config()
+    url = cfg.get("tunarr_url", "").rstrip("/")
+    if not url:
+        return {"channels": [], "programmes": [], "error": "Tunarr not configured"}
+    try:
+        with urllib.request.urlopen(f"{url}/api/xmltv.xml", timeout=10) as r:
+            xml_text = r.read().decode("utf-8", errors="replace")
+        return parse_guide_xml(xml_text)
+    except Exception as e:
+        return {"channels": [], "programmes": [], "error": f"Could not reach Tunarr: {e}"}
 
 
 @router.get("/tunarr/filler-lists")

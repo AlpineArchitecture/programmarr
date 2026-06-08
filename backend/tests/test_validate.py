@@ -10,7 +10,7 @@ def _run(coro):
 
 def _write_channels(pr, channels):
     data = {"channels": channels, "orphaned": [], "suggested_channels": []}
-    (pr._test_data_dir / "channels.json").write_text(json.dumps(data), encoding="utf-8")
+    (pr._test_data_dir / "channels.draft.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 def test_fresh_write_from_jsonl(pr):
@@ -22,7 +22,7 @@ def test_fresh_write_from_jsonl(pr):
     res = _run(pr.validate(file=None, content=jsonl, append=False))
     assert res["ok"] is True
     assert res["count"] == 2
-    written = json.loads((pr._test_data_dir / "channels.json").read_text(encoding="utf-8"))
+    written = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
     assert [c["number"] for c in written["channels"]] == [10, 11]
 
 

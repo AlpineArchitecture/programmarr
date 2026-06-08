@@ -6,11 +6,11 @@ import {
 import { useDisclosure } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
 import {
-  IconBolt, IconCheck, IconEdit, IconPlus, IconRepeat, IconTag, IconTrash, IconX,
+  IconCheck, IconEdit, IconPlus, IconRepeat, IconTag, IconTrash, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, Channel, ChannelSyncState, ContentItem, FillerList, isMatchRef, RecipeMatch } from '../api/client';
+import { api, Channel, ChannelSyncState, ContentItem, FillerList, isMatchRef, RecipeMatch, TunarrChannel } from '../api/client';
 
 function syncedAgo(iso?: string): string {
   if (!iso) return 'never';
@@ -179,7 +179,6 @@ function ChannelModal({
   const [matchRef, setMatchRef] = useState<MatchRule | null>(null);
   const [building, setBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [syncing, setSyncing] = useState(false);
 
   // Commercials
   const [commEnabled, setCommEnabled] = useState(false);
@@ -248,43 +247,20 @@ function ChannelModal({
     await api.updateChannel(channel!.number, payload);
   }
 
-  async function save() {
+  // Save to channels.json then immediately push to Tunarr in place.
+  async function saveAndApply() {
     if (!channel) return;
     setSaving(true);
     try {
       await persist();
-      notifications.show({ message: 'Channel saved', color: 'green', icon: <IconCheck size={14} /> });
+      await api.applyChannel(channel.number);
+      notifications.show({ message: `Channel #${channel.number} saved and applied`, color: 'green', icon: <IconCheck size={14} /> });
       onSaved();
       onClose();
     } catch (e: any) {
       notifications.show({ title: 'Error', message: e.message, color: 'red' });
     } finally {
       setSaving(false);
-    }
-  }
-
-  // Save, then immediately run a scheduler cycle scoped to this channel — applies
-  // the recipe to Tunarr in place without leaving the editor.
-  async function saveAndSync() {
-    if (!channel) return;
-    setSyncing(true);
-    try {
-      await persist();
-      const res = await api.runRecipes(true, Number(number));
-      const c = res.changes.find((x) => x.number === Number(number));
-      notifications.show({
-        message: c
-          ? `Synced #${number} — +${c.added_count}${c.removed_count ? ` −${c.removed_count}` : ''}`
-          : `Synced #${number} — already up to date`,
-        color: 'green',
-        icon: <IconCheck size={14} />,
-      });
-      onSaved();
-      onClose();
-    } catch (e: any) {
-      notifications.show({ title: 'Sync failed', message: e.message, color: 'red' });
-    } finally {
-      setSyncing(false);
     }
   }
 
@@ -447,18 +423,7 @@ function ChannelModal({
 
         <Group justify="flex-end">
           <Button variant="subtle" color="gray" onClick={onClose}>Cancel</Button>
-          {live && (
-            <Button
-              variant="light"
-              color="orange"
-              leftSection={<IconBolt size={14} />}
-              onClick={saveAndSync}
-              loading={syncing}
-            >
-              Save &amp; Sync now
-            </Button>
-          )}
-          <Button color="orange" onClick={save} loading={saving}>Save Channel</Button>
+          <Button color="orange" onClick={saveAndApply} loading={saving}>Save and Apply</Button>
         </Group>
       </Stack>
     </Modal>
@@ -473,7 +438,7 @@ function ChannelRow({
   onEdit,
   onDelete,
 }: {
-  channel: Channel;
+  channel: TunarrChannel;
   sync?: ChannelSyncState;
   onEdit: () => void;
   onDelete: () => void;
@@ -507,25 +472,14 @@ function ChannelRow({
 
         <Box style={{ flex: 1, minWidth: 0 }}>
           <Text size="sm" fw={600} truncate>{channel.name}</Text>
-          <Group gap={4} mt={2}>
-            <Badge size="xs" color={SHUFFLE_COLOR[channel.shuffle] || 'gray'} variant="light">
-              {channel.shuffle}
-            </Badge>
-            <Badge size="xs" color="dark" variant="light" leftSection={<IconTag size={10} />}>
-              {channel.content.length} item{channel.content.length !== 1 ? 's' : ''}
-            </Badge>
-            {channel.live && (
+          {sync?.checked_at && (
+            <Group gap={4} mt={2}>
               <Badge size="xs" color="orange" variant="light" leftSection={<IconRepeat size={10} />}>
                 live
               </Badge>
-            )}
-            {channel.live && (
-              <Text size="xs" c="dimmed">synced {syncedAgo(sync?.checked_at)}</Text>
-            )}
-            {channel.commercials?.filler_list_id && (
-              <Badge size="xs" color="grape" variant="light">commercials</Badge>
-            )}
-          </Group>
+              <Text size="xs" c="dimmed">synced {syncedAgo(sync.checked_at)}</Text>
+            </Group>
+          )}
         </Box>
 
         <Group gap={4} style={{ flexShrink: 0 }}>
@@ -534,7 +488,7 @@ function ChannelRow({
               <IconEdit size={16} />
             </ActionIcon>
           </Tooltip>
-          <Tooltip label="Delete">
+          <Tooltip label="Delete from channels.json">
             <ActionIcon variant="subtle" color="red" onClick={del} loading={deleting}>
               <IconTrash size={16} />
             </ActionIcon>
@@ -545,20 +499,48 @@ function ChannelRow({
   );
 }
 
+function OrphanRow({ channel }: { channel: TunarrChannel }) {
+  return (
+    <Card p="sm" mb="xs" style={{ opacity: 0.65 }}>
+      <Group gap="sm" wrap="nowrap">
+        <Badge
+          size="lg"
+          variant="filled"
+          color="dark"
+          radius="sm"
+          style={{ minWidth: 52, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
+        >
+          {channel.number}
+        </Badge>
+
+        <Box style={{ flex: 1, minWidth: 0 }}>
+          <Text size="sm" fw={600} truncate>{channel.name}</Text>
+          <Badge size="xs" color="gray" variant="light" mt={2}>Not managed by Programmarr</Badge>
+        </Box>
+      </Group>
+    </Card>
+  );
+}
+
 // ── Root ───────────────────────────────────────────────────────────────────────
 
 export default function Channels() {
   const { number } = useParams<{ number?: string }>();
   const nav = useNavigate();
-  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channels, setChannels] = useState<TunarrChannel[]>([]);
+  const [managed, setManaged] = useState<Set<number>>(new Set());
   const [sync, setSync] = useState<Record<string, ChannelSyncState>>({});
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Channel | null>(null);
   const [opened, { open, close }] = useDisclosure(false);
 
   async function load() {
-    const data = await api.getChannels();
-    setChannels([...data.channels].sort((a, b) => a.number - b.number));
+    const [tunarr, local] = await Promise.all([
+      api.getTunarrChannels(),
+      api.getChannels().catch(() => ({ channels: [], orphaned: [], suggested_channels: [] })),
+    ]);
+    setChannels([...tunarr].sort((a, b) => a.number - b.number));
+    setManaged(new Set(local.channels.map((c) => c.number)));
     setLoading(false);
     api.getRecipesStatus().then((s) => setSync(s.channels || {})).catch(() => {});
   }
@@ -572,14 +554,19 @@ export default function Channels() {
   useEffect(() => {
     if (!number) { openedFor.current = null; return; }
     if (openedFor.current === number || channels.length === 0) return;
-    const ch = channels.find((c) => c.number === Number(number));
-    if (ch) { setEditing(ch); openedFor.current = number; open(); }
-  }, [number, channels]);
+    const n = Number(number);
+    if (!managed.has(n)) return; // orphan — don't open modal
+    openedFor.current = number;
+    api.getChannel(n)
+      .then((ch) => { setEditing(ch); open(); })
+      .catch(() => {}); // 404 = orphan after all; stay closed
+  }, [number, channels, managed]);
 
-  function edit(ch: Channel) {
-    setEditing(ch);
+  function edit(ch: TunarrChannel) {
     nav(`/channels/${ch.number}`, { replace: true });
-    open();
+    api.getChannel(ch.number)
+      .then((full) => { setEditing(full); open(); })
+      .catch(() => {});
   }
 
   function handleClose() {
@@ -591,15 +578,20 @@ export default function Channels() {
     return <Stack align="center" justify="center" h={400}><Loader color="orange" /></Stack>;
   }
 
-  const liveCount = channels.filter((c) => c.live).length;
+  const liveCount = Array.from(managed).filter((n) => {
+    // live flag only known from channels.json — approximate from sync state
+    return !!sync[String(n)];
+  }).length;
+  // Show live badge count from sync state as a proxy; exact count needs local data
+  const syncedCount = Object.keys(sync).length;
 
   return (
     <Stack gap="lg">
       <Group justify="space-between">
         <Title order={2}>Channels ({channels.length})</Title>
-        {liveCount > 0 && (
+        {syncedCount > 0 && (
           <Badge color="orange" variant="light" leftSection={<IconRepeat size={12} />}>
-            {liveCount} live
+            {syncedCount} live
           </Badge>
         )}
       </Group>
@@ -607,19 +599,23 @@ export default function Channels() {
       {channels.length === 0 ? (
         <Card p="xl">
           <Stack align="center" gap="xs">
-            <Text c="dimmed">No channels.json found — run the pipeline first</Text>
+            <Text c="dimmed">No channels in Tunarr yet — run the pipeline first</Text>
           </Stack>
         </Card>
       ) : (
         <Box>
           {channels.map((ch) => (
-            <ChannelRow
-              key={ch.number}
-              channel={ch}
-              sync={sync[String(ch.number)]}
-              onEdit={() => edit(ch)}
-              onDelete={() => load()}
-            />
+            managed.has(ch.number) ? (
+              <ChannelRow
+                key={ch.number}
+                channel={ch}
+                sync={sync[String(ch.number)]}
+                onEdit={() => edit(ch)}
+                onDelete={() => load()}
+              />
+            ) : (
+              <OrphanRow key={ch.number} channel={ch} />
+            )
           ))}
         </Box>
       )}

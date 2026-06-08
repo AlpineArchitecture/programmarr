@@ -5,7 +5,7 @@ import json
 
 def _write_channels(pr, channels):
     data = {"channels": channels, "orphaned": [], "suggested_channels": []}
-    (pr._test_data_dir / "channels.json").write_text(json.dumps(data), encoding="utf-8")
+    (pr._test_data_dir / "channels.draft.json").write_text(json.dumps(data), encoding="utf-8")
 
 
 def test_seeds_from_existing_lineup_and_numbers_from_max_plus_one(pr):

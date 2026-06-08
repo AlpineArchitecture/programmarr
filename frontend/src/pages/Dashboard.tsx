@@ -9,7 +9,8 @@ import {
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, ConnStatus, RecipesStatus, TunarrChannel } from '../api/client';
+import { api, ConnStatus, Guide, RecipesStatus } from '../api/client';
+import { GuideGrid } from '../components/GuideGrid';
 
 function ConnectionCard({ label, status }: { label: string; status: ConnStatus | undefined }) {
   const ok = status?.ok ?? false;
@@ -34,31 +35,6 @@ function ConnectionCard({ label, status }: { label: string; status: ConnStatus |
   );
 }
 
-const SHUFFLE_COLOR: Record<string, string> = { ordered: 'blue', block: 'violet', shuffle: 'teal' };
-
-function ChannelCard({ ch, onClick }: { ch: TunarrChannel; onClick: () => void }) {
-  return (
-    <Card
-      p="sm"
-      style={{ cursor: 'pointer', transition: 'border-color 120ms' }}
-      onClick={onClick}
-      styles={{ root: { '&:hover': { borderColor: 'var(--mantine-color-orange-5)' } } }}
-    >
-      <Group gap="sm" wrap="nowrap">
-        <Badge
-          size="lg"
-          variant="filled"
-          color="dark"
-          radius="sm"
-          style={{ minWidth: 48, fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
-        >
-          {ch.number}
-        </Badge>
-        <Text size="sm" fw={600} truncate style={{ flex: 1 }}>{ch.name}</Text>
-      </Group>
-    </Card>
-  );
-}
 
 function relTime(iso: string): string {
   const secs = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -165,7 +141,7 @@ function LiveRecipesCard({ status, onChange }: { status: RecipesStatus; onChange
 export default function Dashboard() {
   const nav = useNavigate();
   const [status, setStatus] = useState<{ tunarr: ConnStatus; plex: ConnStatus } | null>(null);
-  const [channels, setChannels] = useState<TunarrChannel[]>([]);
+  const [guide, setGuide] = useState<Guide | null>(null);
   const [recipes, setRecipes] = useState<RecipesStatus | null>(null);
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -174,14 +150,14 @@ export default function Dashboard() {
   async function load(silent = false) {
     silent ? setRefreshing(true) : setLoading(true);
     try {
-      const [s, ch, cs, rs] = await Promise.all([
+      const [s, g, cs, rs] = await Promise.all([
         api.getStatus(),
-        api.getTunarrChannels(),
+        api.getGuide().catch(() => ({ channels: [], programmes: [], error: 'Could not load guide' })),
         api.getConfigStatus(),
         api.getRecipesStatus().catch(() => null),
       ]);
       setStatus(s);
-      setChannels([...ch].sort((a, b) => a.number - b.number));
+      setGuide(g);
       setConfigured(cs.configured);
       setRecipes(rs);
     } catch { /* ignore */ }
@@ -193,6 +169,16 @@ export default function Dashboard() {
   }
 
   useEffect(() => { load(); }, []);
+
+  // Quietly refresh the guide every 5 minutes so it doesn't go stale
+  useEffect(() => {
+    const id = setInterval(() => {
+      api.getGuide()
+        .then((g) => setGuide(g))
+        .catch(() => {});
+    }, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   if (loading) {
     return <Stack align="center" justify="center" h={400}><Loader color="orange" /></Stack>;
@@ -248,33 +234,37 @@ export default function Dashboard() {
         </Box>
       )}
 
-      {/* Channel grid */}
+      {/* EPG guide grid */}
       <Box>
         <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb="xs" style={{ letterSpacing: '0.08em' }}>
-          Live Channels ({channels.length})
+          Guide ({guide?.channels.length ?? 0} channels)
         </Text>
 
-        {channels.length === 0 ? (
+        {guide?.error || !guide?.channels.length ? (
           <Card p="xl">
             <Stack align="center" gap="md">
               <ThemeIcon size={52} variant="light" color="orange" radius="xl">
                 <IconBroadcast size={30} />
               </ThemeIcon>
               <Stack align="center" gap={4}>
-                <Text fw={600}>No channels in Tunarr yet</Text>
-                <Text size="sm" c="dimmed">Run the pipeline to build your first channels</Text>
+                <Text fw={600}>
+                  {guide?.error ? 'Could not reach Tunarr' : 'No channels in Tunarr yet'}
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {guide?.error
+                    ? guide.error
+                    : 'Run the pipeline to build your first channels'}
+                </Text>
               </Stack>
-              <Button leftSection={<IconPlayerPlay size={16} />} color="orange" onClick={() => nav('/run')}>
-                Run Pipeline
-              </Button>
+              {!guide?.error && (
+                <Button leftSection={<IconPlayerPlay size={16} />} color="orange" onClick={() => nav('/run')}>
+                  Run Pipeline
+                </Button>
+              )}
             </Stack>
           </Card>
         ) : (
-          <SimpleGrid cols={{ base: 1, sm: 2, md: 3, lg: 4 }}>
-            {channels.map((ch) => (
-              <ChannelCard key={ch.number} ch={ch} onClick={() => nav(`/channels/${ch.number}`)} />
-            ))}
-          </SimpleGrid>
+          <GuideGrid guide={guide} onRefresh={() => load(true)} />
         )}
       </Box>
     </Stack>
