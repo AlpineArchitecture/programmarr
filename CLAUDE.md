@@ -188,8 +188,13 @@ documented under Live Channels.
 `"commercials": {"filler_list_id": "…", "filler_list_name": "…", "pad_minutes": 5}`. At deploy,
 `create.py` attaches that Tunarr filler list to the channel (`fillerCollections`) and pads each
 show up to the next `pad_minutes` boundary (`build_schedule(pad_ms=…)`), opening a gap that
-Tunarr's FillerPicker fills with the clips **between shows** at playback. Absent = off. The filler
-list itself is created/managed in Tunarr; the picker is fed by `GET /api/tunarr/filler-lists`.
+Tunarr's FillerPicker fills with the clips **between shows** at playback. Absent = off. Applies to
+**every** channel type (TV and movie) — density self-adjusts since the gap is per-program (a break
+between movies vs. between episodes). The filler list itself is created/managed in Tunarr; the
+picker is fed by `GET /api/tunarr/filler-lists`. The field is **per-channel by design**: the
+Planner toggle is a blanket convenience that writes the same list onto every channel in a batch,
+but each channel can point at a different filler list (the Channels editor already allows this) —
+the basis for future era-matched pooling (90s ads → 90s channel; see `docs/ideas.md`).
 **Mid-roll (ads inside a show) is deliberately not used — it doesn't stream on hardware-accelerated
 (QSV) Tunarr; see [`docs/tunarr-commercials-findings.md`](docs/tunarr-commercials-findings.md).**
 

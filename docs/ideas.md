@@ -30,6 +30,21 @@ _(Add freely. One bullet per idea. Rough is fine — this is a notebook, not a s
   from title text — authoritative, no false positives. (See the franchise-matcher
   notes in [`live-channels-design.md`](live-channels-design.md).)
 
+- **Surgical commercial pooling (era/type-matched).** Today the Planner's commercials
+  toggle is a *blanket* — one filler list applied to every channel in the batch. The
+  dream is era-matched ads: **90s commercials on the 90s sitcom marathon, 80s trailers
+  on the 80s movie station, holiday spots on the holiday channel.** The data model is
+  *already built for this* — `commercials` is a **per-channel** object
+  (`{filler_list_id, pad_minutes}` in channels.json), and the Channels-page editor
+  already lets you pick a different filler list per channel by hand. So this is an
+  *enhancement*, not a rebuild. The future work is making it effortless:
+  - auto-suggest a filler list per channel by matching decade/genre to filler-list name
+    (e.g. a channel named "90s Comedy" → a list named "90s Commercials");
+  - bulk-assign in the Planner ("pick a pool per decade") instead of one blanket list;
+  - maybe allow **multiple** pools per channel (Tunarr's `fillerCollections` is already
+    an array with weights — currently we only write a single-element list).
+  Keep the blanket toggle as the easy default; layer precision on top.
+
 ---
 
 ## Bigger directional bets (parked on purpose)

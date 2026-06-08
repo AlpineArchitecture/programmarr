@@ -1,18 +1,20 @@
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
-  Image, Loader, NumberInput, ScrollArea, SimpleGrid, Stack,
+  Image, Loader, NumberInput, ScrollArea, Select, SimpleGrid, Stack,
   Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { Dropzone } from '@mantine/dropzone';
 import {
-  IconAlertCircle, IconArrowRight, IconCheck, IconChevronDown, IconCopy, IconDownload,
-  IconExternalLink, IconPlayerPlay, IconRobot, IconSearch, IconSparkles, IconStack2, IconUpload, IconWand, IconX,
+  IconAlertCircle, IconAlertTriangle, IconArrowRight, IconCheck, IconChevronDown, IconCopy, IconDeviceTv,
+  IconDownload, IconExternalLink, IconPlayerPlay, IconRefresh, IconRobot, IconSearch, IconSparkles,
+  IconStack2, IconUpload, IconWand, IconX,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
+  FillerList, Commercials,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -296,11 +298,14 @@ function ExportStep({ onDone }: { onDone: () => void }) {
     <Stack gap="md">
       <Card withBorder p="md">
         <Text fw={700} mb={4}>Libraries to scan</Text>
-        <Text size="xs" c="dimmed" mb="sm">
-          Pick the libraries holding your movies &amp; shows. <b>Leave out any commercials, trailers,
-          or bumper libraries</b> — those go in Tunarr as a filler list for the Commercials feature,
-          not here as channel content. (Plex labels them as “movies,” so they’d otherwise be scanned.)
-        </Text>
+        <Text size="xs" c="dimmed" mb="xs">Pick the libraries holding your movies &amp; shows.</Text>
+        <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={16} />} py="xs" mb="sm">
+          <Text size="xs">
+            <b>Uncheck any commercials, trailers, or bumper libraries.</b> Plex files them as “movies,”
+            so they’ll sneak into your channels if left checked — those belong in Tunarr as a filler
+            list (the <b>📺 Add commercials</b> toggle, next step).
+          </Text>
+        </Alert>
         {libLoading && <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Fetching Plex libraries…</Text></Group>}
         {!libLoading && libError && (
           <Alert color="yellow" variant="light" icon={<IconAlertCircle size={16} />}>
@@ -498,6 +503,15 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [building, setBuilding] = useState(false);
   const [showMore, setShowMore] = useState(false);
 
+  // Batch options applied to every channel built here (commercials + auto-update).
+  const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
+  const [commEnabled, setCommEnabled] = useState(false);
+  const [commListId, setCommListId] = useState<string | null>(null);
+  const [commPad, setCommPad] = useState('5');
+  const [autoUpdate, setAutoUpdate] = useState(false);
+
+  useEffect(() => { api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([])); }, []);
+
   useEffect(() => {
     if (planner.loaded) { setLoading(false); return; }
     api.getFacets()
@@ -568,9 +582,13 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   async function build() {
     setBuilding(true);
     try {
-      const r = await api.composeChannels(exactSpecs, setup.start);
+      const commercials: Commercials | undefined = commEnabled && commListId
+        ? { filler_list_id: commListId, filler_list_name: fillerLists.find(f => f.id === commListId)?.name, pad_minutes: Number(commPad) }
+        : undefined;
+      const r = await api.composeChannels(exactSpecs, setup.start, { live: autoUpdate, commercials });
       if (r.skipped.length) notifications.show({ message: `${r.skipped.length} candidate(s) skipped — no matching titles`, color: 'yellow' });
-      notifications.show({ message: `${r.count} channels built`, color: 'green', icon: <IconCheck size={14} /> });
+      const extras = [commercials && 'commercials', autoUpdate && 'auto-update'].filter(Boolean).join(' + ');
+      notifications.show({ message: `${r.count} channels built${extras ? ` (${extras})` : ''}`, color: 'green', icon: <IconCheck size={14} /> });
       onDone();
     } catch (e: any) {
       notifications.show({ message: `Build failed: ${e.message}`, color: 'red', icon: <IconX size={14} /> });
@@ -590,6 +608,38 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
           onChange={(e) => { const v = e.currentTarget.checked; setAiExtras(v); if (!v) patch({ curate: {} }); }}
           label={<Text size="sm" fw={600}>✨ Bring in AI (optional)</Text>}
           description="Adds an AI step after building — discover channels your picks miss, and split broad pools by tone. With this ON, a grape ✨ appears on each checked broad-genre or decade pick; tap it to hand that pool to the AI instead of building it as one channel." />
+      </Card>
+
+      {/* Commercials — between-show filler, applied to every channel built here. */}
+      <Card withBorder p="sm" style={{ borderColor: commEnabled ? 'var(--mantine-color-orange-6)' : undefined }}>
+        <Switch color="orange" checked={commEnabled}
+          onChange={(e) => { const v = e.currentTarget.checked; setCommEnabled(v); if (v && !commListId && fillerLists.length) setCommListId(fillerLists[0].id); }}
+          label={<Group gap={6}><IconDeviceTv size={15} /><Text size="sm" fw={600}>📺 Add commercials</Text></Group>}
+          description="Plays clips from a Tunarr filler list in a short gap between shows — like real TV. Applies to every channel you build here; tune any of them later on the Channels page." />
+        {commEnabled && (
+          fillerLists.length === 0 ? (
+            <Text size="xs" c="yellow.4" mt="xs">
+              No filler lists found in Tunarr — create one first (a library of commercial / bumper clips), then reopen this.
+            </Text>
+          ) : (
+            <Group grow mt="xs" align="start">
+              <Select label="Filler list" size="xs"
+                data={fillerLists.map(fl => ({ value: fl.id, label: `${fl.name} (${fl.contentCount})` }))}
+                value={commListId} onChange={setCommListId} allowDeselect={false} />
+              <Select label="Break length" size="xs"
+                data={[{ value: '5', label: 'Short (~3 min)' }, { value: '30', label: 'Long (~8 min)' }]}
+                value={commPad} onChange={(v) => setCommPad(v || '5')} allowDeselect={false} />
+            </Group>
+          )
+        )}
+      </Card>
+
+      {/* Auto-update — mark channels live so they refresh as the library grows. */}
+      <Card withBorder p="sm" style={{ borderColor: autoUpdate ? 'var(--mantine-color-teal-6)' : undefined }}>
+        <Switch color="teal" checked={autoUpdate}
+          onChange={(e) => setAutoUpdate(e.currentTarget.checked)}
+          label={<Group gap={6}><IconRefresh size={15} /><Text size="sm" fw={600}>🔄 Keep channels fresh (auto-update)</Text></Group>}
+          description="Marks these channels to auto-update — new episodes and matching films appear on their own as your library grows, no redeploy. Runs on a schedule (enable the live updater in Settings)." />
       </Card>
 
       {/* Ingredients */}

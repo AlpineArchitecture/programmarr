@@ -646,6 +646,9 @@ class CandidateSpec(BaseModel):
 class ComposeRequest(BaseModel):
     specs: list[CandidateSpec]
     start: int = 1
+    # Applied to every channel built in this batch (surfaced as Planner toggles):
+    live: bool = False                      # mark channels auto-updating
+    commercials: dict | None = None         # {filler_list_id, filler_list_name?, pad_minutes?}
 
 
 # Which soft-block a candidate category lands in, and its number hint + shuffle default.
@@ -756,6 +759,13 @@ def compose_channels(req: ComposeRequest):
         shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
         buckets[category].append({"name": name, "shuffle": shuffle, "content": content})
 
+    # Batch-wide extras from the Planner toggles, applied to every built channel.
+    extras: dict = {}
+    if req.live:
+        extras["live"] = True
+    if req.commercials and req.commercials.get("filler_list_id"):
+        extras["commercials"] = req.commercials
+
     # Soft-block numbering: each category starts at max(its hint, running cursor, start).
     channels: list[dict] = []
     cursor = req.start
@@ -765,7 +775,7 @@ def compose_channels(req: ComposeRequest):
             continue
         base = max(_CATEGORY_HINT[category], cursor, req.start)
         for i, ch in enumerate(items):
-            channels.append({"number": base + i, **ch})
+            channels.append({"number": base + i, **ch, **extras})
         cursor = base + len(items)
 
     data = {"channels": channels, "orphaned": [], "suggested_channels": []}

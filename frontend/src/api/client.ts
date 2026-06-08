@@ -44,10 +44,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(opts),
     }),
-  composeChannels: (specs: CandidateSpec[], start: number) =>
+  composeChannels: (
+    specs: CandidateSpec[],
+    start: number,
+    opts?: { live?: boolean; commercials?: Commercials },
+  ) =>
     req<ComposeResult>('/pipeline/compose', {
       method: 'POST',
-      body: JSON.stringify({ specs, start }),
+      body: JSON.stringify({ specs, start, live: opts?.live, commercials: opts?.commercials }),
     }),
   validateText: async (content: string, append = false) => {
     const form = new FormData();
