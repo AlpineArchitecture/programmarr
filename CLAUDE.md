@@ -55,7 +55,9 @@ data/             Bind-mounted volume — config.json, channels.json, plex_libra
 - SSE (Server-Sent Events) streams subprocess stdout line-by-line to the browser inline terminal.
 - Auth middleware reads `config.json` on every request — no restart needed to enable/disable auth.
 - Onboarding shows automatically when `config_status.configured` is false (no Tunarr/Plex/token set).
-- Channels page reads `channels.json` (local file); Dashboard reads live from the Tunarr API.
+- **Dashboard** shows an EPG guide grid (fetched via `GET /api/guide` → Tunarr XMLTV). Clicking a channel navigates to its editor.
+- **Channels page** lists channels from the live Tunarr API (`GET /api/tunarr/channels`); clicking a row fetches the full `channels.json` entry and opens the editor. Channels in Tunarr with no `channels.json` entry show as **"Not managed by Programmarr"** (read-only orphans).
+- **Save and Apply** (`POST /api/channels/{number}/apply`) saves a channel edit to `channels.json` and pushes it to Tunarr in place — preserving the Tunarr id and Plex DVR mapping. This is the Channels-page equivalent of the scheduler's per-channel update, but available for any channel (not just live ones).
 - `asyncio.WindowsProactorEventLoopPolicy` is set at startup in `main.py` — **required** on Windows for `asyncio.create_subprocess_exec`; no-op on Linux/Docker. (This is the one place it's stated; don't duplicate it.)
 - **Deferred (Tier 3):** drag-to-reorder channels, autocomplete from plex_library.csv, inline Plex validation.
 
@@ -183,6 +185,23 @@ deploy time via the Plex API; a not-found collection is warned and skipped. Plai
 match Plex names exactly (case-insensitive). A title may appear on multiple channels —
 intentional. Live channels add one more content-ref type (`{"match": "title_contains", …}`),
 documented under Live Channels.
+
+**Write-only-on-deploy invariant.** `channels.json` is the record of **deployed channels**
+and must stay in sync with Tunarr. Two rules:
+
+1. **Planner-flow builders** (`compose`, `validate`, `discover-prompt`, `apply_collections`)
+   read/write **`channels.draft.json`** only — never the deployed record. Abandoning a creation
+   can at worst leave a stale draft.
+2. **`channels.json` is written in exactly two ways:**
+   - `deploy-selective` (`pipeline_router.py`: `_reconcile_channels_json`) — on a successful
+     `create.py` exit, writes the deployed set (wipe mode) or merges kept + deployed (keep mode),
+     then clears `channels.draft.json` and `deploy_temp.json`.
+   - `POST /api/channels/{number}/apply` — saves one entry and immediately patches Tunarr in
+     place; they are always written together.
+
+Channels in Tunarr without a `channels.json` entry are "orphans" — visible on the Channels
+page as read-only ("Not managed by Programmarr"). We deliberately do not reconstruct intent
+(shuffle/live/franchise rules) from a deployed lineup.
 
 **Commercials (optional).** A channel may carry
 `"commercials": {"filler_list_id": "…", "filler_list_name": "…", "pad_minutes": 5}`. At deploy,

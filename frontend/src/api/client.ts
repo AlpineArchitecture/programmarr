@@ -19,6 +19,7 @@ export const api = {
   getStatus: () =>
     req<{ tunarr: ConnStatus; plex: ConnStatus }>('/status'),
   getTunarrChannels: () => req<TunarrChannel[]>('/tunarr/channels'),
+  getGuide: () => req<Guide>('/guide'),
   getFillerLists: () => req<FillerList[]>('/tunarr/filler-lists'),
 
   getChannels: () => req<ChannelsFile>('/channels'),
@@ -83,6 +84,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(selections),
     }),
+  applyChannel: (n: number) =>
+    req<{ ok: boolean; number: number; program_count: number }>(
+      `/channels/${n}/apply`, { method: 'POST' }),
 
   // ── Live channels (recipes) ──
   previewRecipe: (value: string, order?: string | null, exclude: string[] = []) =>
@@ -109,6 +113,9 @@ export const api = {
 
 export interface ConnStatus { ok: boolean; url: string; error?: string }
 export interface TunarrChannel { number: number; name: string; id?: string }
+export interface GuideChannel { number: number; name: string; icon?: string | null }
+export interface GuideProgramme { number: number; start: string; stop: string; title: string; episode?: string }
+export interface Guide { channels: GuideChannel[]; programmes: GuideProgramme[]; error?: string }
 export interface FillerList { id: string; name: string; contentCount: number }
 // Commercials: a channel can pull from a Tunarr filler list, played in gaps
 // between shows (pad_minutes controls the gap size). Absent = commercials off.

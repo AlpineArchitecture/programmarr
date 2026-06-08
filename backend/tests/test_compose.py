@@ -83,10 +83,10 @@ def test_marathon_overflow_spills_sequentially(pr, seed):
     assert numbers == list(range(10, 22))
 
 
-def test_writes_channels_json(pr, seed):
+def test_writes_channels_draft(pr, seed):
     seed([movie("Funny", genres="Comedy")])
     _compose(pr, [{"kind": "genre", "genre": "Comedy"}])
-    written = json.loads((pr._test_data_dir / "channels.json").read_text(encoding="utf-8"))
+    written = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
     assert written["channels"][0]["name"] == "Comedy Movies"
     assert written["channels"][0]["content"] == ["Funny"]
 

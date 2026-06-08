@@ -4,6 +4,35 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.2] — 2026-06-08
+
+### Added
+
+- **EPG Guide grid on the Dashboard.** The Dashboard now shows a real TV-guide grid
+  (scrollable, 3-hour window, now-line) sourced from Tunarr's XMLTV feed. Clicking any
+  channel in the left rail navigates to its editor on the Channels page.
+- **Channels page sourced from live Tunarr.** The Channels list now pulls from the live
+  Tunarr API so the list always reflects what's actually deployed — no more stale data.
+  Tunarr channels with no `channels.json` entry show as **"Not managed by Programmarr"**
+  (read-only orphans).
+- **Save and Apply** (`POST /api/channels/{number}/apply`). Edit any managed channel and
+  push the change to Tunarr in a single click — updates in place, preserving the Tunarr
+  channel id and Plex DVR mapping. Acquires the same lock as the live-channel scheduler
+  to avoid races.
+- **Configurable block sizes.** Each channel category (Marathons, TV Blocks, Movies,
+  Franchise, Specialty) now has a configurable size in Settings, so large libraries can
+  scale a block without colliding into the next. Channel numbering now defaults to starting
+  at 1 (previously 10). `channel_blocks.py` is the new single source of truth, shared by
+  the Planner and `generate_no_ai.py`.
+
+### Changed
+
+- **Anti-drift deploy model.** Planner-flow operations (Compose, Validate, AI Extras,
+  Collections) now write to `channels.draft.json` instead of `channels.json`. The deployed
+  record (`channels.json`) is written only on a successful `deploy-selective` run, keeping
+  it in sync with what's actually in Tunarr. Abandoning a creation can at worst leave a
+  stale draft, never corrupt the deployed record.
+
 ## [0.4.0] — 2026-06-07
 
 ### Added
