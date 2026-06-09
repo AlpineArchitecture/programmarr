@@ -141,3 +141,63 @@ def test_writes_channels_draft(pr, seed):
 def test_compose_without_export_raises(pr):
     with pytest.raises(Exception):
         _compose(pr, [{"kind": "genre", "genre": "Comedy"}])
+
+
+# ── tv_movie_mix ───────────────────────────────────────────────────────────────
+
+def test_tv_movie_mix_contains_both_show_and_movie_titles(pr, seed):
+    """A tv_movie_mix channel's content includes titles from both movie and TV sides."""
+    seed([
+        movie("Comedy Film A", genres="Comedy"),
+        movie("Comedy Film B", genres="Comedy"),
+        show("Comedy Show A", genres="Comedy", episodes=50),
+        show("Comedy Show B", genres="Comedy", episodes=30),
+    ])
+    out = _compose(pr, [{"kind": "tv_movie_mix", "genre": "Comedy", "name": "Comedy"}])
+    assert out["count"] == 1
+    ch = out["channels"][0]
+    assert ch["items"] == 4  # 2 movies + 2 shows
+
+
+def test_tv_movie_mix_content_in_draft(pr, seed):
+    """Draft file written by compose contains both a show title and a movie title."""
+    import json as _json
+    seed([
+        movie("Action Film", genres="Action"),
+        show("Action Show", genres="Action", episodes=80),
+    ])
+    _compose(pr, [{"kind": "tv_movie_mix", "genre": "Action", "name": "Action"}])
+    draft = _json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    content = draft["channels"][0]["content"]
+    assert "Action Film" in content
+    assert "Action Show" in content
+
+
+def test_tv_movie_mix_auto_name(pr, seed):
+    """_auto_name for tv_movie_mix returns the bare genre name."""
+    seed([
+        movie("Horror Film 1", genres="Horror"),
+        movie("Horror Film 2", genres="Horror"),
+        show("Horror Show 1", genres="Horror", episodes=30),
+    ])
+    out = _compose(pr, [{"kind": "tv_movie_mix", "genre": "Horror"}])
+    assert out["channels"][0]["name"] == "Horror"
+
+
+def test_tv_movie_mix_genre_case_insensitive(pr, seed):
+    """Genre matching in tv_movie_mix is case-insensitive."""
+    seed([
+        movie("Drama Film", genres="Drama"),
+        show("drama show", genres="drama", episodes=20),  # lowercase genre tag
+    ])
+    out = _compose(pr, [{"kind": "tv_movie_mix", "genre": "Drama"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 2
+
+
+def test_tv_movie_mix_no_match_is_skipped(pr, seed):
+    """A tv_movie_mix spec with no matching titles is skipped with a reason."""
+    seed([movie("Comedy Film", genres="Comedy")])
+    out = _compose(pr, [{"kind": "tv_movie_mix", "genre": "Western"}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"

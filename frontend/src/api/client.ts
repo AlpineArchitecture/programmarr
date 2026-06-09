@@ -177,6 +177,8 @@ export interface BlendFacet { genres: string[]; displays: string[]; count: numbe
 export interface EntityFacet { value: string; count: number }
 export interface TvGenreFacet { genre: string; count: number }
 export interface MarathonFacet { title: string; episodes: number; seasons: number }
+/** Genres present in BOTH the movie and TV libraries above the TV_MOVIE_MIX_MIN floor. */
+export interface TvMovieGenreFacet { genre: string; tv_count: number; movie_count: number }
 export interface LibraryFacets {
   exists: boolean;
   movies?: number;
@@ -192,11 +194,13 @@ export interface LibraryFacets {
   actors?: EntityFacet[];
   tv_genres?: TvGenreFacet[];
   marathons?: MarathonFacet[];
+  tv_movie_genres?: TvMovieGenreFacet[];
 }
 
 // ── Planner v2 candidate composition ──
 export type CandidateKind =
-  | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon';
+  | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon'
+  | 'tv_movie_mix';
 export interface CandidateSpec {
   kind: CandidateKind;
   name?: string;

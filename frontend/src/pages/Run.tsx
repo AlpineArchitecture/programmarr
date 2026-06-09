@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
-  FillerList, Commercials,
+  FillerList, Commercials, TvMovieGenreFacet,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -66,6 +66,7 @@ const cid = {
   actor: (v: string) => `actor:${v}`,
   tv: (g: string) => `tv:${g}`,
   marathon: (t: string) => `m:${t}`,
+  tvmix: (g: string) => `tvm:${g}`,
 };
 
 interface PlannerState {
@@ -497,6 +498,47 @@ function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, defa
   );
 }
 
+// ── Accordion section ─────────────────────────────────────────────────────────
+// A top-level section in the Planner's three-part accordion (TV / Movies / TV+Movies).
+// Only one section is open at a time (controlled by `openSection` in PlannerStep).
+// Each section has a "Done — continue" button in its footer to open the next.
+function AccordionSection({ index, openSection, onToggle, onNext, title, hint, selCount, isLast, children }: {
+  index: number;
+  openSection: number;
+  onToggle: (idx: number) => void;
+  onNext: (current: number) => void;
+  title: string;
+  hint?: string;
+  selCount: number;
+  isLast?: boolean;
+  children: React.ReactNode;
+}) {
+  const open = openSection === index;
+  return (
+    <Card withBorder p="sm" style={{ borderColor: open ? 'var(--mantine-color-orange-8)' : undefined }}>
+      <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => onToggle(index)}>
+        <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+          <IconChevronDown size={16} style={{ transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .15s', flexShrink: 0 }} />
+          <Text fw={700} size="sm">{title}</Text>
+          {selCount > 0 && <Badge size="xs" color="orange" variant="filled" style={{ flexShrink: 0 }}>{selCount} picked</Badge>}
+          {hint && open && <Text size="xs" c="grape.4" style={{ flexShrink: 0 }}>{hint}</Text>}
+        </Group>
+      </Group>
+      <Collapse in={open}>
+        <Box mt="sm">{children}</Box>
+        {!isLast && (
+          <Group justify="flex-end" mt="sm">
+            <Button size="xs" variant="light" color="orange" rightSection={<IconArrowRight size={13} />}
+              onClick={(e) => { e.stopPropagation(); onNext(index); }}>
+              Done — continue
+            </Button>
+          </Group>
+        )}
+      </Collapse>
+    </Card>
+  );
+}
+
 // Curated, recognizable sub-genres (genre∩genre) — only the meaningful ones, named
 // properly. Arbitrary pairs like "Action & Comedy" are intentionally excluded.
 type SubGenre = { name: string; a: string; b: string };
@@ -527,6 +569,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [error, setError] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  // Accordion: which of the three sections (0=TV, 1=Movies, 2=TV+Movies) is open. Section 0 starts open.
+  const [openSection, setOpenSection] = useState<number>(0);
+  function openNext(current: number) { setOpenSection(current + 1); }
+  function toggleSection(idx: number) { setOpenSection(s => s === idx ? -1 : idx); }
 
   // Batch options applied to every channel built here (commercials + auto-update).
   const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
@@ -704,54 +750,79 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         </Group>
       </Card>
 
-      {/* TV channels — lowest channel numbers, so they lead. Marathons (~10s) then blocks (~20s). */}
-      {((f.marathons?.length ?? 0) > 0 || (f.tv_genres?.length ?? 0) > 0) && (
-        <Box>
-          <Text fw={700} size="sm" mb={6}>TV channels</Text>
-          <Stack gap="sm">
-            {(f.marathons?.length ?? 0) > 0 && (() => {
-              const items: AddItem[] = f.marathons!.map(m => ({ id: cid.marathon(m.title), spec: { kind: 'marathon', value: m.title, name: `${m.title} Marathon` } }));
-              return (
-                <CollapsibleSection title="Marathons — one channel per show" count={f.marathons!.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {f.marathons!.map((m, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={m.episodes} label={m.title} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                  ))}
-                </CollapsibleSection>
-              );
-            })()}
-            {(f.tv_genres?.length ?? 0) > 0 && (() => {
-              const items: AddItem[] = f.tv_genres!.map(t => ({ id: cid.tv(t.genre), spec: { kind: 'tv_genre', genre: t.genre, name: `${t.genre} TV` } }));
-              return (
-                <CollapsibleSection title="Genre blocks — themed multi-show" count={f.tv_genres!.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {f.tv_genres!.map((t, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={t.count} label={`${t.genre} TV`} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                  ))}
-                </CollapsibleSection>
-              );
-            })()}
-          </Stack>
-        </Box>
-      )}
+      {/* ── Three-section accordion ──────────────────────────────────────────────────
+          Section 0: TV       — Marathons + Genre blocks
+                                (Step 5 will insert Networks + Classic blocks here)
+          Section 1: Movies   — Genre×decade, sub-genres, broad genres, Entities
+          Section 2: TV+Movies — Mixed-genre channels from tv_movie_genres
+                                (Step 6 will insert Franchises here)
+          One section open at a time; "Done — continue" in each footer opens the next.
+      ─────────────────────────────────────────────────────────────────────────── */}
 
-      {/* Movie channels (~30s) */}
-      <Box>
-        <Group justify="space-between" mb={6}>
-          <Text fw={700} size="sm">Movie channels</Text>
-          {aiExtras && activeGenreTags.size > 0 && (
-            <Text size="xs" c="grape.4">✨ tap the sparkle on a checked genre/decade pick to let AI split it by tone</Text>
+      {/* ── SECTION 0: TV ─────────────────────────────────────────────────────── */}
+      <AccordionSection
+        index={0} openSection={openSection} onToggle={toggleSection} onNext={openNext}
+        title="TV"
+        selCount={countSel([
+          ...(f.marathons ?? []).map(m => cid.marathon(m.title)),
+          ...(f.tv_genres ?? []).map(t => cid.tv(t.genre)),
+        ])}
+      >
+        <Stack gap="sm">
+          {(f.marathons?.length ?? 0) > 0 && (() => {
+            const items: AddItem[] = f.marathons!.map(m => ({ id: cid.marathon(m.title), spec: { kind: 'marathon' as CandidateKind, value: m.title, name: `${m.title} Marathon` } }));
+            return (
+              <CollapsibleSection title="Marathons — one channel per show" count={f.marathons!.length}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                {f.marathons!.map((m, i) => (
+                  <CandRow key={items[i].id} id={items[i].id} count={m.episodes} label={m.title} checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {(f.tv_genres?.length ?? 0) > 0 && (() => {
+            const items: AddItem[] = f.tv_genres!.map(t => ({ id: cid.tv(t.genre), spec: { kind: 'tv_genre' as CandidateKind, genre: t.genre, name: `${t.genre} TV` } }));
+            return (
+              <CollapsibleSection title="Genre blocks — themed multi-show" count={f.tv_genres!.length}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                {f.tv_genres!.map((t, i) => (
+                  <CandRow key={items[i].id} id={items[i].id} count={t.count} label={`${t.genre} TV`} checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {/* STEP 5 INSERTION POINT — Networks group goes here */}
+          {/* STEP 5 INSERTION POINT — Classic TV Blocks group goes here */}
+          {(f.marathons?.length ?? 0) === 0 && (f.tv_genres?.length ?? 0) === 0 && (
+            <Text size="sm" c="dimmed">No TV channels available — run Export to scan your library.</Text>
           )}
-        </Group>
+        </Stack>
+      </AccordionSection>
+
+      {/* ── SECTION 1: Movies ─────────────────────────────────────────────────── */}
+      <AccordionSection
+        index={1} openSection={openSection} onToggle={toggleSection} onNext={openNext}
+        title="Movies"
+        hint={aiExtras && activeGenreTags.size > 0 ? '✨ tap the sparkle on a checked genre/decade pick to let AI split it by tone' : undefined}
+        selCount={countSel([
+          ...(f.genres?.canonical ?? []).filter(g => activeGenreTags.has(g.tag)).map(g => cid.genre(g.tag)),
+          ...(f.genres?.more ?? []).filter(g => activeGenreTags.has(g.tag)).map(g => cid.genre(g.tag)),
+          ...(f.genre_decade ?? []).map(c => cid.gd(c.genre, c.decade_start)),
+          ...subGenres.map(x => cid.blend(x.blend.genres[0], x.blend.genres[1])),
+          ...(f.studios ?? []).map(s => cid.studio(s.value)),
+          ...(f.directors ?? []).map(d => cid.director(d.value)),
+          ...(f.actors ?? []).map(a => cid.actor(a.value)),
+        ])}
+      >
         {activeGenreTags.size === 0 ? (
           <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
         ) : (
           <Stack gap="sm">
             {(f.decades ?? []).filter(d => activeDecadeLabels.has(d.label) && genreDecadeByDecade[d.label]?.length).map(d => {
               const cells = genreDecadeByDecade[d.label];
-              const items: AddItem[] = cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } }));
+              const items: AddItem[] = cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade' as CandidateKind, genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } }));
               return (
                 <CollapsibleSection key={d.label} title={d.label} count={cells.length}
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
@@ -765,7 +836,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             })}
 
             {subGenres.length > 0 && (() => {
-              const items: AddItem[] = subGenres.map(x => ({ id: cid.blend(x.blend.genres[0], x.blend.genres[1]), spec: { kind: 'blend', genres: x.blend.genres, name: x.s.name } }));
+              const items: AddItem[] = subGenres.map(x => ({ id: cid.blend(x.blend.genres[0], x.blend.genres[1]), spec: { kind: 'blend' as CandidateKind, genres: x.blend.genres, name: x.s.name } }));
               return (
                 <CollapsibleSection title="Sub-genres" count={subGenres.length}
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
@@ -777,8 +848,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               );
             })()}
 
-            {(() => {
-              const items: AddItem[] = broadCands.map(g => ({ id: cid.genre(g.tag), spec: { kind: 'genre', genre: g.tag, name: `${g.display} Movies` } }));
+            {broadCands.length > 0 && (() => {
+              const items: AddItem[] = broadCands.map(g => ({ id: cid.genre(g.tag), spec: { kind: 'genre' as CandidateKind, genre: g.tag, name: `${g.display} Movies` } }));
               return (
                 <CollapsibleSection title="Broad genres" count={broadCands.length}
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
@@ -790,23 +861,52 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 </CollapsibleSection>
               );
             })()}
+
+            {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
+              <>
+                <Divider label="Studios, directors &amp; actors" labelPosition="left" />
+                {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+                {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+                {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+              </>
+            )}
           </Stack>
         )}
-      </Box>
+      </AccordionSection>
 
-      {/* Entities (~50s) */}
-      {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
-        <Box>
-          <Text fw={700} size="sm" mb={6}>Studios, directors &amp; actors</Text>
-          <Stack gap="sm">
-            {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-            {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-            {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-          </Stack>
-        </Box>
-      )}
+      {/* ── SECTION 2: TV + Movies ────────────────────────────────────────────── */}
+      <AccordionSection
+        index={2} openSection={openSection} onToggle={toggleSection} onNext={openNext}
+        title="TV + Movies"
+        selCount={countSel((f.tv_movie_genres ?? []).map(x => cid.tvmix(x.genre)))}
+        isLast
+      >
+        <Stack gap="sm">
+          {(f.tv_movie_genres?.length ?? 0) > 0 ? (() => {
+            const items: AddItem[] = (f.tv_movie_genres as TvMovieGenreFacet[]).map(x => ({
+              id: cid.tvmix(x.genre),
+              spec: { kind: 'tv_movie_mix' as CandidateKind, genre: x.genre, name: x.genre },
+            }));
+            return (
+              <CollapsibleSection title="Mixed-genre channels" count={f.tv_movie_genres!.length}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                {(f.tv_movie_genres as TvMovieGenreFacet[]).map((x, i) => (
+                  <CandRow key={items[i].id} id={items[i].id}
+                    count={x.tv_count + x.movie_count}
+                    label={`${x.genre} — ${x.tv_count} episodes + ${x.movie_count} films`}
+                    checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                ))}
+              </CollapsibleSection>
+            );
+          })() : (
+            <Text size="sm" c="dimmed">No genres appear in both your movie and TV libraries above the threshold.</Text>
+          )}
+          {/* STEP 6 INSERTION POINT — Franchises group goes here */}
+        </Stack>
+      </AccordionSection>
 
-      {/* Build bar */}
+      {/* Build bar — reflects selections across all three sections */}
       <Card withBorder p="md">
         <Group justify="space-between">
           <Box>

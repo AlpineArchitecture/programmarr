@@ -87,3 +87,70 @@ def test_tv_genres_and_marathons(pr, seed):
 
 def test_no_csv_returns_not_exists(pr):
     assert pr.library_facets() == {"exists": False}
+
+
+# ── tv_movie_genres ────────────────────────────────────────────────────────────
+
+def test_tv_movie_genres_requires_both_sides(pr, seed):
+    """A genre present only in movies (or only in TV) does NOT appear in tv_movie_genres."""
+    seed([
+        movie("Funny Movie 1", genres="Comedy"),
+        movie("Funny Movie 2", genres="Comedy"),
+        movie("Funny Movie 3", genres="Comedy"),
+        # Comedy only on movie side — no TV Comedy shows
+        show("Action Show 1", genres="Action", episodes=20),
+        show("Action Show 2", genres="Action", episodes=30),
+        show("Action Show 3", genres="Action", episodes=15),
+        # Action only on TV side — no Action movies
+    ])
+    f = pr.library_facets()
+    genres_in_mix = {x["genre"] for x in f["tv_movie_genres"]}
+    assert "Comedy" not in genres_in_mix   # movie only
+    assert "Action" not in genres_in_mix   # TV only
+
+
+def test_tv_movie_genres_appears_when_both_sides_above_floor(pr, seed):
+    """A genre with >= TV_MOVIE_MIX_MIN on each side appears in tv_movie_genres with correct counts."""
+    seed([
+        movie("Drama Movie 1", genres="Drama"),
+        movie("Drama Movie 2", genres="Drama"),
+        movie("Drama Movie 3", genres="Drama"),
+        show("Drama Show 1", genres="Drama", episodes=20),
+        show("Drama Show 2", genres="Drama", episodes=30),
+        show("Drama Show 3", genres="Drama", episodes=15),
+    ])
+    f = pr.library_facets()
+    drama = next((x for x in f["tv_movie_genres"] if x["genre"] == "Drama"), None)
+    assert drama is not None
+    assert drama["tv_count"] == 3
+    assert drama["movie_count"] == 3
+
+
+def test_tv_movie_genres_floor_respected(pr, seed):
+    """A genre with only 2 entries on one side (below TV_MOVIE_MIX_MIN=3) is excluded."""
+    seed([
+        movie("Sci Movie 1", genres="Science Fiction"),
+        movie("Sci Movie 2", genres="Science Fiction"),
+        # Only 2 movies — below floor
+        show("Sci Show 1", genres="Science Fiction", episodes=50),
+        show("Sci Show 2", genres="Science Fiction", episodes=40),
+        show("Sci Show 3", genres="Science Fiction", episodes=30),
+    ])
+    f = pr.library_facets()
+    genres_in_mix = {x["genre"] for x in f["tv_movie_genres"]}
+    assert "Science Fiction" not in genres_in_mix
+
+
+def test_tv_movie_genres_sorted_by_total_desc(pr, seed):
+    """Genres are sorted by (tv_count + movie_count) descending."""
+    # Comedy: 5 movies + 3 shows = 8 total
+    # Drama: 3 movies + 4 shows = 7 total
+    seed(
+        [movie(f"Com{i}", genres="Comedy") for i in range(5)] +
+        [show(f"ComShow{i}", genres="Comedy", episodes=20) for i in range(3)] +
+        [movie(f"Dra{i}", genres="Drama") for i in range(3)] +
+        [show(f"DraShow{i}", genres="Drama", episodes=20) for i in range(4)]
+    )
+    f = pr.library_facets()
+    mix_genres = [x["genre"] for x in f["tv_movie_genres"]]
+    assert mix_genres.index("Comedy") < mix_genres.index("Drama")

@@ -262,6 +262,15 @@ AI" toggle is on; Collections only if opted in.
   renumbered, name-duplicates skipped) — it never overwrites the deterministic lineup.
 - **Deploy runs a cascade that always completes:** `deploy-selective` → (if art opted in)
   `images` → `sync`, each streamed inline, ending in a per-stage summary.
+- **The Planner body is a three-section accordion** (`AccordionSection` component, single-open
+  at a time, `openSection` index state, Section 0 open initially):
+  - **Section 0 — TV:** Marathons + Genre-blocks. Step 5 will insert Networks + Classic blocks.
+  - **Section 1 — Movies:** genre×decade, sub-genres, broad genres, Studios/Directors/Actors.
+  - **Section 2 — TV + Movies:** mixed-genre candidates from `tv_movie_genres` facet (genres
+    present in both libraries above `TV_MOVIE_MIX_MIN`). Step 6 will insert Franchises.
+  Each section header opens/closes it (collapsing the other). A "Done — continue" footer
+  button collapses the current and opens the next. The genres/decades chips and toggle cards
+  (AI/commercials/auto-update) sit above the sections; the build bar sits below.
 
 The blow-by-blow of each step's components and props is the code's job — read the `.tsx`.
 

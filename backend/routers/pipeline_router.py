@@ -226,6 +226,7 @@ STUDIO_MIN = 4
 DIRECTOR_MIN = 3
 ACTOR_MIN = 4
 TV_GENRE_MIN = 3
+TV_MOVIE_MIX_MIN = 3  # minimum on each side for a cross-library mixed-genre candidate
 ENTITY_CAP = 60    # cap each entity list; UI searches for the long tail
 
 
@@ -359,6 +360,17 @@ def library_facets(min_items: int = 5):
     )
     marathons = sorted(show_recs, key=lambda s: -s["episodes"])
 
+    # Cross-library genres: genres present in BOTH movies and TV above their respective floors.
+    # Shape: [{"genre": "Comedy", "tv_count": N, "movie_count": M}] sorted by tv_count+movie_count desc.
+    tv_movie_genres = sorted(
+        (
+            {"genre": g, "tv_count": tv_genre_counts[g], "movie_count": genre_counts.get(g, 0)}
+            for g in tv_genre_counts
+            if tv_genre_counts[g] >= TV_MOVIE_MIX_MIN and genre_counts.get(g, 0) >= TV_MOVIE_MIX_MIN
+        ),
+        key=lambda x: -(x["tv_count"] + x["movie_count"]),
+    )
+
     return {
         "exists": True,
         "movies": movies,
@@ -374,6 +386,7 @@ def library_facets(min_items: int = 5):
         "actors": entity_list(actor_counts, ACTOR_MIN),
         "tv_genres": tv_genres,
         "marathons": marathons,
+        "tv_movie_genres": tv_movie_genres,
     }
 
 
@@ -701,17 +714,18 @@ class ComposeRequest(BaseModel):
 # Which compose category (bucket) each candidate kind maps to, and its shuffle default.
 # Buckets align with channel_blocks.CANONICAL_ORDER keys.
 _CATEGORY = {
-    "marathon":     ("marathon",  "ordered"),
-    "tv_genre":     ("tv_block",  "block"),
-    "genre":        ("movie",     "shuffle"),
-    "genre_decade": ("movie",     "shuffle"),
-    "blend":        ("movie",     "shuffle"),
-    "studio":       ("entity",    "shuffle"),
-    "director":     ("entity",    "shuffle"),
-    "actor":        ("entity",    "shuffle"),
+    "marathon":     ("marathon",     "ordered"),
+    "tv_genre":     ("tv_block",     "block"),
+    "genre":        ("movie",        "shuffle"),
+    "genre_decade": ("movie",        "shuffle"),
+    "blend":        ("movie",        "shuffle"),
+    "studio":       ("entity",       "shuffle"),
+    "director":     ("entity",       "shuffle"),
+    "actor":        ("entity",       "shuffle"),
+    "tv_movie_mix": ("tv_movie_mix", "shuffle"),
 }
 # Compose categories in the order they appear in CANONICAL_ORDER (subset).
-_CATEGORY_ORDER = ["marathon", "tv_block", "movie", "entity"]
+_CATEGORY_ORDER = ["marathon", "tv_block", "tv_movie_mix", "movie", "entity"]
 _DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
 
 
@@ -754,6 +768,11 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         titles = [s["Title"] for s in shows if has_genre(s, spec.genre)]
     elif spec.kind == "marathon" and spec.value:
         titles = [s["Title"] for s in shows if s["Title"] == spec.value]
+    elif spec.kind == "tv_movie_mix" and spec.genre:
+        # Mixed channel: both TV shows AND movies that share this genre, shuffled together.
+        movie_titles = [m["Title"] for m in movies if has_genre(m, spec.genre)]
+        show_titles = [s["Title"] for s in shows if has_genre(s, spec.genre)]
+        titles = movie_titles + show_titles
     return sorted({t for t in titles if t})
 
 
@@ -774,6 +793,8 @@ def _auto_name(spec: CandidateSpec) -> str:
         return f"{spec.genre} TV"
     if spec.kind == "marathon":
         return f"{spec.value} 24/7"
+    if spec.kind == "tv_movie_mix":
+        return spec.genre or "Mixed"
     return spec.name or "Channel"
 
 
