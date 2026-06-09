@@ -123,15 +123,6 @@ function LiveRecipesCard({ status, onChange }: { status: RecipesStatus; onChange
             {last.error ? ' · error' : last.changed > 0 ? ` · ${last.changed} updated` : ' · no changes'}
           </Text>
           {last.error && <Text size="xs" c="red.4">{last.error}</Text>}
-          {last.changes.slice(0, 4).map((c) => (
-            <Text key={c.number} size="xs" mt={2}>
-              <Text span fw={600}>#{c.number} {c.name}</Text>
-              <Text span c="dimmed">
-                {' '}+{c.added_count}{c.removed_count ? ` −${c.removed_count}` : ''}
-                {c.added.length ? `: ${c.added.slice(0, 3).join(', ')}` : ''}
-              </Text>
-            </Text>
-          ))}
         </Box>
       )}
     </Card>

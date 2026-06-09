@@ -212,7 +212,7 @@ export function GuideGrid({
                   {ch.number}
                 </Text>
                 <Text size="xs" fw={600} truncate style={{ lineHeight: 1.2 }}>
-                  {ch.name}
+                  {ch.name.replace(new RegExp(`^#?\\s*${ch.number}\\b[\\s.\\-:]*`), '')}
                 </Text>
               </Stack>
             </Box>
