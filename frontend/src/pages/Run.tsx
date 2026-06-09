@@ -18,6 +18,31 @@ import {
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
+// Copy text to the clipboard with a fallback for insecure contexts (plain HTTP on a
+// non-localhost origin, where navigator.clipboard is undefined). Shows a notification
+// on success or failure so the button is never silently dead.
+async function copyText(text: string, label = 'Copied'): Promise<void> {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('copy command failed');
+    }
+    notifications.show({ message: label, color: 'green', icon: <IconCheck size={14} /> });
+  } catch {
+    notifications.show({ message: 'Copy failed — select and copy manually', color: 'red' });
+  }
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────────
 
 type Method = 'build' | 'collections';
@@ -825,8 +850,7 @@ function DiscoverStep({ discover, curatePools, onDone }: { discover: boolean; cu
   }, []);
 
   async function copyPrompt() {
-    await navigator.clipboard.writeText(prompt);
-    notifications.show({ message: 'Prompt copied', color: 'green', icon: <IconCheck size={14} /> });
+    await copyText(prompt, 'Prompt copied');
   }
   async function validatePaste() {
     if (!pasteText.trim()) return;
@@ -1180,7 +1204,7 @@ function DeployStep({ setup }: { setup: SetupState }) {
                 <Group gap="xs" wrap="nowrap" mb="sm">
                   <Code style={{ flex: 1, overflowX: 'auto', whiteSpace: 'nowrap' }}>{xmltvUrl}</Code>
                   <Button size="compact-xs" variant="light" color="yellow" leftSection={<IconCopy size={12} />}
-                    onClick={() => { navigator.clipboard.writeText(xmltvUrl); notifications.show({ message: 'XMLTV URL copied', color: 'green', icon: <IconCheck size={14} /> }); }}>
+                    onClick={() => copyText(xmltvUrl, 'XMLTV URL copied')}>
                     Copy
                   </Button>
                 </Group>
