@@ -1,42 +1,121 @@
-"""channel_blocks.resolve_layout — accumulation, defaults, normalization."""
+"""channel_blocks — assign_numbers sequential packing and resolve_order."""
 
 import channel_blocks as cb
 
 
-def test_defaults_reproduce_historical_layout():
-    # start=10 with default sizes == the original cable layout.
-    lay = cb.resolve_layout(None, start=10)
-    assert (lay["marathon"]["start"], lay["marathon"]["end"]) == (10, 19)
-    assert (lay["tv_block"]["start"], lay["tv_block"]["end"]) == (20, 29)
-    assert (lay["movie"]["start"], lay["movie"]["end"]) == (30, 49)
-    assert (lay["franchise"]["start"], lay["franchise"]["end"]) == (50, 69)
-    assert (lay["specialty"]["start"], lay["specialty"]["end"]) == (70, 79)
+# ── assign_numbers ─────────────────────────────────────────────────────────────
+
+def test_assign_numbers_sequential_tight_packing():
+    """15 marathons + 8 movies → 1–15 then 16–23 (spec acceptance criterion)."""
+    order = ["marathon", "movie", "franchise"]
+    counts = {"marathon": 15, "movie": 8, "franchise": 3}
+    result = cb.assign_numbers(order, counts, start=1)
+    assert result["marathon"] == list(range(1, 16))
+    assert result["movie"] == list(range(16, 24))
+    assert result["franchise"] == list(range(24, 27))
 
 
-def test_start_at_one():
-    lay = cb.resolve_layout(None, start=1)
-    assert lay["marathon"]["start"] == 1
-    assert lay["tv_block"]["start"] == 11
-    assert lay["specialty"]["end"] == 70
+def test_empty_categories_consume_no_numbers():
+    order = ["marathon", "tv_block", "movie"]
+    counts = {"marathon": 3, "movie": 2}  # tv_block absent / 0
+    result = cb.assign_numbers(order, counts, start=1)
+    assert result["marathon"] == [1, 2, 3]
+    # tv_block has 0 channels → skipped, movie follows immediately
+    assert result["movie"] == [4, 5]
+    assert "tv_block" not in result
 
 
-def test_sizes_accumulate():
-    lay = cb.resolve_layout({"marathon": 100, "tv_block": 100, "movie": 100,
-                             "franchise": 100, "specialty": 100}, start=1)
-    assert lay["marathon"]["end"] == 100
-    assert lay["tv_block"]["start"] == 101
-    assert lay["movie"]["start"] == 201
+def test_assign_numbers_start_offset():
+    order = ["marathon", "movie"]
+    counts = {"marathon": 2, "movie": 3}
+    result = cb.assign_numbers(order, counts, start=10)
+    assert result["marathon"] == [10, 11]
+    assert result["movie"] == [12, 13, 14]
 
 
-def test_partial_sizes_fill_from_defaults():
-    lay = cb.resolve_layout({"movie": 50}, start=10)
-    assert lay["marathon"]["size"] == 10        # untouched default
-    assert lay["movie"]["size"] == 50           # override applied
-    assert lay["franchise"]["start"] == 80      # shifted by the bigger movie block
+def test_assign_numbers_single_category():
+    result = cb.assign_numbers(["specialty"], {"specialty": 5}, start=1)
+    assert result["specialty"] == [1, 2, 3, 4, 5]
 
 
-def test_invalid_sizes_clamped_to_one():
-    lay = cb.resolve_layout({"marathon": 0, "tv_block": -5, "movie": "x"}, start=1)
-    assert lay["marathon"]["size"] == 1
-    assert lay["tv_block"]["size"] == 1
-    assert lay["movie"]["size"] == cb.DEFAULT_SIZES["movie"]  # unparseable -> default
+def test_assign_numbers_all_empty_returns_empty():
+    result = cb.assign_numbers(["marathon", "movie"], {}, start=1)
+    assert result == {}
+
+
+def test_assign_numbers_returns_list_of_ints():
+    result = cb.assign_numbers(["marathon"], {"marathon": 3}, start=7)
+    assert result["marathon"] == [7, 8, 9]
+    assert all(isinstance(n, int) for n in result["marathon"])
+
+
+# ── resolve_order ──────────────────────────────────────────────────────────────
+
+def test_resolve_order_none_returns_canonical():
+    assert cb.resolve_order(None) == cb.CANONICAL_ORDER
+
+
+def test_resolve_order_empty_returns_canonical():
+    assert cb.resolve_order([]) == cb.CANONICAL_ORDER
+
+
+def test_resolve_order_filters_unknown_keys():
+    result = cb.resolve_order(["marathon", "nonexistent_key", "movie"])
+    assert "nonexistent_key" not in result
+    assert "marathon" in result
+    assert "movie" in result
+
+
+def test_resolve_order_appends_missing_canonical_keys():
+    # Only marathon and movie supplied; rest of CANONICAL_ORDER appended at end.
+    result = cb.resolve_order(["marathon", "movie"])
+    assert result[0] == "marathon"
+    assert result[1] == "movie"
+    # Every canonical key must appear exactly once.
+    assert set(result) == set(cb.CANONICAL_ORDER)
+    assert len(result) == len(cb.CANONICAL_ORDER)
+
+
+def test_resolve_order_preserves_configured_prefix():
+    # Put movie first, marathon second — configured order respected at the front.
+    result = cb.resolve_order(["movie", "marathon"])
+    assert result[0] == "movie"
+    assert result[1] == "marathon"
+
+
+def test_resolve_order_full_canonical_unchanged():
+    # Supplying the full canonical order returns it verbatim.
+    assert cb.resolve_order(cb.CANONICAL_ORDER) == cb.CANONICAL_ORDER
+
+
+# ── category order affects produced numbers ────────────────────────────────────
+
+def test_category_order_changes_numbers():
+    """Reordering categories changes which numbers each category gets."""
+    counts = {"marathon": 5, "movie": 3}
+
+    result_a = cb.assign_numbers(cb.resolve_order(["marathon", "movie"]), counts, start=1)
+    result_b = cb.assign_numbers(cb.resolve_order(["movie", "marathon"]), counts, start=1)
+
+    # In order A: marathon 1–5, movie 6–8
+    assert result_a["marathon"] == [1, 2, 3, 4, 5]
+    assert result_a["movie"] == [6, 7, 8]
+
+    # In order B: movie 1–3, marathon 4–8
+    assert result_b["movie"] == [1, 2, 3]
+    assert result_b["marathon"] == [4, 5, 6, 7, 8]
+
+
+# ── canonical catalogue ────────────────────────────────────────────────────────
+
+def test_canonical_order_has_expected_keys():
+    expected = {
+        "marathon", "tv_block", "tv_movie_mix", "movie",
+        "entity", "network", "programming_block", "franchise", "specialty",
+    }
+    assert set(cb.CANONICAL_ORDER) == expected
+
+
+def test_block_labels_covers_canonical_order():
+    for key in cb.CANONICAL_ORDER:
+        assert key in cb.BLOCK_LABELS, f"BLOCK_LABELS missing key: {key}"

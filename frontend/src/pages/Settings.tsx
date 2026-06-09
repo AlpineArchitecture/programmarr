@@ -1,37 +1,86 @@
 import {
-  Alert, Box, Button, Card, Code, Divider, Group, NumberInput,
-  PasswordInput, SimpleGrid, Stack, Switch, Text, TextInput, Title,
+  ActionIcon, Alert, Box, Button, Card, Divider, Group,
+  NumberInput, PasswordInput, Stack, Switch, Text, TextInput, Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
-import { IconAlertCircle, IconCheck, IconDeviceFloppy, IconRepeat } from '@tabler/icons-react';
+import {
+  IconAlertCircle, IconArrowDown, IconArrowUp, IconCheck,
+  IconDeviceFloppy, IconRepeat,
+} from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 
 const MASK = '••••••••';
 
-// Mirrors channel_blocks.py (CANONICAL_ORDER, DEFAULT_SIZES). Keep in sync.
-const BLOCKS: { key: string; label: string }[] = [
-  { key: 'marathon', label: 'TV Marathons' },
-  { key: 'tv_block', label: 'TV Blocks' },
-  { key: 'movie', label: 'Movie Channels' },
-  { key: 'franchise', label: 'Franchise & Series' },
-  { key: 'specialty', label: 'Specialty' },
+// Mirrors channel_blocks.py CANONICAL_ORDER + BLOCK_LABELS.
+const CANONICAL_ORDER = [
+  'marathon', 'tv_block', 'tv_movie_mix', 'movie', 'entity',
+  'network', 'programming_block', 'franchise', 'specialty',
 ];
-const BLOCK_DEFAULTS: Record<string, number> = {
-  marathon: 10, tv_block: 10, movie: 20, franchise: 20, specialty: 10,
+const BLOCK_LABELS: Record<string, string> = {
+  marathon:          'TV Marathons',
+  tv_block:          'TV Blocks',
+  tv_movie_mix:      'TV & Movie Mix',
+  movie:             'Movie Channels',
+  entity:            'Studios / Directors / Actors',
+  network:           'Networks',
+  programming_block: 'Classic TV Blocks',
+  franchise:         'Franchise & Series',
+  specialty:         'Specialty',
 };
 
-// Range each block occupies when numbering starts at 1 (a fresh deploy). Blocks are
-// placed by accumulating sizes, so on a deploy that keeps existing channels the whole
-// layout shifts up by the start number.
-function blockRanges(sizes: Record<string, number>): { label: string; range: string }[] {
-  let cursor = 1;
-  return BLOCKS.map(({ key, label }) => {
-    const size = Math.max(1, sizes[key] || BLOCK_DEFAULTS[key]);
-    const range = `${cursor}–${cursor + size - 1}`;
-    cursor += size;
-    return { label, range };
-  });
+/** Resolve a stored order against the canonical list — same logic as channel_blocks.resolve_order. */
+function resolveOrder(stored: string[]): string[] {
+  const known = new Set(CANONICAL_ORDER);
+  const filtered = stored.filter((k) => known.has(k));
+  const present = new Set(filtered);
+  const tail = CANONICAL_ORDER.filter((k) => !present.has(k));
+  return [...filtered, ...tail];
+}
+
+interface CategoryOrderEditorProps {
+  order: string[];
+  onChange: (order: string[]) => void;
+}
+
+function CategoryOrderEditor({ order, onChange }: CategoryOrderEditorProps) {
+  function move(index: number, direction: -1 | 1) {
+    const next = [...order];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  }
+
+  return (
+    <Stack gap={4}>
+      {order.map((key, i) => (
+        <Group key={key} gap="xs" wrap="nowrap">
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            disabled={i === 0}
+            onClick={() => move(i, -1)}
+            aria-label="Move up"
+          >
+            <IconArrowUp size={14} />
+          </ActionIcon>
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            disabled={i === order.length - 1}
+            onClick={() => move(i, 1)}
+            aria-label="Move down"
+          >
+            <IconArrowDown size={14} />
+          </ActionIcon>
+          <Text size="sm" style={{ flex: 1 }}>
+            {BLOCK_LABELS[key] ?? key}
+          </Text>
+        </Group>
+      ))}
+    </Stack>
+  );
 }
 
 export default function Settings() {
@@ -46,7 +95,7 @@ export default function Settings() {
   const [recipeInterval, setRecipeInterval] = useState(12);
   const [savingRecipes, setSavingRecipes] = useState(false);
 
-  const [blockSizes, setBlockSizes] = useState<Record<string, number>>({ ...BLOCK_DEFAULTS });
+  const [channelOrder, setChannelOrder] = useState<string[]>(CANONICAL_ORDER);
 
   useEffect(() => {
     api.getConfig().then((cfg) => {
@@ -58,8 +107,8 @@ export default function Settings() {
         auth_username: cfg.auth_username || '',
         auth_password: cfg.auth_password || '',
       });
-      const cb = cfg.channel_blocks || {};
-      setBlockSizes({ ...BLOCK_DEFAULTS, ...cb });
+      const stored: string[] = cfg.channel_order || [];
+      setChannelOrder(resolveOrder(stored));
       setLoaded(true);
     });
     api.getRecipesStatus().then((s) => {
@@ -92,7 +141,7 @@ export default function Settings() {
   async function save() {
     setSaving(true);
     try {
-      await api.saveConfig({ ...values, channel_blocks: blockSizes });
+      await api.saveConfig({ ...values, channel_order: channelOrder });
       notifications.show({
         title: 'Saved',
         message: 'Configuration updated',
@@ -177,33 +226,15 @@ export default function Settings() {
         )}
       </Card>
 
-      {/* Channel numbering */}
+      {/* Channel ordering */}
       <Card p="lg">
         <Text fw={700} mb={4}>Channel Numbering</Text>
         <Text size="xs" c="dimmed" mb="md">
-          How many channel numbers each category reserves. Blocks are placed back-to-back, so
-          enlarge a category to fit more channels (handy for big libraries). Defaults are 10/10/20/20/10.
+          Channels are numbered 1, 2, 3… in this category order. Empty categories consume
+          no numbers — if you have 15 marathons they get 1–15, then the next category
+          starts at 16.
         </Text>
-        <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
-          {BLOCKS.map(({ key, label }) => (
-            <NumberInput
-              key={key}
-              label={label}
-              value={blockSizes[key]}
-              onChange={(v) => setBlockSizes((s) => ({ ...s, [key]: Math.max(1, Number(v) || 1) }))}
-              min={1}
-              max={1000}
-            />
-          ))}
-        </SimpleGrid>
-        <Text size="xs" c="dimmed" mt="md">
-          On a fresh deploy (numbering from 1):{' '}
-          {blockRanges(blockSizes).map(({ label, range }, i) => (
-            <Text span key={label}>
-              {i > 0 && ' · '}{label} <Code>{range}</Code>
-            </Text>
-          ))}
-        </Text>
+        <CategoryOrderEditor order={channelOrder} onChange={setChannelOrder} />
       </Card>
 
       <Group>
@@ -225,7 +256,7 @@ export default function Settings() {
           <Text fw={700}>Live Channels</Text>
         </Group>
         <Text size="xs" c="dimmed" mb="md">
-          When enabled, channels marked “live” are re-checked on a schedule and patched in place as
+          When enabled, channels marked "live" are re-checked on a schedule and patched in place as
           your library grows (new episodes, new franchise films) — no redeploy. Off by default.
         </Text>
         <Stack gap="sm">

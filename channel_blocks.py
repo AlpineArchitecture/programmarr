@@ -1,76 +1,95 @@
 """channel_blocks.py — shared, pure channel-numbering layout.
 
-Single source of truth for how channels are bucketed into numbered blocks.
+Single source of truth for how channels are bucketed into numbered categories.
 **Pure and importable** (no config.json / argv / sys.exit), like channel_engine.py,
 so both the subprocess scripts (generate_no_ai.py) and the long-lived FastAPI
 backend (pipeline_router) can use it without side effects.
 
-A *block* is a named, ordered category of channels with a configurable **size**
-(how many channel numbers it reserves). Block start numbers are derived by
-**accumulating sizes from a base**, so resizing one block shifts everything after
-it — there are no fixed absolute lanes. This is what lets a large library scale a
-category up (e.g. 100 movie channels) without colliding into the next block.
+Channels are numbered sequentially from a start value, packed tight in category
+order.  A "category" is simply a named bucket; categories with zero channels
+consume no numbers.  The only configurable knob is the *order* of the categories,
+stored as ``channel_order`` in config.json (a list of category key strings).
 
-Defaults reproduce the historical cable-style layout when ``start=10``:
-Marathons 10-19, TV Blocks 20-29, Movies 30-49, Franchise 50-69, Specialty 70-79.
-Fresh deploys default to ``start=1`` (channel numbering truly begins at 1).
+Example: order [marathon, movie, franchise], counts {marathon:15, movie:8,
+franchise:3}, start 1 → marathon 1–15, movie 16–23, franchise 24–26.
 """
 
-# Canonical block order. Keys match the LLM/no-AI categories. The Planner's
-# "entity" channels (studio/director/actor) share the "franchise" block start
-# (historically channel 50) — see pipeline_router's compose mapping.
-CANONICAL_ORDER = ["marathon", "tv_block", "movie", "franchise", "specialty"]
+# Canonical category order — the full future set in the order used when no
+# config override is present.  Later steps map Planner candidates onto these keys.
+CANONICAL_ORDER = [
+    "marathon",
+    "tv_block",
+    "tv_movie_mix",
+    "movie",
+    "entity",
+    "network",
+    "programming_block",
+    "franchise",
+    "specialty",
+]
 
-# Human-facing labels for the Settings UI and the generated prompt scheme.
+# Human-facing labels for the Settings UI and generated prompt guidance.
 BLOCK_LABELS = {
-    "marathon": "TV Marathons",
-    "tv_block": "TV Blocks",
-    "movie": "Movie Channels",
-    "franchise": "Franchise & Series",
-    "specialty": "Specialty",
-}
-
-# Default block sizes — reproduce the historical 10/10/20/20/10 layout.
-DEFAULT_SIZES = {
-    "marathon": 10,
-    "tv_block": 10,
-    "movie": 20,
-    "franchise": 20,
-    "specialty": 10,
+    "marathon":          "TV Marathons",
+    "tv_block":          "TV Blocks",
+    "tv_movie_mix":      "TV & Movie Mix",
+    "movie":             "Movie Channels",
+    "entity":            "Studios / Directors / Actors",
+    "network":           "Networks",
+    "programming_block": "Classic TV Blocks",
+    "franchise":         "Franchise & Series",
+    "specialty":         "Specialty",
 }
 
 # Fresh deploys begin at channel 1 (the protection flow rounds up above kept ones).
 DEFAULT_START = 1
 
 
-def normalize_sizes(sizes) -> dict:
-    """Return a complete size map, filling missing/invalid entries from defaults.
+def resolve_order(configured: list | None) -> list:
+    """Return the effective category order from a config value.
 
-    Each size is coerced to an int >= 1, so a malformed config can never produce a
-    zero-width or negative block.
+    Rules:
+    - Start with ``configured`` filtered to known CANONICAL_ORDER keys (unknown
+      keys are silently dropped so stale configs don't crash).
+    - Append any CANONICAL_ORDER keys that are missing from ``configured``
+      (preserving canonical relative order for the tail).
+    - If ``configured`` is falsy (None, empty list) fall back to CANONICAL_ORDER.
     """
-    sizes = sizes or {}
-    out = {}
-    for key in CANONICAL_ORDER:
-        try:
-            v = int(sizes.get(key, DEFAULT_SIZES[key]))
-        except (TypeError, ValueError):
-            v = DEFAULT_SIZES[key]
-        out[key] = max(1, v)
-    return out
+    known = set(CANONICAL_ORDER)
+    if not configured:
+        return list(CANONICAL_ORDER)
+    filtered = [k for k in configured if k in known]
+    present = set(filtered)
+    tail = [k for k in CANONICAL_ORDER if k not in present]
+    return filtered + tail
 
 
-def resolve_layout(sizes=None, start: int = DEFAULT_START) -> dict:
-    """Map each block to its placement, accumulating sizes from ``start``.
+def assign_numbers(order: list, counts: dict, start: int = DEFAULT_START) -> dict:
+    """Return {category: [channel numbers]} packed sequentially from ``start``.
 
-    Returns an ordered dict ``{key: {"start", "size", "end"}}`` where ``end`` is
-    inclusive (``start + size - 1``). Block N+1 begins immediately after block N.
+    Categories in ``order`` that have no entry in ``counts`` (or a zero count)
+    consume no channel numbers.  The first non-empty category begins at ``start``;
+    every subsequent non-empty category follows immediately after.
+
+    Args:
+        order:  Ordered list of category keys (from resolve_order).
+        counts: {category_key: number_of_channels}.  Missing keys treated as 0.
+        start:  The first channel number to assign (default 1).
+
+    Returns:
+        Dict mapping each category key (with count > 0) to its list of channel
+        numbers.  Categories with count == 0 are omitted.
+
+    Example:
+        assign_numbers(["marathon", "movie", "franchise"],
+                       {"marathon": 15, "movie": 8, "franchise": 3}, start=1)
+        → {"marathon": [1..15], "movie": [16..23], "franchise": [24..26]}
     """
-    sizes = normalize_sizes(sizes)
-    layout: dict = {}
+    result: dict = {}
     cursor = int(start)
-    for key in CANONICAL_ORDER:
-        size = sizes[key]
-        layout[key] = {"start": cursor, "size": size, "end": cursor + size - 1}
-        cursor += size
-    return layout
+    for key in order:
+        n = counts.get(key, 0)
+        if n > 0:
+            result[key] = list(range(cursor, cursor + n))
+            cursor += n
+    return result

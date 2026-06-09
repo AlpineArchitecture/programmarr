@@ -383,14 +383,17 @@ TYPE_LABELS = {
     "franchise": "Franchise series", "specialty": "Specialty channels",
 }
 
-# Per-block scheme descriptions, keyed by channel_blocks.CANONICAL_ORDER. The
-# numbering ranges are regenerated from the resolved layout; only the prose is fixed.
+# Per-category prose for the LLM prompt's numbering guidance section.
 _BLOCK_DESC = {
-    "marathon": "TV Marathons — 24/7 single-show loops (needs 50+ episodes to qualify)",
-    "tv_block": "TV Blocks — themed multi-show rotations (era blocks, genre blocks, etc.)",
-    "movie": "Movie Channels — genre and decade-based pools",
-    "franchise": "Franchise & Curated Series — ordered collections (film series in release order, etc.)",
-    "specialty": "Specialty — single-movie loops, holiday, niche themes",
+    "marathon":          "TV Marathons — 24/7 single-show loops (needs 50+ episodes to qualify)",
+    "tv_block":          "TV Blocks — themed multi-show rotations (era blocks, genre blocks, etc.)",
+    "tv_movie_mix":      "TV & Movie Mix — mixed-genre channels spanning both shows and films",
+    "movie":             "Movie Channels — genre and decade-based pools",
+    "entity":            "Studios / Directors / Actors — curated by creator or studio",
+    "network":           "Networks — all shows from a single network (HBO, NBC, etc.)",
+    "programming_block": "Classic TV Blocks — historical programming lineups (TGIF, Must See TV, etc.)",
+    "franchise":         "Franchise & Curated Series — ordered collections (film series in release order, etc.)",
+    "specialty":         "Specialty — single-movie loops, holiday, niche themes",
 }
 # Matches the bullet list under the scheme heading, regardless of the ranges in it.
 _SCHEME_BULLETS_RE = re.compile(
@@ -421,21 +424,28 @@ def _strip_meta(content: str) -> str:
 def _regen_numbering_scheme(content: str, start: int) -> str:
     """Rewrite PROMPT.md's numbering bullets + example numbers from the live layout.
 
-    Both the per-block ranges and the JSONL example numbers are derived from the
-    configured block sizes (channel_blocks) and `start`, so the prompt the LLM sees
-    always matches what compose/create will actually produce. PROMPT.md's static text
+    Channel numbers are assigned sequentially tight-packed in category order (no
+    fixed sizes).  We produce a representative example using one channel per
+    non-empty category so the LLM sees realistic numbers.  PROMPT.md's static text
     is only the default (used verbatim by the CLI).
     """
-    layout = channel_blocks.resolve_layout(_load_config().get("channel_blocks"), start)
+    cfg_order = channel_blocks.resolve_order(_load_config().get("channel_order"))
+    # One representative channel per category to show the packing.
+    example_counts = {k: 1 for k in cfg_order}
+    numbers = channel_blocks.assign_numbers(cfg_order, example_counts, start)
     bullets = "\n".join(
-        f"- **{layout[k]['start']}–{layout[k]['end']}**: {_BLOCK_DESC[k]}"
-        for k in channel_blocks.CANONICAL_ORDER
+        f"- **{numbers[k][0]}+**: {_BLOCK_DESC.get(k, channel_blocks.BLOCK_LABELS.get(k, k))}"
+        for k in cfg_order if k in numbers
     )
     content = _SCHEME_BULLETS_RE.sub(lambda m: m.group(1) + bullets + "\n", content)
-    # Example JSONL lines use the marathon/tv_block/movie block starts (10/20/30 by default).
-    content = content.replace('"number": 10,', f'"number": {layout["marathon"]["start"]},')
-    content = content.replace('"number": 20,', f'"number": {layout["tv_block"]["start"]},')
-    content = content.replace('"number": 30,', f'"number": {layout["movie"]["start"]},')
+    # Update JSONL example numbers using the first three occupied positions.
+    occupied = [numbers[k][0] for k in cfg_order if k in numbers]
+    if len(occupied) >= 1:
+        content = content.replace('"number": 10,', f'"number": {occupied[0]},')
+    if len(occupied) >= 2:
+        content = content.replace('"number": 20,', f'"number": {occupied[1]},')
+    if len(occupied) >= 3:
+        content = content.replace('"number": 30,', f'"number": {occupied[2]},')
     return content
 
 
@@ -688,21 +698,20 @@ class ComposeRequest(BaseModel):
     commercials: dict | None = None         # {filler_list_id, filler_list_name?, pad_minutes?}
 
 
-# Which soft-block a candidate category lands in, and its number hint + shuffle default.
+# Which compose category (bucket) each candidate kind maps to, and its shuffle default.
+# Buckets align with channel_blocks.CANONICAL_ORDER keys.
 _CATEGORY = {
-    "marathon":     ("marathon", 10, "ordered"),
-    "tv_genre":     ("tv_block", 20, "block"),
-    "genre":        ("movie", 30, "shuffle"),
-    "genre_decade": ("movie", 30, "shuffle"),
-    "blend":        ("movie", 30, "shuffle"),
-    "studio":       ("entity", 50, "shuffle"),
-    "director":     ("entity", 50, "shuffle"),
-    "actor":        ("entity", 50, "shuffle"),
+    "marathon":     ("marathon",  "ordered"),
+    "tv_genre":     ("tv_block",  "block"),
+    "genre":        ("movie",     "shuffle"),
+    "genre_decade": ("movie",     "shuffle"),
+    "blend":        ("movie",     "shuffle"),
+    "studio":       ("entity",    "shuffle"),
+    "director":     ("entity",    "shuffle"),
+    "actor":        ("entity",    "shuffle"),
 }
+# Compose categories in the order they appear in CANONICAL_ORDER (subset).
 _CATEGORY_ORDER = ["marathon", "tv_block", "movie", "entity"]
-# Which channel_blocks block each compose category lands in. Entities
-# (studio/director/actor) share the Franchise block start — historically ch 50.
-_CATEGORY_BLOCK = {"marathon": "marathon", "tv_block": "tv_block", "movie": "movie", "entity": "franchise"}
 _DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
 
 
@@ -773,9 +782,9 @@ def compose_channels(req: ComposeRequest):
     """Deterministically build channels.json from picked Planner candidate specs.
 
     Each spec is resolved against plex_library.csv into a title list; empties are
-    skipped and reported. Numbers are assigned in soft category blocks (marathons
-    ~10s, TV blocks ~20s, movie channels ~30s+, entities ~50s+) sequentially from
-    `start`, spilling into the next gap on overflow.
+    skipped and reported.  Numbers are assigned sequentially tight-packed in the
+    configured category order (channel_order config key), starting from req.start.
+    Empty categories consume no numbers; input order within a category is preserved.
     """
     movies, shows = _load_library()
     if not movies and not shows:
@@ -789,7 +798,7 @@ def compose_channels(req: ComposeRequest):
         if not meta:
             skipped.append({"name": spec.name or spec.kind, "reason": f"unknown kind '{spec.kind}'"})
             continue
-        category, _, default_shuffle = meta
+        category, default_shuffle = meta
         content = _resolve_spec(spec, movies, shows)
         name = spec.name or _auto_name(spec)
         if not content:
@@ -805,21 +814,18 @@ def compose_channels(req: ComposeRequest):
     if req.commercials and req.commercials.get("filler_list_id"):
         extras["commercials"] = req.commercials
 
-    # Soft-block numbering: each category starts at its configured block start (derived
-    # by accumulating per-category sizes from req.start), or the running cursor if a
-    # previous category already overflowed past it — so it spills, never collides. The
-    # layout starts at req.start, so a fresh deploy (req.start == 1) truly begins at 1.
-    layout = channel_blocks.resolve_layout(_load_config().get("channel_blocks"), req.start)
+    # Sequential tight-packed numbering: categories in configured order, no fixed sizes,
+    # empty categories skip entirely.  req.start is the first number (1 for a fresh deploy).
+    cfg_order = channel_blocks.resolve_order(_load_config().get("channel_order"))
+    counts = {cat: len(buckets.get(cat, [])) for cat in cfg_order}
+    numbers = channel_blocks.assign_numbers(cfg_order, counts, req.start)
+
     channels: list[dict] = []
-    cursor = req.start
-    for category in _CATEGORY_ORDER:
-        items = buckets[category]
-        if not items:
-            continue
-        base = max(layout[_CATEGORY_BLOCK[category]]["start"], cursor)
-        for i, ch in enumerate(items):
-            channels.append({"number": base + i, **ch, **extras})
-        cursor = base + len(items)
+    for cat in cfg_order:
+        items = buckets.get(cat, [])
+        cat_numbers = numbers.get(cat, [])
+        for num, ch in zip(cat_numbers, items):
+            channels.append({"number": num, **ch, **extras})
 
     data = {"channels": channels, "orphaned": [], "suggested_channels": []}
     with open(DATA_DIR / "channels.draft.json", "w", encoding="utf-8") as f:
@@ -835,14 +841,14 @@ def compose_channels(req: ComposeRequest):
 
 @router.post("/pipeline/no-ai")
 async def run_no_ai(
-    start: int = Query(10),
+    start: int = Query(1),
     genres: Optional[str] = Query(None),
     decades: Optional[str] = Query(None),
     types: Optional[str] = Query(None),
     min_items: Optional[int] = Query(None),
 ):
     args = []
-    if start != 10:
+    if start != 1:
         args += ["--start", str(start)]
     if genres is not None:
         args += ["--genres", genres]
@@ -852,9 +858,9 @@ async def run_no_ai(
         args += ["--types", types]
     if min_items is not None:
         args += ["--min-items", str(min_items)]
-    # Pass the configured block sizes so the CLI generator and the Planner agree on layout.
-    blocks = channel_blocks.normalize_sizes(_load_config().get("channel_blocks"))
-    args += ["--block-sizes", ",".join(f"{k}={v}" for k, v in blocks.items())]
+    # Pass the configured category order so the CLI generator matches the Planner.
+    order = channel_blocks.resolve_order(_load_config().get("channel_order"))
+    args += ["--order", ",".join(order)]
     return _sse(_stream("generate_no_ai.py", args, "no_ai"))
 
 
