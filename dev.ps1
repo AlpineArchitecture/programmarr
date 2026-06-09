@@ -1,7 +1,9 @@
 # dev.ps1 — fast local dev loop (frontend HMR + backend auto-reload).
 #
 # This is the FAST iteration loop: frontend edits are instant (Vite HMR) and
-# backend edits reload in ~1s (uvicorn --reload) — no Docker rebuild per tweak.
+# backend edits reload in ~1s (watchfiles restarts the process) — no Docker rebuild per tweak.
+# NOTE: backend uses watchfiles, NOT `uvicorn --reload`, on purpose — see the backend block
+# below for why (uvicorn --reload breaks pipeline subprocesses on Windows).
 # Docker (`docker compose build && docker compose up`) stays the PARITY check you
 # run before shipping. See CLAUDE.md → "Local Development".
 #
@@ -15,11 +17,18 @@
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
-# Backend: uvicorn with --reload. PROGRAMMARR_DATA -> ./data (Docker layout),
-# PROGRAMMARR_SCRIPTS -> repo root (where export.py / channel_engine.py live).
+# Backend: watchfiles restarts the WHOLE uvicorn process on save (process-level reload),
+# NOT uvicorn's built-in --reload. This is deliberate and required on Windows:
+# uvicorn --reload runs the server in a worker subprocess and forces the Selector event
+# loop, which CANNOT do asyncio.create_subprocess_exec — so export.py and every pipeline
+# script die with NotImplementedError. Running plain `uvicorn` (no --reload) lets main.py's
+# WindowsProactorEventLoopPolicy stand, and watchfiles gives us the ~1s reload-on-save by
+# restarting the entire process. Best of both: fast reload AND working pipeline subprocesses.
+# (No-op concern on Docker/Linux — that path uses the image's entrypoint, not this script.)
+# PROGRAMMARR_DATA -> ./data (Docker layout), PROGRAMMARR_SCRIPTS -> repo root.
 Start-Process powershell -ArgumentList @(
   "-NoExit", "-Command",
-  "`$env:PROGRAMMARR_DATA='$root\data'; `$env:PROGRAMMARR_SCRIPTS='$root'; python -m uvicorn main:app --reload --port 7979 --app-dir '$root\backend'"
+  "`$env:PROGRAMMARR_DATA='$root\data'; `$env:PROGRAMMARR_SCRIPTS='$root'; python -m watchfiles 'python -m uvicorn main:app --port 7979 --app-dir $root\backend' '$root\backend'"
 )
 
 # Frontend: Vite dev server with HMR on :5173 (proxies /api -> :7979).

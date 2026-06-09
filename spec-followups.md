@@ -74,4 +74,31 @@ each channel's number to its actual Tunarr number (match by name), so the record
 reality. The user's content edits to the 17 channels did NOT apply and must be re-deployed after
 the code fix.
 
+## F3 — ✅ FIXED: dev loop: `uvicorn --reload` breaks export on Windows
+
+> Resolved: `dev.ps1` now reloads the backend at the PROCESS level via `watchfiles`
+> (`python -m watchfiles "python -m uvicorn main:app …" backend`) instead of `uvicorn --reload`.
+> Each restart is a fresh process where main.py's WindowsProactorEventLoopPolicy stands, so
+> `create_subprocess_exec` works AND you still get ~1s reload-on-save. Validated booting on a
+> throwaway port. Verified the fix premise: a Proactor loop spawns subprocesses fine; uvicorn's
+> `--reload` was forcing the Selector loop. **Restart your dev loop once with the updated dev.ps1.**
+
+**Symptom (was recurring):** Export (and every pipeline subprocess step) failed in the local dev
+loop with `NotImplementedError` from `asyncio.create_subprocess_exec`.
+
+**Root cause:** `create_subprocess_exec` needs the Windows **ProactorEventLoop**. `main.py`
+sets `WindowsProactorEventLoopPolicy`, but **uvicorn overrides it in subprocess mode**
+(`--reload`/`--workers`) by forcing `WindowsSelectorEventLoopPolicy`. The Selector loop can't
+spawn subprocesses. No-op on Docker/Linux.
+
+**`dev.ps1` uses `--reload`**, so the documented fast loop hits this every time.
+
+**Action options (pick one):**
+- Drop `--reload` from `dev.ps1`'s backend command (simplest; manual restart on backend edits).
+- Or document the gotcha prominently in CLAUDE.md "Local Development" + a one-line note in
+  `dev.ps1` so it doesn't keep surprising us.
+- Or add a small reload-worker wrapper that re-asserts the Proactor policy (more work).
+
+(Also captured in memory: `reference_dev_reload_breaks_export`.)
+
 <!-- Append further review follow-ups below (one ## section each). -->
