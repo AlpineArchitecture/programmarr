@@ -4,6 +4,21 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.3] — 2026-06-08
+
+### Fixed
+
+- **Dashboard guide now has a single unified vertical scroll.** The EPG guide grid previously
+  showed two independent vertical scrollbars — one for the channel rail (number/name) and one
+  for the programme grid — so scrolling one left the other behind. The rail's scroll is now
+  driven by the programme grid via the existing scroll-sync mechanism, so the two move together
+  as one. The mousewheel still works while hovering the channel names.
+- **AI Extras "Copy" button works over plain HTTP.** Copying the AI prompt silently did nothing
+  on non-secure origins (e.g. the production box over HTTP), because `navigator.clipboard` is
+  undefined outside a secure context and the call threw with no fallback. Added a clipboard
+  helper with a `textarea` + `execCommand('copy')` fallback and success/failure notifications,
+  used by both the prompt copy and the XMLTV-URL copy.
+
 ## [0.4.2] — 2026-06-08
 
 ### Added
