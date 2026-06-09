@@ -23,6 +23,8 @@ export const api = {
   getFillerLists: () => req<FillerList[]>('/tunarr/filler-lists'),
 
   getChannels: () => req<ChannelsFile>('/channels'),
+  // The in-progress Planner draft (compose + AI extras), distinct from the deployed /channels.
+  getDraft: () => req<ChannelsFile>('/pipeline/draft'),
   updateChannels: (data: object) =>
     req('/channels', { method: 'PUT', body: JSON.stringify(data) }),
   getChannel: (n: number) => req<Channel>(`/channels/${n}`),

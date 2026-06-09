@@ -250,7 +250,9 @@ AI" toggle is on; Collections only if opted in.
   The start number auto-computes as the highest kept rounded up to the next 10. Deploy does
   **not** re-ask protection — it only flags conflicts between kept numbers and deploy numbers.
 - **The Planner is deterministic:** selected candidates post as `CandidateSpec[]` to
-  `POST /pipeline/compose`, which writes `channels.json`. Candidates are unchecked by default.
+  `POST /pipeline/compose`, which writes `channels.draft.json` (the AI and collections steps
+  append to the same draft; the Deploy step's probe and `deploy-selective` both read it).
+  Candidates are unchecked by default.
 - **The AI layer merges on top** via `POST /pipeline/validate` with `append=true` (collisions
   renumbered, name-duplicates skipped) — it never overwrites the deterministic lineup.
 - **Deploy runs a cascade that always completes:** `deploy-selective` → (if art opted in)

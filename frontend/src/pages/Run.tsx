@@ -969,7 +969,10 @@ function CollectionsStep({ start, onDone }: { start: number; onDone: () => void 
 
   useEffect(() => {
     Promise.all([
-      api.getChannels().catch(() => ({ channels: [] as { number: number }[] })),
+      // Read the in-progress DRAFT (compose + AI extras), not the deployed /channels —
+      // otherwise the base lands above the stale deployed max and apply_collections
+      // clobbers the AI channels that were merged in above it.
+      api.getDraft().catch(() => ({ channels: [] as { number: number }[] })),
       api.getCollections(),
     ])
       .then(([chFile, cols]) => {
@@ -1092,7 +1095,8 @@ function DeployStep({ setup }: { setup: SetupState }) {
   async function runProbe() {
     setProbeLines([]); setProbeDone(false); setChannelSels([]); setProbing(true);
     const collected: string[] = [];
-    const code = await streamPipeline('/pipeline/probe', {}, (ev) => {
+    const qs = protectedNums.length ? `?protected=${protectedNums.join(',')}` : '';
+    const code = await streamPipeline(`/pipeline/probe${qs}`, {}, (ev) => {
       if (ev.type === 'line') { collected.push(ev.text); setProbeLines([...collected]); }
     });
     const ok = code === 0;
