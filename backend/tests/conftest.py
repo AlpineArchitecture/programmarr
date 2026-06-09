@@ -30,9 +30,9 @@ def movie(title, year=2000, genres="", studio="", director="", actors="", rating
             "Genres": genres, "Director": director, "Studio": studio, "Actors": actors}
 
 
-def show(title, genres="", seasons=1, episodes=10):
+def show(title, genres="", seasons=1, episodes=10, studio=""):
     return {"Title": title, "Type": "TV", "Genres": genres,
-            "Seasons": str(seasons), "Episodes": str(episodes)}
+            "Studio": studio, "Seasons": str(seasons), "Episodes": str(episodes)}
 
 
 @pytest.fixture

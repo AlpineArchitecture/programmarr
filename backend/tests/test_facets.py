@@ -154,3 +154,180 @@ def test_tv_movie_genres_sorted_by_total_desc(pr, seed):
     f = pr.library_facets()
     mix_genres = [x["genre"] for x in f["tv_movie_genres"]]
     assert mix_genres.index("Comedy") < mix_genres.index("Drama")
+
+
+# ── networks ───────────────────────────────────────────────────────────────────
+
+def test_networks_groups_tv_studio_values(pr, seed):
+    """Networks facet counts TV Studio values above NETWORK_MIN floor."""
+    seed([
+        show("Show A", studio="HBO"),
+        show("Show B", studio="HBO"),
+        show("Show C", studio="HBO"),
+        show("Show D", studio="Netflix"),
+        show("Show E", studio="Netflix"),
+        show("Show F", studio="Netflix"),
+        show("Show G", studio="Tiny"),  # only 1 — below NETWORK_MIN=3
+    ])
+    f = pr.library_facets()
+    by_value = {n["value"]: n["count"] for n in f["networks"]}
+    assert by_value.get("HBO") == 3
+    assert by_value.get("Netflix") == 3
+    assert "Tiny" not in by_value
+
+
+def test_networks_excludes_movie_studios(pr, seed):
+    """Movie rows do NOT contribute to the networks facet — TV only."""
+    seed([
+        movie("Film 1", studio="A24"),
+        movie("Film 2", studio="A24"),
+        movie("Film 3", studio="A24"),
+        movie("Film 4", studio="A24"),
+        show("Show 1", studio="HBO"),
+        show("Show 2", studio="HBO"),
+        show("Show 3", studio="HBO"),
+    ])
+    f = pr.library_facets()
+    by_value = {n["value"]: n["count"] for n in f["networks"]}
+    assert "A24" not in by_value   # A24 is a movie studio, not a TV network
+    assert by_value.get("HBO") == 3
+
+
+def test_networks_below_floor_omitted(pr, seed):
+    """Networks with fewer than NETWORK_MIN (3) TV shows are not returned."""
+    seed([
+        show("Show 1", studio="HBO"),
+        show("Show 2", studio="HBO"),  # 2 shows — below floor
+    ])
+    f = pr.library_facets()
+    assert len(f["networks"]) == 0
+
+
+def test_networks_sorted_by_count_desc(pr, seed):
+    """Networks facet is sorted by count descending."""
+    seed(
+        [show(f"HBO{i}", studio="HBO") for i in range(5)] +
+        [show(f"Net{i}", studio="Netflix") for i in range(3)]
+    )
+    f = pr.library_facets()
+    values = [n["value"] for n in f["networks"]]
+    assert values.index("HBO") < values.index("Netflix")
+
+
+# ── programming-blocks endpoint ────────────────────────────────────────────────
+
+def test_programming_blocks_filters_to_library(pr, seed, tmp_path, monkeypatch):
+    """Only blocks with present_count >= BLOCK_MIN (3) are returned; present_shows
+    contains only titles found in the library."""
+    import json
+    catalog = [
+        {
+            "name": "TGIF",
+            "era": "1989–2000",
+            "network": "ABC",
+            "shows": ["Full House", "Family Matters", "Step by Step", "Boy Meets World"],
+        },
+        {
+            "name": "Must See TV",
+            "era": "1994–2004",
+            "network": "NBC",
+            "shows": ["Seinfeld", "Friends"],  # only 2 possible matches — below BLOCK_MIN
+        },
+    ]
+    catalog_path = tmp_path / "programming_blocks.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(pr, "SCRIPTS_DIR", tmp_path)
+
+    # Seed library with 3 of the 4 TGIF shows (qualifying), 0 of 2 NBC shows.
+    seed([
+        show("Full House", episodes=192),
+        show("Family Matters", episodes=215),
+        show("Step by Step", episodes=160),
+        # Boy Meets World absent
+        # No Seinfeld or Friends in library
+    ])
+
+    result = pr.get_programming_blocks()
+    names = [b["name"] for b in result]
+    assert "TGIF" in names
+    assert "Must See TV" not in names
+
+    tgif = next(b for b in result if b["name"] == "TGIF")
+    assert tgif["present_count"] == 3
+    assert set(tgif["present_shows"]) == {"Full House", "Family Matters", "Step by Step"}
+
+
+def test_programming_blocks_respects_block_min(pr, seed, tmp_path, monkeypatch):
+    """Blocks with exactly BLOCK_MIN (3) matches are included; blocks with 2 are excluded."""
+    import json
+    catalog = [
+        {
+            "name": "Block A",
+            "era": "1990s",
+            "network": "ABC",
+            "shows": ["Show1", "Show2", "Show3"],  # exactly 3 — at the floor, should be included
+        },
+        {
+            "name": "Block B",
+            "era": "1990s",
+            "network": "NBC",
+            "shows": ["Show4", "Show5"],  # 2 shows in library — below floor
+        },
+    ]
+    catalog_path = tmp_path / "programming_blocks.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(pr, "SCRIPTS_DIR", tmp_path)
+
+    seed([
+        show("Show1", episodes=50),
+        show("Show2", episodes=50),
+        show("Show3", episodes=50),
+        show("Show4", episodes=50),
+        show("Show5", episodes=50),
+    ])
+
+    result = pr.get_programming_blocks()
+    names = [b["name"] for b in result]
+    assert "Block A" in names
+    assert "Block B" not in names
+
+
+def test_programming_blocks_case_insensitive_match(pr, seed, tmp_path, monkeypatch):
+    """Title matching for programming blocks is case-insensitive."""
+    import json
+    catalog = [
+        {
+            "name": "Test Block",
+            "era": "1990s",
+            "network": "Test",
+            "shows": ["Full House", "Family Matters", "Step by Step"],
+        }
+    ]
+    catalog_path = tmp_path / "programming_blocks.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(pr, "SCRIPTS_DIR", tmp_path)
+
+    # Library has titles with different casing.
+    seed([
+        show("full house", episodes=192),       # different case
+        show("FAMILY MATTERS", episodes=215),   # all caps
+        show("Step by Step", episodes=160),
+    ])
+
+    result = pr.get_programming_blocks()
+    assert len(result) == 1
+    assert result[0]["present_count"] == 3
+
+
+def test_programming_blocks_no_csv_returns_empty(pr, tmp_path, monkeypatch):
+    """Returns empty list if no plex_library.csv exists."""
+    import json
+    catalog = [{"name": "TGIF", "era": "1989–2000", "network": "ABC",
+                "shows": ["Full House", "Family Matters", "Step by Step"]}]
+    catalog_path = tmp_path / "programming_blocks.json"
+    catalog_path.write_text(json.dumps(catalog), encoding="utf-8")
+    monkeypatch.setattr(pr, "SCRIPTS_DIR", tmp_path)
+
+    # No seed call — no CSV exists.
+    result = pr.get_programming_blocks()
+    assert result == []

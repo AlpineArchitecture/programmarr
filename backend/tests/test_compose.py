@@ -201,3 +201,154 @@ def test_tv_movie_mix_no_match_is_skipped(pr, seed):
     out = _compose(pr, [{"kind": "tv_movie_mix", "genre": "Western"}])
     assert out["count"] == 0
     assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+# ── network ────────────────────────────────────────────────────────────────────
+
+def test_network_resolves_tv_shows_by_studio(pr, seed):
+    """kind=network resolves TV show titles whose Studio matches value (case-insensitive)."""
+    seed([
+        show("The Sopranos", studio="HBO"),
+        show("The Wire", studio="HBO"),
+        show("Breaking Bad", studio="AMC"),
+        movie("HBO Film", studio="HBO"),  # movie rows must NOT appear in network channel
+    ])
+    out = _compose(pr, [{"kind": "network", "value": "HBO"}])
+    assert out["count"] == 1
+    # Must contain exactly the 2 HBO shows, not the movie.
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    content = set(draft["channels"][0]["content"])
+    assert content == {"The Sopranos", "The Wire"}
+
+
+def test_network_case_insensitive(pr, seed):
+    """Network value matching is case-insensitive."""
+    seed([
+        show("Show A", studio="hbo"),
+        show("Show B", studio="HBO"),
+        show("Show C", studio="Hbo"),
+    ])
+    out = _compose(pr, [{"kind": "network", "value": "HBO"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 3
+
+
+def test_network_auto_name(pr, seed):
+    """_auto_name for network returns the network value."""
+    seed([
+        show("Show X", studio="Netflix"),
+        show("Show Y", studio="Netflix"),
+        show("Show Z", studio="Netflix"),
+    ])
+    out = _compose(pr, [{"kind": "network", "value": "Netflix"}])
+    assert out["channels"][0]["name"] == "Netflix"
+
+
+def test_network_no_match_skipped(pr, seed):
+    """A network spec with no matching TV shows is skipped."""
+    seed([show("Some Show", studio="HBO")])
+    out = _compose(pr, [{"kind": "network", "value": "Netflix"}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+def test_network_shuffle_default(pr, seed):
+    """network kind uses 'shuffle' as its default shuffle mode."""
+    seed([
+        show("A", studio="HBO"),
+        show("B", studio="HBO"),
+        show("C", studio="HBO"),
+    ])
+    _compose(pr, [{"kind": "network", "value": "HBO"}])
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    assert draft["channels"][0]["shuffle"] == "shuffle"
+
+
+# ── programming_block ──────────────────────────────────────────────────────────
+
+def test_programming_block_resolves_member_titles(pr, seed):
+    """kind=programming_block resolves the spec's titles list against library TV shows."""
+    seed([
+        show("Full House", episodes=192),
+        show("Family Matters", episodes=215),
+        show("Step by Step", episodes=160),
+        # "Boy Meets World" not in library
+    ])
+    out = _compose(pr, [{
+        "kind": "programming_block",
+        "name": "TGIF",
+        "titles": ["Full House", "Family Matters", "Step by Step", "Boy Meets World"],
+    }])
+    assert out["count"] == 1
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    content = set(draft["channels"][0]["content"])
+    # Only the 3 titles present in the library; Boy Meets World is absent.
+    assert content == {"Full House", "Family Matters", "Step by Step"}
+    assert "Boy Meets World" not in content
+
+
+def test_programming_block_case_insensitive_intersection(pr, seed):
+    """programming_block title matching against library is case-insensitive."""
+    seed([
+        show("full house", episodes=192),       # different case in library
+        show("Family Matters", episodes=215),
+        show("Step by Step", episodes=160),
+    ])
+    out = _compose(pr, [{
+        "kind": "programming_block",
+        "name": "TGIF",
+        "titles": ["Full House", "Family Matters", "Step by Step"],
+    }])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 3
+
+
+def test_programming_block_auto_name(pr, seed):
+    """_auto_name for programming_block returns the spec's name."""
+    seed([
+        show("Seinfeld", episodes=180),
+        show("Friends", episodes=236),
+        show("Frasier", episodes=264),
+    ])
+    out = _compose(pr, [{
+        "kind": "programming_block",
+        "name": "Must See TV",
+        "titles": ["Seinfeld", "Friends", "Frasier"],
+    }])
+    assert out["channels"][0]["name"] == "Must See TV"
+
+
+def test_programming_block_shuffle_default(pr, seed):
+    """programming_block kind uses 'ordered' as its default shuffle mode."""
+    seed([
+        show("Show A", episodes=50),
+        show("Show B", episodes=50),
+        show("Show C", episodes=50),
+    ])
+    _compose(pr, [{
+        "kind": "programming_block",
+        "name": "Test Block",
+        "titles": ["Show A", "Show B", "Show C"],
+    }])
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    assert draft["channels"][0]["shuffle"] == "ordered"
+
+
+def test_programming_block_no_titles_skipped(pr, seed):
+    """A programming_block spec with no titles field (or empty list) is skipped."""
+    seed([show("Some Show", episodes=50)])
+    out = _compose(pr, [{"kind": "programming_block", "name": "Empty Block", "titles": []}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+def test_programming_block_no_library_match_skipped(pr, seed):
+    """A programming_block whose titles don't match any library show is skipped."""
+    seed([show("Other Show", episodes=50)])
+    out = _compose(pr, [{
+        "kind": "programming_block",
+        "name": "TGIF",
+        "titles": ["Full House", "Family Matters"],
+    }])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"

@@ -17,8 +17,9 @@ be marked **live** to auto-update as the library grows.
 
 The web app's channel-creation experience is a single **Planner** (`Run.tsx`): pick
 genres/decades "in play," then check exact curated candidates — per-show marathons,
-genre×decade cuts, named sub-genres, and studio/director/actor channels — built
-deterministically via `/pipeline/compose`. An optional "✨ Bring in AI" layer adds
+genre×decade cuts, named sub-genres, studio/director/actor channels, **TV network channels**
+(from the `Studio` CSV column for TV rows), and **classic programming blocks** (matched from
+`programming_blocks.json`) — built deterministically via `/pipeline/compose`. An optional "✨ Bring in AI" layer adds
 *discovery* (themed channels filters miss) and *tonal curation* (split a broad pool by
 vibe), merged on top.
 
@@ -302,7 +303,7 @@ AI" toggle is on; Collections only if opted in.
   surgical deploy handles all diff logic.
 - **The Planner body is a three-section accordion** (`AccordionSection` component, single-open
   at a time, `openSection` index state, Section 0 open initially):
-  - **Section 0 — TV:** Marathons + Genre-blocks. Step 5 will insert Networks + Classic blocks.
+  - **Section 0 — TV:** Marathons + Genre-blocks + **Networks** (from TV `Studio` values above `NETWORK_MIN=3`, via `EntitySection`) + **Classic TV Blocks** (from `programming_blocks.json` matched against library, `BLOCK_MIN=3`; spec carries `titles` field with present shows).
   - **Section 1 — Movies:** genre×decade, sub-genres, broad genres, Studios/Directors/Actors.
   - **Section 2 — TV + Movies:** mixed-genre candidates from `tv_movie_genres` facet (genres
     present in both libraries above `TV_MOVIE_MIX_MIN`). Step 6 will insert Franchises.

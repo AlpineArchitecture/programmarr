@@ -1,0 +1,147 @@
+[
+  {
+    "name": "TGIF",
+    "era": "1989–2000",
+    "network": "ABC",
+    "shows": [
+      "Full House",
+      "Family Matters",
+      "Step by Step",
+      "Boy Meets World",
+      "Perfect Strangers",
+      "Sabrina the Teenage Witch",
+      "Hangin' with Mr. Cooper",
+      "Sister, Sister"
+    ]
+  },
+  {
+    "name": "Must See TV",
+    "era": "1994–2004",
+    "network": "NBC",
+    "shows": [
+      "Seinfeld",
+      "Friends",
+      "Frasier",
+      "ER",
+      "Will & Grace",
+      "Mad About You",
+      "Just Shoot Me!",
+      "Caroline in the City"
+    ]
+  },
+  {
+    "name": "SNICK",
+    "era": "1992–2004",
+    "network": "Nickelodeon",
+    "shows": [
+      "Are You Afraid of the Dark?",
+      "Clarissa Explains It All",
+      "Ren & Stimpy",
+      "Roundhouse",
+      "All That",
+      "Kenan & Kel",
+      "The Amanda Show",
+      "Rocket Power"
+    ]
+  },
+  {
+    "name": "Nick at Nite",
+    "era": "1985–present",
+    "network": "Nickelodeon",
+    "shows": [
+      "I Love Lucy",
+      "The Dick Van Dyke Show",
+      "Bewitched",
+      "The Mary Tyler Moore Show",
+      "The Bob Newhart Show",
+      "Happy Days",
+      "Laverne & Shirley",
+      "The Odd Couple"
+    ]
+  },
+  {
+    "name": "Animation Domination",
+    "era": "2005–present",
+    "network": "FOX",
+    "shows": [
+      "The Simpsons",
+      "Family Guy",
+      "American Dad!",
+      "Bob's Burgers",
+      "Futurama",
+      "King of the Hill"
+    ]
+  },
+  {
+    "name": "Saturday Morning Cartoons",
+    "era": "1960s–1990s",
+    "network": "various",
+    "shows": [
+      "Animaniacs",
+      "X-Men",
+      "Batman: The Animated Series",
+      "DuckTales",
+      "Tiny Toon Adventures",
+      "Darkwing Duck",
+      "Chip 'n Dale: Rescue Rangers",
+      "TaleSpin",
+      "Gargoyles",
+      "The Real Ghostbusters"
+    ]
+  },
+  {
+    "name": "Fox Kids",
+    "era": "1990–2002",
+    "network": "FOX",
+    "shows": [
+      "X-Men",
+      "Batman: The Animated Series",
+      "Spider-Man",
+      "Mighty Morphin Power Rangers",
+      "Animaniacs",
+      "Tiny Toon Adventures",
+      "Bobby's World"
+    ]
+  },
+  {
+    "name": "Cartoon Cartoon Fridays",
+    "era": "1997–2003",
+    "network": "Cartoon Network",
+    "shows": [
+      "Dexter's Laboratory",
+      "Johnny Bravo",
+      "Cow and Chicken",
+      "I Am Weasel",
+      "The Powerpuff Girls",
+      "Ed, Edd n Eddy",
+      "Courage the Cowardly Dog"
+    ]
+  },
+  {
+    "name": "Adult Swim",
+    "era": "2001–present",
+    "network": "Cartoon Network",
+    "shows": [
+      "Aqua Teen Hunger Force",
+      "Robot Chicken",
+      "The Venture Bros.",
+      "Harvey Birdman, Attorney at Law",
+      "Metalocalypse",
+      "Moral Orel",
+      "Rick and Morty"
+    ]
+  },
+  {
+    "name": "One Saturday Morning",
+    "era": "1997–2002",
+    "network": "ABC",
+    "shows": [
+      "Recess",
+      "Pepper Ann",
+      "Lizzie McGuire",
+      "Fillmore!",
+      "The Weekenders",
+      "Lloyd in Space"
+    ]
+  }
+]

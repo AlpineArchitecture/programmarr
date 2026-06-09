@@ -228,6 +228,8 @@ DIRECTOR_MIN = 3
 ACTOR_MIN = 4
 TV_GENRE_MIN = 3
 TV_MOVIE_MIX_MIN = 3  # minimum on each side for a cross-library mixed-genre candidate
+NETWORK_MIN = 3    # minimum TV shows from a network for it to be offered
+BLOCK_MIN = 3      # minimum programming-block members present in library
 ENTITY_CAP = 60    # cap each entity list; UI searches for the long tail
 
 
@@ -272,6 +274,7 @@ def library_facets(min_items: int = 5):
     director_counts: dict[str, int] = {}
     actor_counts: dict[str, int] = {}
     tv_genre_counts: dict[str, int] = {}
+    network_counts: dict[str, int] = {}  # TV Studio values → show counts
     movie_recs: list[tuple[list[str], int | None]] = []  # (genres, decade_start) for matrix/blends
     show_recs: list[dict] = []  # per-show marathon candidates
     movies = tv = marathon = 0
@@ -298,6 +301,8 @@ def library_facets(min_items: int = 5):
                 tv += 1
                 for g in _multi(row.get("Genres")):
                     tv_genre_counts[g] = tv_genre_counts.get(g, 0) + 1
+                for s in _multi(row.get("Studio")):
+                    network_counts[s] = network_counts.get(s, 0) + 1
                 eps = _safe_int(row.get("Episodes")) or 0
                 if eps >= 50:
                     marathon += 1
@@ -388,7 +393,53 @@ def library_facets(min_items: int = 5):
         "tv_genres": tv_genres,
         "marathons": marathons,
         "tv_movie_genres": tv_movie_genres,
+        "networks": entity_list(network_counts, NETWORK_MIN),
     }
+
+
+@router.get("/pipeline/programming-blocks")
+def get_programming_blocks():
+    """Return programming-block catalog entries that have >= BLOCK_MIN shows in the library.
+
+    Each returned block includes the subset of its `shows` list that are present
+    in the TV library (case-insensitive title match) and a `present_count`.
+    Blocks with fewer than BLOCK_MIN matches are omitted.
+
+    The catalog is read from SCRIPTS_DIR/programming_blocks.json (repo root in dev,
+    /app in Docker), matching how other root-level pure-data files are located.
+    """
+    import csv as _csv
+    catalog_path = SCRIPTS_DIR / "programming_blocks.json"
+    if not catalog_path.exists():
+        raise HTTPException(404, "programming_blocks.json not found")
+    with open(catalog_path, encoding="utf-8") as f:
+        catalog = json.load(f)
+
+    # Build a lower-cased set of TV show titles from the library.
+    csv_path = DATA_DIR / "plex_library.csv"
+    if not csv_path.exists():
+        return []
+    show_titles: dict[str, str] = {}  # lower → canonical title
+    with open(csv_path, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            if row.get("Type") == "TV":
+                t = row.get("Title", "")
+                if t:
+                    show_titles[t.lower()] = t
+
+    results = []
+    for block in catalog:
+        present = [show_titles[s.lower()] for s in block.get("shows", []) if s.lower() in show_titles]
+        if len(present) >= BLOCK_MIN:
+            results.append({
+                "name": block["name"],
+                "era": block.get("era", ""),
+                "network": block.get("network", ""),
+                "shows": block.get("shows", []),
+                "present_shows": present,
+                "present_count": len(present),
+            })
+    return results
 
 
 ANCHOR = "## Channel Numbering Scheme"
@@ -695,12 +746,13 @@ def discover_prompt(opts: DiscoverOptions = DiscoverOptions()):
 # ── Planner v2: deterministic candidate composition ──────────────────────────────
 
 class CandidateSpec(BaseModel):
-    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon
+    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon | network | programming_block
     name: Optional[str] = None
     genre: Optional[str] = None
     genres: Optional[list[str]] = None
     decade_start: Optional[int] = None
-    value: Optional[str] = None        # studio/director/actor name, or marathon show title
+    value: Optional[str] = None        # studio/director/actor/network name, or marathon show title
+    titles: Optional[list[str]] = None  # programming_block: resolved member titles present in library
     shuffle: Optional[str] = None      # override; else category default
 
 
@@ -715,18 +767,20 @@ class ComposeRequest(BaseModel):
 # Which compose category (bucket) each candidate kind maps to, and its shuffle default.
 # Buckets align with channel_blocks.CANONICAL_ORDER keys.
 _CATEGORY = {
-    "marathon":     ("marathon",     "ordered"),
-    "tv_genre":     ("tv_block",     "block"),
-    "genre":        ("movie",        "shuffle"),
-    "genre_decade": ("movie",        "shuffle"),
-    "blend":        ("movie",        "shuffle"),
-    "studio":       ("entity",       "shuffle"),
-    "director":     ("entity",       "shuffle"),
-    "actor":        ("entity",       "shuffle"),
-    "tv_movie_mix": ("tv_movie_mix", "shuffle"),
+    "marathon":          ("marathon",          "ordered"),
+    "tv_genre":          ("tv_block",          "block"),
+    "genre":             ("movie",             "shuffle"),
+    "genre_decade":      ("movie",             "shuffle"),
+    "blend":             ("movie",             "shuffle"),
+    "studio":            ("entity",            "shuffle"),
+    "director":          ("entity",            "shuffle"),
+    "actor":             ("entity",            "shuffle"),
+    "tv_movie_mix":      ("tv_movie_mix",      "shuffle"),
+    "network":           ("network",           "shuffle"),
+    "programming_block": ("programming_block", "ordered"),
 }
 # Compose categories in the order they appear in CANONICAL_ORDER (subset).
-_CATEGORY_ORDER = ["marathon", "tv_block", "tv_movie_mix", "movie", "entity"]
+_CATEGORY_ORDER = ["marathon", "tv_block", "network", "programming_block", "tv_movie_mix", "movie", "entity"]
 _DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
 
 
@@ -774,6 +828,14 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         movie_titles = [m["Title"] for m in movies if has_genre(m, spec.genre)]
         show_titles = [s["Title"] for s in shows if has_genre(s, spec.genre)]
         titles = movie_titles + show_titles
+    elif spec.kind == "network" and spec.value:
+        # All TV shows whose Studio matches the network value (case-insensitive).
+        v = spec.value.lower()
+        titles = [s["Title"] for s in shows if any(n.lower() == v for n in _multi(s.get("Studio")))]
+    elif spec.kind == "programming_block" and spec.titles:
+        # Intersect the block's pre-resolved member titles against the library TV show titles.
+        show_title_set = {s["Title"].lower(): s["Title"] for s in shows}
+        titles = [show_title_set[t.lower()] for t in spec.titles if t.lower() in show_title_set]
     return sorted({t for t in titles if t})
 
 
@@ -796,6 +858,10 @@ def _auto_name(spec: CandidateSpec) -> str:
         return f"{spec.value} 24/7"
     if spec.kind == "tv_movie_mix":
         return spec.genre or "Mixed"
+    if spec.kind == "network":
+        return spec.value or "Network"
+    if spec.kind == "programming_block":
+        return spec.name or "Programming Block"
     return spec.name or "Channel"
 
 

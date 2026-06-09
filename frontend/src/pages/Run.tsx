@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
-  FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile,
+  FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile, ProgrammingBlock,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -68,6 +68,8 @@ const cid = {
   tv: (g: string) => `tv:${g}`,
   marathon: (t: string) => `m:${t}`,
   tvmix: (g: string) => `tvm:${g}`,
+  network: (v: string) => `net:${v}`,
+  progblock: (n: string) => `pb:${n}`,
 };
 
 interface PlannerState {
@@ -684,6 +686,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [commPad, setCommPad] = useState('5');
   const [autoUpdate, setAutoUpdate] = useState(false);
 
+  const [programmingBlocks, setProgrammingBlocks] = useState<ProgrammingBlock[]>([]);
+
   useEffect(() => { api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([])); }, []);
 
   useEffect(() => {
@@ -694,8 +698,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     Promise.all([
       api.getFacets(),
       isEdit ? api.getPlannerState().catch(() => null) : Promise.resolve(null),
+      api.getProgrammingBlocks().catch(() => [] as ProgrammingBlock[]),
     ])
-      .then(([f, savedState]) => {
+      .then(([f, savedState, blocks]) => {
+        setProgrammingBlocks(blocks);
         if (!f.exists) { setError('Run Export first.'); return; }
         const minItems = f.min_items ?? 5;
 
@@ -910,6 +916,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         selCount={countSel([
           ...(f.marathons ?? []).map(m => cid.marathon(m.title)),
           ...(f.tv_genres ?? []).map(t => cid.tv(t.genre)),
+          ...(f.networks ?? []).map(n => cid.network(n.value)),
+          ...programmingBlocks.map(b => cid.progblock(b.name)),
         ])}
       >
         <Stack gap="sm">
@@ -937,9 +945,50 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               </CollapsibleSection>
             );
           })()}
-          {/* STEP 5 INSERTION POINT — Networks group goes here */}
-          {/* STEP 5 INSERTION POINT — Classic TV Blocks group goes here */}
-          {(f.marathons?.length ?? 0) === 0 && (f.tv_genres?.length ?? 0) === 0 && (
+          {(f.networks?.length ?? 0) > 0 && (
+            <EntitySection
+              title="Networks"
+              kind="network"
+              items={f.networks!}
+              makeId={cid.network}
+              makeName={(v) => v}
+              isSel={isSel}
+              onToggle={toggleSel}
+              onAddMany={addMany}
+            />
+          )}
+          {programmingBlocks.length > 0 && (() => {
+            const items: AddItem[] = programmingBlocks.map(b => ({
+              id: cid.progblock(b.name),
+              spec: {
+                kind: 'programming_block' as CandidateKind,
+                name: b.name,
+                titles: b.present_shows,
+              },
+            }));
+            return (
+              <CollapsibleSection
+                title="Classic TV Blocks"
+                count={programmingBlocks.length}
+                selectedCount={countSel(items.map(i => i.id))}
+                addItems={items}
+                onAdd={addMany}
+              >
+                {programmingBlocks.map((b, i) => (
+                  <CandRow
+                    key={items[i].id}
+                    id={items[i].id}
+                    count={b.present_count}
+                    label={`${b.name} — ${b.present_count} of ${b.shows.length} shows  (${b.network}, ${b.era})`}
+                    checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)}
+                  />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {(f.marathons?.length ?? 0) === 0 && (f.tv_genres?.length ?? 0) === 0 &&
+           (f.networks?.length ?? 0) === 0 && programmingBlocks.length === 0 && (
             <Text size="sm" c="dimmed">No TV channels available — run Export to scan your library.</Text>
           )}
         </Stack>

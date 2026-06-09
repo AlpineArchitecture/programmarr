@@ -35,6 +35,7 @@ export const api = {
 
   getCsvInfo: () => req<CsvInfo>('/pipeline/csv/info'),
   getFacets: (minItems = 5) => req<LibraryFacets>(`/pipeline/facets?min_items=${minItems}`),
+  getProgrammingBlocks: () => req<ProgrammingBlock[]>('/pipeline/programming-blocks'),
   getPrompt: (target?: string, prefs?: string, start?: number) => {
     const p = new URLSearchParams();
     if (target) p.set('target', target);
@@ -209,12 +210,14 @@ export interface LibraryFacets {
   tv_genres?: TvGenreFacet[];
   marathons?: MarathonFacet[];
   tv_movie_genres?: TvMovieGenreFacet[];
+  /** TV show counts by network (Studio value for Type==TV rows), above NETWORK_MIN floor. */
+  networks?: EntityFacet[];
 }
 
 // ── Planner v2 candidate composition ──
 export type CandidateKind =
   | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon'
-  | 'tv_movie_mix';
+  | 'tv_movie_mix' | 'network' | 'programming_block';
 export interface CandidateSpec {
   kind: CandidateKind;
   name?: string;
@@ -222,7 +225,19 @@ export interface CandidateSpec {
   genres?: string[];
   decade_start?: number;
   value?: string;
+  /** programming_block: the resolved member titles present in the library. */
+  titles?: string[];
   shuffle?: 'ordered' | 'shuffle' | 'block';
+}
+
+/** A single programming block from the catalog, enriched with library-present members. */
+export interface ProgrammingBlock {
+  name: string;
+  era: string;
+  network: string;
+  shows: string[];
+  present_shows: string[];
+  present_count: number;
 }
 export interface ComposeResult {
   ok: boolean;
