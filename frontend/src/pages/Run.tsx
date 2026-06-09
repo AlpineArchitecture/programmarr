@@ -15,6 +15,7 @@ import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
   FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile, ProgrammingBlock,
+  FranchiseCandidate,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -70,6 +71,7 @@ const cid = {
   tvmix: (g: string) => `tvm:${g}`,
   network: (v: string) => `net:${v}`,
   progblock: (n: string) => `pb:${n}`,
+  franchise: (n: string) => `fr:${n}`,
 };
 
 interface PlannerState {
@@ -662,6 +664,61 @@ const SUBGENRES: SubGenre[] = [
   { name: 'War Dramas', a: 'War', b: 'Drama' },
 ];
 
+// Expandable card for a single franchise candidate with per-member checkboxes.
+function FranchiseCard({ franchise, isSelected, checkedTitles, onToggle, onToggleMember }: {
+  franchise: FranchiseCandidate;
+  isSelected: boolean;
+  checkedTitles: string[];
+  onToggle: () => void;
+  onToggleMember: (title: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const partial = isSelected && checkedTitles.length < franchise.members.length;
+  return (
+    <Card withBorder p="xs" style={{ borderColor: isSelected ? 'var(--mantine-color-orange-8)' : undefined }}>
+      <Group justify="space-between" wrap="nowrap">
+        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+          <IconChevronDown size={13} style={{ transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .15s', flexShrink: 0 }} />
+          <Checkbox
+            size="xs"
+            checked={isSelected}
+            indeterminate={partial}
+            onChange={(e) => { e.stopPropagation(); onToggle(); }}
+            onClick={(e) => e.stopPropagation()}
+            style={{ flexShrink: 0 }}
+          />
+          <Box style={{ minWidth: 0 }}>
+            <Text size="sm" fw={600} lineClamp={1}>{franchise.name}</Text>
+            <Text size="xs" c="dimmed">
+              {isSelected ? `${checkedTitles.length} of ` : ''}{franchise.members.length} title{franchise.members.length !== 1 ? 's' : ''}
+              {franchise.source === 'tmdb' && <Text span c="blue.4"> · TMDB</Text>}
+            </Text>
+          </Box>
+        </Group>
+      </Group>
+      <Collapse in={open}>
+        <Stack gap={2} mt="xs" pl="md">
+          {franchise.members.map((m) => (
+            <Group key={m.title} gap="xs" wrap="nowrap">
+              <Checkbox
+                size="xs"
+                checked={checkedTitles.includes(m.title)}
+                onChange={() => onToggleMember(m.title)}
+              />
+              <Text size="xs" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+                {m.title}{m.year ? <Text span c="dimmed"> ({m.year})</Text> : null}
+              </Text>
+              <Badge size="xs" variant="outline" color={m.type === 'Movie' ? 'blue' : 'teal'}>
+                {m.type === 'Movie' ? 'film' : 'TV'}
+              </Badge>
+            </Group>
+          ))}
+        </Stack>
+      </Collapse>
+    </Card>
+  );
+}
+
 function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone }: {
   planner: PlannerState;
   setPlanner: (p: PlannerState) => void;
@@ -688,7 +745,38 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
 
   const [programmingBlocks, setProgrammingBlocks] = useState<ProgrammingBlock[]>([]);
 
+  // Franchise state — fetched lazily when Section 2 (TV+Movies) first opens.
+  const [franchises, setFranchises] = useState<FranchiseCandidate[]>([]);
+  const [franchisesLoading, setFranchisesLoading] = useState(false);
+  const [franchisesFetched, setFranchisesFetched] = useState(false);
+  // Per-franchise member override: franchise name → Set of checked titles (undefined = all checked).
+  const [franchiseMemberOverrides, setFranchiseMemberOverrides] = useState<Record<string, Set<string>>>({});
+
   useEffect(() => { api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([])); }, []);
+
+  // Lazy-fetch franchises when Section 2 (TV+Movies, index=2) first opens.
+  useEffect(() => {
+    if (openSection !== 2 || franchisesFetched) return;
+    setFranchisesLoading(true);
+    setFranchisesFetched(true);
+    api.getFranchises().then((frs) => {
+      setFranchises(frs);
+      // Edit-mode restore: a saved franchise spec carries a subset of member titles.
+      // Reconcile that into the member-override map so the per-member checkboxes
+      // reflect the saved selection instead of defaulting to all-checked.
+      setFranchiseMemberOverrides(prev => {
+        const next = { ...prev };
+        for (const fr of frs) {
+          const sel = planner.selected[cid.franchise(fr.name)];
+          if (sel?.titles && sel.titles.length < fr.members.length) {
+            next[fr.name] = new Set(sel.titles);
+          }
+        }
+        return next;
+      });
+    }).catch(() => setFranchises([])).finally(() => setFranchisesLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSection]);
 
   useEffect(() => {
     if (planner.loaded) { setLoading(false); return; }
@@ -753,6 +841,54 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     const next = { ...planner.selected };
     items.forEach(({ id, spec }) => { next[id] = spec; });
     patch({ selected: next });
+  }
+
+  /** Get the currently-checked member titles for a franchise (defaults to all). */
+  function franchiseCheckedTitles(fr: FranchiseCandidate): string[] {
+    const override = franchiseMemberOverrides[fr.name];
+    if (!override) return fr.members.map(m => m.title);
+    return fr.members.map(m => m.title).filter(t => override.has(t));
+  }
+
+  /** Toggle a single member within a franchise; update both the override map and the planner spec. */
+  function toggleFranchiseMember(fr: FranchiseCandidate, title: string) {
+    const allTitles = fr.members.map(m => m.title);
+    const prevOverride = franchiseMemberOverrides[fr.name];
+    // Materialize: if no override yet, all are checked.
+    const current = new Set<string>(prevOverride ?? allTitles);
+    if (current.has(title)) { current.delete(title); } else { current.add(title); }
+    const nextOverrides = { ...franchiseMemberOverrides, [fr.name]: current };
+    setFranchiseMemberOverrides(nextOverrides);
+    // Sync planner selection.
+    const checkedTitles = allTitles.filter(t => current.has(t));
+    const id = cid.franchise(fr.name);
+    const nextSelected = { ...planner.selected };
+    if (checkedTitles.length === 0) {
+      delete nextSelected[id];
+    } else {
+      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: checkedTitles };
+    }
+    patch({ selected: nextSelected });
+  }
+
+  /** Toggle the entire franchise (select all / deselect all). */
+  function toggleFranchise(fr: FranchiseCandidate) {
+    const id = cid.franchise(fr.name);
+    const nextSelected = { ...planner.selected };
+    if (id in nextSelected) {
+      // Deselect: remove from selected and clear member override.
+      delete nextSelected[id];
+      const nextOverrides = { ...franchiseMemberOverrides };
+      delete nextOverrides[fr.name];
+      setFranchiseMemberOverrides(nextOverrides);
+    } else {
+      // Select all members.
+      const nextOverrides = { ...franchiseMemberOverrides };
+      delete nextOverrides[fr.name]; // clear any partial override → all selected
+      setFranchiseMemberOverrides(nextOverrides);
+      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: fr.members.map(m => m.title) };
+    }
+    patch({ selected: nextSelected });
   }
 
   if (loading) return <Center py="xl"><Stack align="center" gap="sm"><Loader color="orange" /><Text size="sm" c="dimmed">Reading your library…</Text></Stack></Center>;
@@ -1071,7 +1207,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
       <AccordionSection
         index={2} openSection={openSection} onToggle={toggleSection} onNext={openNext}
         title="TV + Movies"
-        selCount={countSel((f.tv_movie_genres ?? []).map(x => cid.tvmix(x.genre)))}
+        selCount={countSel([
+          ...(f.tv_movie_genres ?? []).map(x => cid.tvmix(x.genre)),
+          ...franchises.map(fr => cid.franchise(fr.name)),
+        ])}
         isLast
       >
         <Stack gap="sm">
@@ -1095,7 +1234,50 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
           })() : (
             <Text size="sm" c="dimmed">No genres appear in both your movie and TV libraries above the threshold.</Text>
           )}
-          {/* STEP 6 INSERTION POINT — Franchises group goes here */}
+          {/* ── Franchises ─────────────────────────────────────────────────── */}
+          {franchisesLoading ? (
+            <Card withBorder p="sm">
+              <Group gap="sm">
+                <Loader size="xs" color="orange" />
+                <Text size="sm" c="dimmed">Scanning franchises…</Text>
+              </Group>
+            </Card>
+          ) : franchises.length > 0 ? (() => {
+            const franchiseAddItems: AddItem[] = franchises.map(fr => ({
+              id: cid.franchise(fr.name),
+              spec: { kind: 'franchise' as CandidateKind, name: fr.name, titles: fr.members.map(m => m.title) },
+            }));
+            return (
+              <CollapsibleSection
+                title="Franchises"
+                count={franchises.length}
+                selectedCount={countSel(franchiseAddItems.map(i => i.id))}
+                addItems={franchiseAddItems}
+                onAdd={(items) => {
+                  // When bulk-adding franchises, also clear any member overrides so all are checked.
+                  const nextOverrides = { ...franchiseMemberOverrides };
+                  items.forEach(({ spec }) => { if (spec.name) delete nextOverrides[spec.name]; });
+                  setFranchiseMemberOverrides(nextOverrides);
+                  addMany(items);
+                }}
+              >
+                <Stack gap="xs" mt="xs">
+                  {franchises.map((fr) => (
+                    <FranchiseCard
+                      key={fr.name}
+                      franchise={fr}
+                      isSelected={isSel(cid.franchise(fr.name))}
+                      checkedTitles={franchiseCheckedTitles(fr)}
+                      onToggle={() => toggleFranchise(fr)}
+                      onToggleMember={(title) => toggleFranchiseMember(fr, title)}
+                    />
+                  ))}
+                </Stack>
+              </CollapsibleSection>
+            );
+          })() : !franchisesLoading && franchisesFetched && franchises.length === 0 ? (
+            <Text size="sm" c="dimmed">No franchises found (run Export and check Plex collections).</Text>
+          ) : null}
         </Stack>
       </AccordionSection>
 

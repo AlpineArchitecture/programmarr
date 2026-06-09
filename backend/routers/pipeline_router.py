@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -230,6 +231,7 @@ TV_GENRE_MIN = 3
 TV_MOVIE_MIX_MIN = 3  # minimum on each side for a cross-library mixed-genre candidate
 NETWORK_MIN = 3    # minimum TV shows from a network for it to be offered
 BLOCK_MIN = 3      # minimum programming-block members present in library
+FRANCHISE_MIN = 2  # minimum library members for a TMDB collection to be offered
 ENTITY_CAP = 60    # cap each entity list; UI searches for the long tail
 
 
@@ -440,6 +442,222 @@ def get_programming_blocks():
                 "present_count": len(present),
             })
     return results
+
+
+def _normalize_name(name: str) -> str:
+    """Lower-case, strip punctuation/articles for de-dupe comparisons."""
+    n = name.lower().strip()
+    n = re.sub(r"['\"\-:,.]", "", n)
+    for prefix in ("the ", "a ", "an "):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+    return n.strip()
+
+
+def _library_title_set(movies: list[dict], shows: list[dict]) -> dict[str, dict]:
+    """Lower-cased title → row, for fast membership checks."""
+    index: dict[str, dict] = {}
+    for row in movies + shows:
+        t = row.get("Title", "")
+        if t:
+            index[t.lower()] = row
+    return index
+
+
+def _library_signature() -> str:
+    """Return a cheap fingerprint of plex_library.csv (mtime + size) for cache keying."""
+    p = DATA_DIR / "plex_library.csv"
+    try:
+        st = p.stat()
+        return f"{st.st_mtime:.0f}-{st.st_size}"
+    except Exception:
+        return "missing"
+
+
+@router.get("/pipeline/franchises")
+def get_franchises(refresh: bool = False):
+    """Return franchise candidates from Plex collections + TMDB belongs_to_collection.
+
+    Each entry: {"name", "source", "members": [{"title","year","type"}]}
+    where members are filtered to titles present in plex_library.csv.
+
+    Results are cached to data/franchise_cache.json keyed by the library CSV
+    signature (mtime+size).  Pass ?refresh=1 to force a full re-scan.
+
+    TMDB source requires tmdb_api_key in config; skipped if absent.
+    Network/TMDB failures return whatever succeeded (Plex-only on TMDB failure).
+    """
+    import csv as _csv
+
+    cfg = _load_config()
+    plex_url = cfg.get("plex_url", "").rstrip("/")
+    plex_token = cfg.get("plex_token", "")
+    tmdb_key = cfg.get("tmdb_api_key", "").strip()
+
+    # Build library index.
+    csv_path = DATA_DIR / "plex_library.csv"
+    if not csv_path.exists():
+        return []
+    movies: list[dict] = []
+    shows: list[dict] = []
+    with open(csv_path, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            if row.get("Type") == "Movie":
+                movies.append(row)
+            elif row.get("Type") == "TV":
+                shows.append(row)
+
+    lib_index = _library_title_set(movies, shows)
+    sig = _library_signature()
+
+    # ── Cache check ───────────────────────────────────────────────────────────────
+    cache_path = DATA_DIR / "franchise_cache.json"
+    if not refresh and cache_path.exists():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("sig") == sig:
+                return cached.get("franchises", [])
+        except Exception:
+            pass
+
+    # ── Source 1: Plex collections ────────────────────────────────────────────────
+    plex_franchises: list[dict] = []
+    plex_names: set[str] = set()
+
+    if plex_url and plex_token:
+        try:
+            sections_data = _plex_get(plex_url, plex_token, "/library/sections")
+            sections = sections_data["MediaContainer"].get("Directory", [])
+        except Exception:
+            sections = []
+
+        seen_ids: set[str] = set()
+        for section in sections:
+            try:
+                col_data = _plex_get(plex_url, plex_token,
+                                     f"/library/sections/{section['key']}/collections")
+                for c in col_data.get("MediaContainer", {}).get("Metadata", []):
+                    rating_key = c.get("ratingKey", "")
+                    name = (c.get("title") or "").strip()
+                    if not name or rating_key in seen_ids:
+                        continue
+                    seen_ids.add(rating_key)
+                    # Fetch children of this collection.
+                    try:
+                        children_data = _plex_get(plex_url, plex_token,
+                                                  f"/library/metadata/{rating_key}/children")
+                        children = children_data.get("MediaContainer", {}).get("Metadata", [])
+                    except Exception:
+                        continue
+                    members: list[dict] = []
+                    for child in children:
+                        title = (child.get("title") or "").strip()
+                        if not title:
+                            continue
+                        # Only keep members present in the library.
+                        row = lib_index.get(title.lower())
+                        if not row:
+                            continue
+                        media_type = row.get("Type", "")
+                        year_val = _safe_int(row.get("Year")) or _safe_int(child.get("year"))
+                        members.append({
+                            "title": row["Title"],
+                            "year": year_val,
+                            "type": media_type,
+                        })
+                    if not members:
+                        continue
+                    # Sort by year asc.
+                    members.sort(key=lambda m: (m["year"] or 9999, m["title"]))
+                    plex_franchises.append({"name": name, "source": "plex", "members": members})
+                    plex_names.add(_normalize_name(name))
+            except Exception:
+                continue
+
+    # ── Source 2: TMDB belongs_to_collection (only if tmdb_api_key set) ──────────
+    tmdb_franchises: list[dict] = []
+
+    if tmdb_key:
+        def _tmdb_get(path: str, timeout: int = 10):
+            sep = "&" if "?" in path else "?"
+            url = f"https://api.themoviedb.org/3{path}{sep}api_key={tmdb_key}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+
+        # Group library movies by TMDB collection id.
+        collection_buckets: dict[int, dict] = {}  # collection_id → {name, members}
+
+        for movie_row in movies:
+            title = movie_row.get("Title", "")
+            year = _safe_int(movie_row.get("Year"))
+            if not title:
+                continue
+            try:
+                params = urllib.parse.urlencode({"query": title})
+                if year:
+                    params += f"&year={year}"
+                results = _tmdb_get(f"/search/movie?{params}", timeout=8)
+                hits = results.get("results", [])
+                if not hits:
+                    continue
+                movie_id = hits[0]["id"]
+                detail = _tmdb_get(f"/movie/{movie_id}", timeout=8)
+                coll = detail.get("belongs_to_collection")
+                if not coll:
+                    continue
+                coll_id = coll["id"]
+                coll_name = (coll.get("name") or "").strip()
+                if not coll_name:
+                    continue
+                if coll_id not in collection_buckets:
+                    collection_buckets[coll_id] = {"name": coll_name, "members": []}
+                collection_buckets[coll_id]["members"].append({
+                    "title": movie_row["Title"],
+                    "year": year,
+                    "type": "Movie",
+                })
+            except Exception:
+                continue
+
+        # De-dupe against Plex by normalized name; keep only buckets with >= FRANCHISE_MIN members.
+        for coll_id, coll_info in collection_buckets.items():
+            members = coll_info["members"]
+            if len(members) < FRANCHISE_MIN:
+                continue
+            norm = _normalize_name(coll_info["name"])
+            if norm in plex_names:
+                continue  # already covered by Plex collection
+            members.sort(key=lambda m: (m["year"] or 9999, m["title"]))
+            tmdb_franchises.append({
+                "name": coll_info["name"],
+                "source": "tmdb",
+                "members": members,
+            })
+
+    # ── Merge + de-dupe + sort ────────────────────────────────────────────────────
+    all_franchises: list[dict] = plex_franchises + tmdb_franchises
+    # Final de-dupe pass (in case names collide after normalization).
+    seen_norm: set[str] = set()
+    deduped: list[dict] = []
+    for fr in all_franchises:
+        norm = _normalize_name(fr["name"])
+        if norm not in seen_norm:
+            seen_norm.add(norm)
+            deduped.append(fr)
+    # Sort by member count desc.
+    deduped.sort(key=lambda fr: -len(fr["members"]))
+
+    # ── Write cache ───────────────────────────────────────────────────────────────
+    try:
+        cache_path.write_text(
+            json.dumps({"sig": sig, "franchises": deduped}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+    return deduped
 
 
 ANCHOR = "## Channel Numbering Scheme"
@@ -778,9 +996,10 @@ _CATEGORY = {
     "tv_movie_mix":      ("tv_movie_mix",      "shuffle"),
     "network":           ("network",           "shuffle"),
     "programming_block": ("programming_block", "ordered"),
+    "franchise":         ("franchise",         "ordered"),
 }
 # Compose categories in the order they appear in CANONICAL_ORDER (subset).
-_CATEGORY_ORDER = ["marathon", "tv_block", "network", "programming_block", "tv_movie_mix", "movie", "entity"]
+_CATEGORY_ORDER = ["marathon", "tv_block", "network", "programming_block", "tv_movie_mix", "movie", "entity", "franchise"]
 _DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
 
 
@@ -836,6 +1055,19 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         # Intersect the block's pre-resolved member titles against the library TV show titles.
         show_title_set = {s["Title"].lower(): s["Title"] for s in shows}
         titles = [show_title_set[t.lower()] for t in spec.titles if t.lower() in show_title_set]
+    elif spec.kind == "franchise" and spec.titles:
+        # Franchise: intersect the checked member titles against both movies AND TV shows,
+        # then sort by year ascending (so content plays in release order).
+        all_rows: list[dict] = movies + shows
+        row_by_title = {}
+        for row in all_rows:
+            t = row.get("Title", "")
+            if t:
+                row_by_title[t.lower()] = row
+        matched: list[dict] = [row_by_title[t.lower()] for t in spec.titles if t.lower() in row_by_title]
+        # Sort by Year ascending; rows without a year go to the end.
+        matched.sort(key=lambda r: (_safe_int(r.get("Year")) or 9999, r.get("Title", "")))
+        return [r["Title"] for r in matched if r.get("Title")]
     return sorted({t for t in titles if t})
 
 
@@ -862,6 +1094,8 @@ def _auto_name(spec: CandidateSpec) -> str:
         return spec.value or "Network"
     if spec.kind == "programming_block":
         return spec.name or "Programming Block"
+    if spec.kind == "franchise":
+        return spec.name or "Franchise"
     return spec.name or "Channel"
 
 

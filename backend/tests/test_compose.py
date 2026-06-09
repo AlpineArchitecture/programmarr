@@ -352,3 +352,116 @@ def test_programming_block_no_library_match_skipped(pr, seed):
     }])
     assert out["count"] == 0
     assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+# ── franchise ──────────────────────────────────────────────────────────────────
+
+def test_franchise_resolves_checked_titles(pr, seed):
+    """kind=franchise resolves spec.titles against the library (movies + shows)."""
+    seed([
+        movie("The Matrix", year=1999),
+        movie("The Matrix Reloaded", year=2003),
+        movie("The Matrix Revolutions", year=2003),
+    ])
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "The Matrix Collection",
+        "titles": ["The Matrix", "The Matrix Reloaded"],  # Revolutions unchecked
+    }])
+    assert out["count"] == 1
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    content = draft["channels"][0]["content"]
+    assert "The Matrix" in content
+    assert "The Matrix Reloaded" in content
+    assert "The Matrix Revolutions" not in content
+
+
+def test_franchise_titles_sorted_by_year(pr, seed):
+    """franchise content is sorted by year ascending for release-order playback."""
+    seed([
+        movie("Episode III", year=2005),
+        movie("Episode I", year=1999),
+        movie("Episode II", year=2002),
+    ])
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Prequel Trilogy",
+        "titles": ["Episode III", "Episode I", "Episode II"],
+    }])
+    assert out["count"] == 1
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    content = draft["channels"][0]["content"]
+    assert content == ["Episode I", "Episode II", "Episode III"]
+
+
+def test_franchise_spans_tv_and_movies(pr, seed):
+    """franchise resolves members from both movies and TV shows."""
+    seed([
+        movie("Firefly: Serenity", year=2005),
+        show("Firefly", episodes=14),
+    ])
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Firefly Franchise",
+        "titles": ["Firefly", "Firefly: Serenity"],
+    }])
+    assert out["count"] == 1
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    content = set(draft["channels"][0]["content"])
+    assert "Firefly: Serenity" in content
+    assert "Firefly" in content
+
+
+def test_franchise_title_intersection_case_insensitive(pr, seed):
+    """franchise title matching against library is case-insensitive."""
+    seed([movie("batman begins", year=2005), movie("The Dark Knight", year=2008)])
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Dark Knight Trilogy",
+        "titles": ["Batman Begins", "The Dark Knight"],
+    }])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 2
+
+
+def test_franchise_not_in_library_skipped(pr, seed):
+    """franchise spec with no library matches is skipped."""
+    seed([movie("Unrelated Film", year=2000)])
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "MCU",
+        "titles": ["Iron Man", "Thor"],
+    }])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+def test_franchise_auto_name(pr, seed):
+    """_auto_name for franchise returns spec.name."""
+    seed([movie("Iron Man", year=2008), movie("Iron Man 2", year=2010)])
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Iron Man Series",
+        "titles": ["Iron Man", "Iron Man 2"],
+    }])
+    assert out["channels"][0]["name"] == "Iron Man Series"
+
+
+def test_franchise_shuffle_default(pr, seed):
+    """franchise kind uses 'ordered' as its default shuffle mode."""
+    seed([movie("Movie A", year=2000), movie("Movie B", year=2002)])
+    _compose(pr, [{
+        "kind": "franchise",
+        "name": "Test Franchise",
+        "titles": ["Movie A", "Movie B"],
+    }])
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    assert draft["channels"][0]["shuffle"] == "ordered"
+
+
+def test_franchise_no_titles_skipped(pr, seed):
+    """franchise spec with empty titles list is skipped."""
+    seed([movie("Foo", year=2000)])
+    out = _compose(pr, [{"kind": "franchise", "name": "Empty", "titles": []}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"

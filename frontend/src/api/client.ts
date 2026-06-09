@@ -36,6 +36,8 @@ export const api = {
   getCsvInfo: () => req<CsvInfo>('/pipeline/csv/info'),
   getFacets: (minItems = 5) => req<LibraryFacets>(`/pipeline/facets?min_items=${minItems}`),
   getProgrammingBlocks: () => req<ProgrammingBlock[]>('/pipeline/programming-blocks'),
+  getFranchises: (refresh = false) =>
+    req<FranchiseCandidate[]>(`/pipeline/franchises${refresh ? '?refresh=1' : ''}`),
   getPrompt: (target?: string, prefs?: string, start?: number) => {
     const p = new URLSearchParams();
     if (target) p.set('target', target);
@@ -217,7 +219,7 @@ export interface LibraryFacets {
 // ── Planner v2 candidate composition ──
 export type CandidateKind =
   | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon'
-  | 'tv_movie_mix' | 'network' | 'programming_block';
+  | 'tv_movie_mix' | 'network' | 'programming_block' | 'franchise';
 export interface CandidateSpec {
   kind: CandidateKind;
   name?: string;
@@ -228,6 +230,15 @@ export interface CandidateSpec {
   /** programming_block: the resolved member titles present in the library. */
   titles?: string[];
   shuffle?: 'ordered' | 'shuffle' | 'block';
+}
+
+/** A single member of a franchise (present in the library). */
+export interface FranchiseMember { title: string; year: number | null; type: string }
+/** A franchise candidate from Plex collections or TMDB belongs_to_collection. */
+export interface FranchiseCandidate {
+  name: string;
+  source: 'plex' | 'tmdb';
+  members: FranchiseMember[];
 }
 
 /** A single programming block from the catalog, enriched with library-present members. */
