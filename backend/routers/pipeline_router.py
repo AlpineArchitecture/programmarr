@@ -58,6 +58,11 @@ class DeploySelection(BaseModel):
 def _env():
     env = os.environ.copy()
     env["PROGRAMMARR_DATA"] = str(DATA_DIR)
+    # Force the child's stdout/stderr to UTF-8. On a Windows host the default is the
+    # locale codec (cp1252), so a script printing a non-cp1252 title (e.g. a "⧸" in an
+    # unsynced-title list) dies with UnicodeEncodeError. _stream decodes as UTF-8, so
+    # this makes the pipe round-trip cleanly. No-op on Linux/Docker (already UTF-8).
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 
@@ -866,10 +871,19 @@ async def run_collections(
 
 
 @router.post("/pipeline/probe")
-async def run_probe(from_channel: Optional[str] = Query(None)):
+async def run_probe(from_channel: Optional[str] = Query(None), protected: str = Query("")):
+    # Review the in-progress Planner lineup (compose + AI extras + collections all write
+    # channels.draft.json), NOT the already-deployed channels.json. The draft is what
+    # deploy-selective pushes, so the probe must read the same file. Fall back to
+    # create.py's default (channels.json) when there's no draft.
     args = ["--probe"]
+    if (DATA_DIR / "channels.draft.json").exists():
+        args += ["--json", "channels.draft.json"]
     if from_channel:
         args += ["--from", from_channel]
+    if protected:
+        # Keep the "would delete" preview honest in keep-mode (protected channels survive).
+        args += ["--protect", protected]
     return _sse(_locked_stream("create.py", args, "probe"))
 
 
@@ -979,6 +993,24 @@ async def run_deploy_selective(req: DeployRequest):
     if req.protected_numbers:
         args += ["--protect", ",".join(str(n) for n in req.protected_numbers)]
     return _sse(_deploy_and_reconcile(args, req.protected_numbers))
+
+
+@router.get("/pipeline/draft")
+def get_draft():
+    """The in-progress Planner lineup (channels.draft.json): compose + AI extras so far.
+
+    Distinct from GET /channels, which is the DEPLOYED record. The Collections step needs
+    this so it places collections ABOVE the freshly-built lineup (including AI extras), not
+    above the stale deployed set — otherwise apply_collections clobbers the AI channels.
+    """
+    p = DATA_DIR / "channels.draft.json"
+    if not p.exists():
+        return {"channels": [], "orphaned": [], "suggested_channels": []}
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"channels": [], "orphaned": [], "suggested_channels": []}
 
 
 @router.post("/pipeline/images")

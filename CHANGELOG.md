@@ -4,6 +4,26 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.4] — 2026-06-08
+
+### Fixed
+
+- **Planner now deploys what you built — AI channels and collections no longer vanish.**
+  The Planner assembles its lineup in `channels.draft.json` (compose + the AI "Bring in AI"
+  step + the Collections step all write it), but the Deploy step was reviewing/deploying the
+  wrong file. Two bugs, both fixed:
+  - The Deploy review was built from `create.py --probe`, which read the **deployed**
+    `channels.json` instead of the draft — so AI-discovered channels and added collections
+    never showed up and never deployed. The probe now targets the draft (and forwards kept
+    channels as `--protect` for an accurate delete preview).
+  - The Collections step sized its channel numbers from the deployed record, not the draft,
+    so collections landed on top of the AI channels and `apply_collections` deleted them.
+    A new `GET /pipeline/draft` lets the Collections step place itself **above** the full
+    built lineup, preserving every channel.
+- **Export no longer crashes on a Windows host.** Pipeline subprocess output is now forced to
+  UTF-8 (`PYTHONIOENCODING`), so a title containing a non-cp1252 character (e.g. `⧸`) in the
+  unsynced-titles list no longer kills `export.py` with `UnicodeEncodeError`. No-op on Docker.
+
 ## [0.4.3] — 2026-06-08
 
 ### Fixed
