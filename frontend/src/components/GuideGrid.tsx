@@ -53,6 +53,7 @@ export function GuideGrid({
 }) {
   const nav = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
   const [nowOffset, setNowOffset] = useState(0);
   const [anchor] = useState(() => floorToHalfHour(new Date()));
 
@@ -169,8 +170,17 @@ export function GuideGrid({
 
       {/* Channel rows */}
       <Box style={{ display: 'flex', maxHeight: 480, overflow: 'hidden' }}>
-        {/* Left rail — fixed, scrolls vertically with content */}
-        <Box style={{ width: RAIL_WIDTH, minWidth: RAIL_WIDTH, overflowY: 'auto', flexShrink: 0, borderRight: '1px solid var(--mantine-color-dark-4)' }}>
+        {/* Left rail — vertical scroll is driven by JS sync from the programme grid,
+            so the rail and the grid share a single scrollbar (on the grid). */}
+        <Box
+          ref={railRef}
+          onWheel={(e) => {
+            // Rail has no scrollbar of its own; forward wheel to the grid scroller.
+            const body = railRef.current?.parentElement?.querySelector('[data-grid-scroll]') as HTMLDivElement | null;
+            if (body) body.scrollTop += e.deltaY;
+          }}
+          style={{ width: RAIL_WIDTH, minWidth: RAIL_WIDTH, overflowY: 'hidden', flexShrink: 0, borderRight: '1px solid var(--mantine-color-dark-4)' }}
+        >
           {guide.channels.map((ch) => (
             <Box
               key={ch.number}
@@ -210,7 +220,7 @@ export function GuideGrid({
         </Box>
 
         {/* Programme grid — scrolls in sync with header via JS scroll sync */}
-        <SyncedScroll headerRef={scrollRef} style={{ flex: 1, overflowX: 'auto', overflowY: 'auto' }}>
+        <SyncedScroll headerRef={scrollRef} railRef={railRef} style={{ flex: 1, overflowX: 'auto', overflowY: 'auto' }}>
           <Box style={{ position: 'relative', width: contentWidth, minHeight: guide.channels.length * ROW_HEIGHT }}>
             {/* Vertical half-hour grid lines */}
             {timeLabels.map(({ left }) => (
@@ -328,13 +338,16 @@ function ProgrammeBlock({ prog, left, width, color }: ProgrammeBlock) {
   );
 }
 
-// Keeps the programme grid scroll in sync with the time-axis header
+// Keeps the programme grid scroll in sync with the time-axis header (horizontal)
+// and the left channel rail (vertical), so the whole grid reads as one scroller.
 function SyncedScroll({
   headerRef,
+  railRef,
   children,
   style,
 }: {
   headerRef: React.RefObject<HTMLDivElement | null>;
+  railRef?: React.RefObject<HTMLDivElement | null>;
   children: React.ReactNode;
   style?: React.CSSProperties;
 }) {
@@ -347,6 +360,7 @@ function SyncedScroll({
 
     function onBodyScroll() {
       if (head) head.scrollLeft = body!.scrollLeft;
+      if (railRef?.current) railRef.current.scrollTop = body!.scrollTop;
     }
     function onHeadScroll() {
       if (body) body.scrollLeft = head!.scrollLeft;
@@ -358,10 +372,10 @@ function SyncedScroll({
       body.removeEventListener('scroll', onBodyScroll);
       head.removeEventListener('scroll', onHeadScroll);
     };
-  }, [headerRef]);
+  }, [headerRef, railRef]);
 
   return (
-    <div ref={ref} style={style}>
+    <div ref={ref} data-grid-scroll style={style}>
       {children}
     </div>
   );
