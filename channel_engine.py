@@ -468,6 +468,28 @@ def classify_channels(
     return result
 
 
+def merge_deployed_numbers(desired: list[dict], deployed: list[dict]) -> list[dict]:
+    """Return ``desired`` with each EXISTING channel's number set to its deployed number.
+
+    Match is by name (case-insensitive, stripped).  A channel present in ``deployed``
+    keeps the deployed number; a channel absent from ``deployed`` (a genuinely new
+    channel) keeps its own number.
+
+    Why: in Add/Edit mode ``compose`` renumbers the whole selection from ``highest+1``,
+    so an already-deployed channel carries a throwaway high number in the draft.  The
+    surgical deploy updates it IN PLACE (preserving the real Tunarr channel), so the
+    written record must mirror the deployed number, not the draft number — otherwise
+    channels.json desyncs from Tunarr.  New channels keep their draft number (which is
+    above the existing set, so it can't collide).
+    """
+    dep_by_name = {(c.get("name") or "").strip().lower(): c.get("number") for c in deployed}
+    out: list[dict] = []
+    for ch in desired:
+        dep_num = dep_by_name.get((ch.get("name") or "").strip().lower())
+        out.append({**ch, "number": dep_num} if dep_num is not None else ch)
+    return out
+
+
 # ── In-place channel updates (live recipes) ────────────────────────────────────
 
 def find_channel_by_number(tunarr_url, number):

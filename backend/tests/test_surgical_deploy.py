@@ -297,3 +297,39 @@ def test_deployed_only_without_prior_managed():
     diff = channel_engine.classify_channels([], [_ch("A")], set())
     assert len(diff["foreign"]) == 1
     assert diff["create"] == diff["delete"] == diff["update"] == diff["unchanged"] == []
+
+
+# ── merge_deployed_numbers (F2 regression) ──────────────────────────────────────
+
+def test_existing_channel_keeps_deployed_number():
+    """Add/Edit renumbers the draft high; the record must mirror the DEPLOYED number."""
+    desired = [_ch("Cheers Marathon", number=61), _ch("New Sci-Fi", number=62)]
+    deployed = [_ch("Cheers Marathon", number=1)]
+    out = channel_engine.merge_deployed_numbers(desired, deployed)
+    by_name = {c["name"]: c["number"] for c in out}
+    assert by_name["Cheers Marathon"] == 1   # existing -> deployed number, not draft 61
+    assert by_name["New Sci-Fi"] == 62       # genuinely new -> keeps draft number
+
+
+def test_merge_deployed_numbers_case_insensitive():
+    desired = [_ch("comedy tv", number=72)]
+    deployed = [_ch("Comedy TV", number=12)]
+    out = channel_engine.merge_deployed_numbers(desired, deployed)
+    assert out[0]["number"] == 12
+
+
+def test_merge_deployed_numbers_preserves_content_and_flags():
+    """Only the number is remapped; content/shuffle/live are untouched."""
+    desired = [_ch("Live Show", number=80, shuffle="ordered", content=["A", "B"], live=True)]
+    deployed = [_ch("Live Show", number=5, shuffle="shuffle", content=["OLD"], live=True)]
+    out = channel_engine.merge_deployed_numbers(desired, deployed)
+    assert out[0]["number"] == 5
+    assert out[0]["content"] == ["A", "B"]      # desired content wins
+    assert out[0]["shuffle"] == "ordered"
+    assert out[0].get("live") is True
+
+
+def test_merge_deployed_numbers_all_new():
+    desired = [_ch("A", number=10), _ch("B", number=11)]
+    out = channel_engine.merge_deployed_numbers(desired, deployed=[])
+    assert [c["number"] for c in out] == [10, 11]

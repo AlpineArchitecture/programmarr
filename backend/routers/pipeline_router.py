@@ -1494,7 +1494,11 @@ async def run_surgical_deploy():
             # ── 1. Updates in place ───────────────────────────────────────────
             for item in diff["update"]:
                 desired_ch = item["desired"]
-                num = desired_ch.get("number") or item["deployed"].get("number")
+                # Target the DEPLOYED channel's number — update-in-place preserves the real
+                # Tunarr channel (id + DVR). The draft renumbers existing channels (Add/Edit
+                # numbers from highest+1), so desired_ch's number is a fresh high number that
+                # does NOT exist in Tunarr; using it would target a missing channel.
+                num = item["deployed"].get("number") or desired_ch.get("number")
                 name = desired_ch.get("name", "")
                 yield _emit(f"  Updating #{num} {name} in place…")
 
@@ -1583,8 +1587,11 @@ async def run_surgical_deploy():
             #   • all desired channels (create + update + unchanged — from the draft)
             #   • all foreign channels (hand-authored, absent from desired, NOT in
             #     prior_managed — must be preserved untouched)
-            # Channels in diff["delete"] are intentionally excluded.
-            new_managed = list(desired)  # create + update(desired-side) + unchanged
+            # Channels in diff["delete"] are intentionally excluded (they're not in desired).
+            #
+            # Existing channels (update + unchanged) keep their DEPLOYED number; only genuine
+            # new (create) channels use their draft number. (See merge_deployed_numbers.)
+            new_managed = channel_engine.merge_deployed_numbers(desired, deployed)
 
             # Append foreign channels — they were not in desired but must be kept.
             new_managed.extend(diff["foreign"])
