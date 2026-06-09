@@ -1,7 +1,7 @@
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
   Image, Loader, NumberInput, ScrollArea, Select, SimpleGrid, Stack,
-  Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip,
+  Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { Dropzone } from '@mantine/dropzone';
@@ -14,7 +14,7 @@ import { useEffect, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
-  FillerList, Commercials, TvMovieGenreFacet,
+  FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -49,6 +49,7 @@ type Method = 'build' | 'collections';
 
 // Setup carries the upfront decisions through the whole flow.
 interface SetupState {
+  mode: 'nuke' | 'edit';
   method: Method;
   includeCollections: boolean;
   fetchArt: boolean;
@@ -99,8 +100,13 @@ function ResultsCard({ title, subtitle, children }: { title: string; subtitle?: 
 
 function parseRunStats(lines: string[]) {
   const summaryLine = lines.slice().reverse().find(l => l.includes('Done:'));
+  // Nuke deploy: "Done: N created, N skipped"
   const m = summaryLine?.match(/Done:\s*(\d+) created,\s*(\d+) skipped/);
-  return { created: m ? parseInt(m[1]) : null, skipped: m ? parseInt(m[2]) : null };
+  if (m) return { created: parseInt(m[1]), skipped: parseInt(m[2]), updated: null, deleted: null };
+  // Surgical deploy: "Done: N created, N deleted, N updated, N unchanged"
+  const ms = summaryLine?.match(/Done:\s*(\d+) created,\s*(\d+) deleted,\s*(\d+) updated,\s*(\d+) unchanged/);
+  if (ms) return { created: parseInt(ms[1]), skipped: 0, deleted: parseInt(ms[2]), updated: parseInt(ms[3]) };
+  return { created: null, skipped: null, deleted: null, updated: null };
 }
 
 // ── Setup screen ───────────────────────────────────────────────────────────────
@@ -130,19 +136,51 @@ function MethodCard({ icon, title, desc, active, onClick }: {
   );
 }
 
-function SetupStep({ setup, onChange, onDone }: {
+function ModeCard({ icon, title, desc, active, onClick }: {
+  icon: React.ReactNode; title: string; desc: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <UnstyledButton onClick={onClick} style={{ display: 'block', width: '100%' }}>
+      <Card
+        withBorder p="lg"
+        style={{
+          cursor: 'pointer',
+          borderColor: active ? 'var(--mantine-color-orange-5)' : 'var(--mantine-color-dark-4)',
+          backgroundColor: active ? 'var(--mantine-color-dark-6)' : undefined,
+          transition: 'border-color .12s, background-color .12s',
+        }}
+      >
+        <Group gap="md" wrap="nowrap">
+          <ThemeIcon color={active ? 'orange' : 'gray'} variant={active ? 'filled' : 'light'} size={40} radius="md" style={{ flexShrink: 0 }}>
+            {icon}
+          </ThemeIcon>
+          <Box>
+            <Text fw={700} size="md">{title}</Text>
+            <Text size="sm" c="dimmed">{desc}</Text>
+          </Box>
+        </Group>
+      </Card>
+    </UnstyledButton>
+  );
+}
+
+function SetupStep({ setup, onChange, onDone, onNuke }: {
   setup: SetupState;
   onChange: (patch: Partial<SetupState>) => void;
   onDone: () => void;
+  onNuke: () => void;
 }) {
   const [hasTmdb, setHasTmdb] = useState(false);
   const [tunarrChannels, setTunarrChannels] = useState<{ number: number; name: string }[]>([]);
   const [checkedNums, setCheckedNums] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  function calcStart(checked: Set<number>): number {
-    if (checked.size === 0) return 1;
-    return Math.ceil((Math.max(...checked) + 1) / 10) * 10;
+  // Edit mode: start = highest kept channel + 1 (no rounding).
+  // Nuke mode: start = 1.
+  function calcStart(mode: 'nuke' | 'edit', checked: Set<number>): number {
+    if (mode === 'nuke' || checked.size === 0) return 1;
+    return Math.max(...checked) + 1;
   }
 
   useEffect(() => {
@@ -153,7 +191,9 @@ function SetupStep({ setup, onChange, onDone }: {
         setTunarrChannels(sorted);
         const all = new Set(sorted.map(c => c.number));
         setCheckedNums(all);
-        onChange({ protectedNums: [...all], start: calcStart(all) });
+        // Default to Edit if there are existing channels, Nuke if starting fresh.
+        const defaultMode: 'nuke' | 'edit' = sorted.length > 0 ? 'edit' : 'nuke';
+        onChange({ mode: defaultMode, protectedNums: [...all], start: calcStart(defaultMode, all) });
       }).catch(() => {}),
     ]).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -165,23 +205,59 @@ function SetupStep({ setup, onChange, onDone }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasTmdb]);
 
+  function setMode(mode: 'nuke' | 'edit') {
+    const nums = mode === 'nuke' ? new Set<number>() : new Set(tunarrChannels.map(c => c.number));
+    setCheckedNums(nums);
+    onChange({ mode, protectedNums: [...nums], start: calcStart(mode, nums) });
+    if (mode === 'nuke') onNuke();
+  }
+
   function toggleChannel(num: number, checked: boolean) {
     const next = new Set(checkedNums);
     if (checked) next.add(num); else next.delete(num);
     setCheckedNums(next);
-    onChange({ protectedNums: [...next], start: calcStart(next) });
+    onChange({ protectedNums: [...next], start: calcStart(setup.mode, next) });
   }
 
   function setAll(on: boolean) {
     const next = on ? new Set(tunarrChannels.map(c => c.number)) : new Set<number>();
     setCheckedNums(next);
-    onChange({ protectedNums: [...next], start: calcStart(next) });
+    onChange({ protectedNums: [...next], start: calcStart(setup.mode, next) });
   }
 
   const checkedCount = checkedNums.size;
+  const isEdit = setup.mode === 'edit';
 
   return (
     <Stack gap="lg">
+      {/* Primary binary: Nuke vs Edit */}
+      {!loading && tunarrChannels.length > 0 && (
+        <Card withBorder p="md">
+          <Text fw={700} mb="sm">How do you want to deploy?</Text>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <ModeCard
+              icon={<IconX size={22} />}
+              title="🧨 Nuke and start over"
+              desc="Wipe all managed channels and build fresh. Planner starts blank, channels numbered from 1."
+              active={setup.mode === 'nuke'}
+              onClick={() => setMode('nuke')}
+            />
+            <ModeCard
+              icon={<IconWand size={22} />}
+              title="✏️ Add / edit what you've got"
+              desc="Keep your existing channels. Restore prior Planner picks, add new ones, update or remove channels surgically."
+              active={setup.mode === 'edit'}
+              onClick={() => setMode('edit')}
+            />
+          </SimpleGrid>
+          {isEdit && (
+            <Text size="xs" c="dimmed" mt="xs">
+              New channels will be numbered from #{setup.start} (above your existing {checkedCount} channels).
+            </Text>
+          )}
+        </Card>
+      )}
+
       {/* Method */}
       <Card withBorder p="md">
         <Text fw={700} mb="sm">What do you want to do?</Text>
@@ -226,46 +302,73 @@ function SetupStep({ setup, onChange, onDone }: {
         </Stack>
       </Card>
 
-      {/* Existing lineup keep/wipe */}
-      <Card withBorder p="md">
-        <Group justify="space-between" mb="sm">
-          <Text fw={700}>Existing Tunarr channels</Text>
-          {tunarrChannels.length > 0 && (
-            <Group gap={4}>
-              <Button size="xs" variant="subtle" py={2} onClick={() => setAll(true)}>Keep all</Button>
-              <Button size="xs" variant="subtle" py={2} onClick={() => setAll(false)}>Wipe all</Button>
+      {/* Advanced: per-channel force-wipe (Edit mode only) */}
+      {isEdit && tunarrChannels.length > 0 && (
+        <Card withBorder p="md">
+          <UnstyledButton onClick={() => setAdvancedOpen(v => !v)} style={{ width: '100%' }}>
+            <Group gap="sm">
+              <IconChevronDown size={14} style={{ transform: advancedOpen ? undefined : 'rotate(-90deg)', transition: 'transform .15s' }} />
+              <Text fw={600} size="sm">Advanced — force-wipe specific channels</Text>
+              <Text size="xs" c="dimmed">(power users)</Text>
             </Group>
-          )}
-        </Group>
-        {loading ? (
-          <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Checking Tunarr…</Text></Group>
-        ) : tunarrChannels.length === 0 ? (
-          <Text size="sm" c="dimmed">No channels in Tunarr yet — starting fresh.</Text>
-        ) : (
-          <>
-            <ScrollArea h={170} style={{ borderRadius: 4, border: '1px solid var(--mantine-color-dark-5)' }}>
-              <Stack gap={0}>
-                {tunarrChannels.map(c => (
-                  <Group key={c.number} gap="xs" px="sm" py={5}
-                    style={{ borderBottom: '1px solid var(--mantine-color-dark-6)', opacity: checkedNums.has(c.number) ? 1 : 0.4 }}>
-                    <Checkbox size="xs" checked={checkedNums.has(c.number)}
-                      onChange={(e) => toggleChannel(c.number, e.currentTarget.checked)} style={{ flexShrink: 0 }} />
-                    <Text size="xs" c="dimmed" w={36} style={{ flexShrink: 0 }}>#{c.number}</Text>
-                    <Text size="xs" lineClamp={1}>{c.name}</Text>
-                  </Group>
-                ))}
-              </Stack>
-            </ScrollArea>
-            <Text size="xs" c={checkedCount < tunarrChannels.length ? 'yellow.5' : 'dimmed'} mt="xs">
-              {checkedCount === tunarrChannels.length
-                ? `All ${checkedCount} kept. New channels start at #${setup.start}.`
-                : checkedCount === 0
-                  ? 'All existing channels will be wiped and rebuilt.'
-                  : `${checkedCount} kept, ${tunarrChannels.length - checkedCount} wiped. New channels start at #${setup.start}.`}
-            </Text>
-          </>
-        )}
-      </Card>
+          </UnstyledButton>
+          <Collapse in={advancedOpen}>
+            <Box mt="sm">
+              <Text size="xs" c="dimmed" mb="xs">
+                Uncheck a channel to force-delete it from Tunarr before deploying. Normally the surgical deploy
+                handles this automatically — only use this if you want to remove a channel the Planner still knows about.
+              </Text>
+              <Group justify="space-between" mb="xs">
+                <Text size="xs" fw={600}>Existing channels</Text>
+                <Group gap={4}>
+                  <Button size="xs" variant="subtle" py={2} onClick={() => setAll(true)}>Keep all</Button>
+                  <Button size="xs" variant="subtle" py={2} onClick={() => setAll(false)}>Wipe all</Button>
+                </Group>
+              </Group>
+              {loading ? (
+                <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Checking Tunarr…</Text></Group>
+              ) : (
+                <>
+                  <ScrollArea h={160} style={{ borderRadius: 4, border: '1px solid var(--mantine-color-dark-5)' }}>
+                    <Stack gap={0}>
+                      {tunarrChannels.map(c => (
+                        <Group key={c.number} gap="xs" px="sm" py={5}
+                          style={{ borderBottom: '1px solid var(--mantine-color-dark-6)', opacity: checkedNums.has(c.number) ? 1 : 0.4 }}>
+                          <Checkbox size="xs" checked={checkedNums.has(c.number)}
+                            onChange={(e) => toggleChannel(c.number, e.currentTarget.checked)} style={{ flexShrink: 0 }} />
+                          <Text size="xs" c="dimmed" w={36} style={{ flexShrink: 0 }}>#{c.number}</Text>
+                          <Text size="xs" lineClamp={1}>{c.name}</Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  </ScrollArea>
+                  {checkedCount < tunarrChannels.length && (
+                    <Text size="xs" c="yellow.5" mt="xs">
+                      {tunarrChannels.length - checkedCount} channel{tunarrChannels.length - checkedCount !== 1 ? 's' : ''} will be force-deleted before deploy.
+                    </Text>
+                  )}
+                </>
+              )}
+            </Box>
+          </Collapse>
+        </Card>
+      )}
+
+      {/* Show channel list in Nuke mode (no channels yet or fresh start) */}
+      {(!isEdit || tunarrChannels.length === 0) && !loading && tunarrChannels.length > 0 && (
+        <Card withBorder p="md">
+          <Text fw={700} mb="sm">Existing Tunarr channels</Text>
+          <Text size="sm" c="dimmed">
+            All {tunarrChannels.length} existing channel{tunarrChannels.length !== 1 ? 's' : ''} will be wiped and rebuilt from scratch.
+          </Text>
+        </Card>
+      )}
+
+      {!loading && tunarrChannels.length === 0 && (
+        <Alert color="blue" variant="light">
+          No channels in Tunarr yet — starting fresh.
+        </Alert>
+      )}
 
       <Group>
         <Button color="orange" rightSection={<IconArrowRight size={15} />} onClick={onDone}>
@@ -585,15 +688,41 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
 
   useEffect(() => {
     if (planner.loaded) { setLoading(false); return; }
-    api.getFacets()
-      .then((f) => {
+
+    const isEdit = setup.mode === 'edit';
+
+    Promise.all([
+      api.getFacets(),
+      isEdit ? api.getPlannerState().catch(() => null) : Promise.resolve(null),
+    ])
+      .then(([f, savedState]) => {
         if (!f.exists) { setError('Run Export first.'); return; }
         const minItems = f.min_items ?? 5;
-        const activeGenres: Record<string, boolean> = {};
-        (f.genres?.canonical ?? []).forEach(g => { activeGenres[g.tag] = g.count >= minItems; });
-        const activeDecades: Record<string, boolean> = {};
-        (f.decades ?? []).forEach(d => { activeDecades[d.label] = true; });
-        setPlanner({ ...planner, facets: f, activeGenres, activeDecades, loaded: true });
+
+        let activeGenres: Record<string, boolean> = {};
+        let activeDecades: Record<string, boolean> = {};
+        let selected: Record<string, CandidateSpec> = {};
+        let curate: Record<string, boolean> = {};
+
+        if (isEdit && savedState && (savedState as PlannerStateFile).activeGenres) {
+          // Restore prior planner intent in Add/Edit mode.
+          const s = savedState as PlannerStateFile;
+          activeGenres = s.activeGenres;
+          activeDecades = s.activeDecades;
+          selected = s.selected;
+          curate = s.curate;
+          setAiExtras(s.aiExtras);
+          setCommEnabled(s.commEnabled);
+          setCommListId(s.commListId);
+          setCommPad(s.commPad || '5');
+          setAutoUpdate(s.autoUpdate);
+        } else {
+          // Fresh state: default genres/decades from facets.
+          (f.genres?.canonical ?? []).forEach(g => { activeGenres[g.tag] = g.count >= minItems; });
+          (f.decades ?? []).forEach(d => { activeDecades[d.label] = true; });
+        }
+
+        setPlanner({ ...planner, facets: f, activeGenres, activeDecades, selected, curate, loaded: true });
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -660,6 +789,21 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
       if (r.skipped.length) notifications.show({ message: `${r.skipped.length} candidate(s) skipped — no matching titles`, color: 'yellow' });
       const extras = [commercials && 'commercials', autoUpdate && 'auto-update'].filter(Boolean).join(' + ');
       notifications.show({ message: `${r.count} channels built${extras ? ` (${extras})` : ''}`, color: 'green', icon: <IconCheck size={14} /> });
+
+      // Persist planner intent so Add/Edit mode can restore it next time.
+      const stateToSave: PlannerStateFile = {
+        activeGenres: planner.activeGenres,
+        activeDecades: planner.activeDecades,
+        selected: planner.selected,
+        curate: planner.curate,
+        aiExtras,
+        commEnabled,
+        commListId,
+        commPad,
+        autoUpdate,
+      };
+      api.savePlannerState(stateToSave).catch(() => {});
+
       onDone();
     } catch (e: any) {
       notifications.show({ message: `Build failed: ${e.message}`, color: 'red', icon: <IconX size={14} /> });
@@ -1187,6 +1331,7 @@ function DeployStep({ setup }: { setup: SetupState }) {
   const [config, setConfig] = useState<Record<string, string>>({});
   useEffect(() => { api.getConfig().then(setConfig).catch(() => {}); }, []);
 
+  const isEditMode = setup.mode === 'edit';
   const protectedNums = setup.protectedNums;
   const effectiveProtected = new Set(protectedNums);
   const activeDeployNums = new Set(channelSels.filter(s => s.include).map(s => s.deployNumber));
@@ -1204,7 +1349,15 @@ function DeployStep({ setup }: { setup: SetupState }) {
     if (ok) setChannelSels(parseProbeChannels(collected));
   }
 
-  useEffect(() => { runProbe(); /* auto-probe on entry */ // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!isEditMode) {
+      // Nuke mode: probe to validate the draft before showing the deploy button.
+      runProbe();
+    } else {
+      // Edit/surgical mode: no probe needed — surgical deploy handles all diff logic.
+      setProbeDone(true); setProbeOk(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function updateChannelSel(idx: number, patch: Partial<ChannelSel>) {
@@ -1212,14 +1365,20 @@ function DeployStep({ setup }: { setup: SetupState }) {
   }
 
   async function runCascade() {
-    // 1) Deploy
+    // 1) Deploy — Nuke uses deploy-selective (wipe+rebuild); Edit uses surgical diff.
     setPhase('deploying'); setDeployLines([]);
-    const body = {
-      selections: channelSels.map(s => ({ original_number: s.number, deploy_number: s.deployNumber, include: s.include })),
-      protected_numbers: protectedNums,
-      no_delete: false,
-    };
-    const dcode = await streamPipeline('/pipeline/deploy-selective', {}, (ev) => { if (ev.type === 'line') setDeployLines(l => [...l, ev.text]); }, body);
+    let dcode: number;
+    if (setup.mode === 'edit') {
+      // Surgical deploy: create new, delete removed, update changed, leave unchanged.
+      dcode = await streamPipeline('/pipeline/surgical-deploy', {}, (ev) => { if (ev.type === 'line') setDeployLines(l => [...l, ev.text]); });
+    } else {
+      const body = {
+        selections: channelSels.map(s => ({ original_number: s.number, deploy_number: s.deployNumber, include: s.include })),
+        protected_numbers: protectedNums,
+        no_delete: false,
+      };
+      dcode = await streamPipeline('/pipeline/deploy-selective', {}, (ev) => { if (ev.type === 'line') setDeployLines(l => [...l, ev.text]); }, body);
+    }
     const dok = dcode === 0; setDeployOk(dok);
     if (!dok) { setPhase('done'); return; }
 
@@ -1275,7 +1434,11 @@ function DeployStep({ setup }: { setup: SetupState }) {
           subtitle={deployOk ? 'Here’s how it went' : 'Check the output below'}
         >
           <Stack gap="sm" mb="md">
-            <StatusRow status={deployOk ? 'ok' : 'warn'} label={`${deployStats.created ?? '—'} channels deployed${deployStats.skipped ? `, ${deployStats.skipped} skipped` : ''}`} />
+            <StatusRow status={deployOk ? 'ok' : 'warn'} label={
+              deployStats.updated !== null
+                ? `${deployStats.created ?? 0} created · ${deployStats.updated} updated · ${deployStats.deleted ?? 0} deleted`
+                : `${deployStats.created ?? '—'} channels deployed${deployStats.skipped ? `, ${deployStats.skipped} skipped` : ''}`
+            } />
             {deployOk && (
               <StatusRow status={artStatus} label={
                 artStatus === 'skip' ? 'Channel art — skipped'
@@ -1341,7 +1504,38 @@ function DeployStep({ setup }: { setup: SetupState }) {
     );
   }
 
-  // ── Probe + review + deploy ──
+  // ── Edit mode (surgical diff) — no probe needed ──
+  if (isEditMode) {
+    return (
+      <Stack gap="lg">
+        <Card withBorder p="lg">
+          <Text fw={700} size="lg" mb="xs">Surgical deploy</Text>
+          <Text size="sm" c="dimmed" mb="md">
+            Compares your new lineup to what's currently deployed. New channels are created, removed channels are deleted,
+            changed channels are updated in place (preserving their Tunarr id and Plex DVR mapping), and unchanged channels are left alone.
+            Live channels are always updated in place — never deleted.
+          </Text>
+          {cascadeRunning && (
+            <Stack gap="xs" mb="md">
+              <StatusRow status={phase === 'deploying' ? 'running' : 'ok'} label="Applying surgical diff to Tunarr" />
+              {setup.fetchArt && <StatusRow status={phase === 'art' ? 'running' : phase === 'sync' ? 'ok' : 'pending'} label="Fetching channel art" />}
+              <StatusRow status={phase === 'sync' ? 'running' : 'pending'} label="Syncing with Plex" />
+              <TerminalOutput
+                lines={phase === 'deploying' ? deployLines : phase === 'art' ? artLines : syncLines}
+                done={false} success height={200} />
+            </Stack>
+          )}
+          {!cascadeRunning && (
+            <Button color="orange" leftSection={<IconPlayerPlay size={15} />} onClick={runCascade}>
+              Apply Changes
+            </Button>
+          )}
+        </Card>
+      </Stack>
+    );
+  }
+
+  // ── Nuke mode — probe + review + deploy ──
   return (
     <Stack gap="lg">
       <Card withBorder p="lg">
@@ -1433,12 +1627,18 @@ const blankPlanner: PlannerState = {
 export default function Run() {
   const [step, setStep] = useState(0);
   const [setup, setSetup] = useState<SetupState>({
-    method: 'build', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
+    mode: 'edit', method: 'build', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
   });
   const [planner, setPlanner] = useState<PlannerState>(blankPlanner);
   const [aiExtras, setAiExtras] = useState(false);
 
   const { method, includeCollections } = setup;
+
+  // Called when the user clicks Nuke: clear planner_state.json and reset planner.
+  function handleNuke() {
+    api.deletePlannerState().catch(() => {});
+    setPlanner(blankPlanner);
+  }
 
   // Pools the user flagged for AI tonal-splitting (✨ on a broad/decade pick).
   const curatePools = Object.entries(planner.selected)
@@ -1471,7 +1671,7 @@ export default function Run() {
         {steps.map(s => (
           <Stepper.Step key={s.key} label={s.label} description={s.desc}>
             <Box mt="lg">
-              {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} />}
+              {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} onNuke={handleNuke} />}
               {s.key === 'export' && <ExportStep onDone={next} />}
               {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} aiExtras={aiExtras} setAiExtras={setAiExtras} onDone={next} />}
               {s.key === 'discover' && <DiscoverStep discover curatePools={curatePools} onDone={next} />}

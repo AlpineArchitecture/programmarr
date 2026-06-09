@@ -210,12 +210,40 @@ and must stay in sync with Tunarr. Two rules:
 1. **Planner-flow builders** (`compose`, `validate`, `discover-prompt`, `apply_collections`)
    read/write **`channels.draft.json`** only — never the deployed record. Abandoning a creation
    can at worst leave a stale draft.
-2. **`channels.json` is written in exactly two ways:**
+2. **`channels.json` is written in exactly three ways:**
    - `deploy-selective` (`pipeline_router.py`: `_reconcile_channels_json`) — on a successful
-     `create.py` exit, writes the deployed set (wipe mode) or merges kept + deployed (keep mode),
-     then clears `channels.draft.json` and `deploy_temp.json`.
+     `create.py` exit (Nuke mode), writes the deployed set then clears `channels.draft.json`
+     and `deploy_temp.json`.
+   - `POST /api/pipeline/surgical-deploy` — Add/Edit mode: diffs draft vs deployed using
+     `channel_engine.classify_channels`, executes the minimum Tunarr ops (create/delete/
+     update-in-place/skip), then writes the merged managed set to `channels.json` and clears
+     the draft. The create step passes `--no-delete` to `create.py` so it never wipes existing
+     Tunarr channels — it only adds the new ones. Never touches orphan channels; never
+     delete-recreates live channels.
    - `POST /api/channels/{number}/apply` — saves one entry and immediately patches Tunarr in
      place; they are always written together.
+
+**Surgical deploy invariants (Add/Edit mode — never relax these):**
+- `classify_channels(desired, deployed, prior_managed)` in `channel_engine.py` is the pure,
+  testable diff function. Signature:
+  `(desired: list[dict], deployed: list[dict], prior_managed: set[str] | None) -> dict`
+  with keys `create | delete | update | unchanged | foreign`.
+- **Provenance (`prior_managed`):** only channels whose lowercased name appears in
+  `prior_managed` (the set of names the planner deployed last time, persisted in
+  `planner_state.json["managed_names"]`) are eligible for deletion. Channels NOT in
+  `prior_managed` (hand-authored on the Channels page, never built by the planner) go to
+  the `foreign` bucket and are **never auto-deleted, created, or updated** by a surgical
+  deploy. `channels.json` always includes foreign channels in its output.
+- `managed_names` is written into `planner_state.json` on every successful deploy — both the
+  surgical path and `_reconcile_channels_json` (the nuke/deploy-selective path). Bootstrapping:
+  if `managed_names` is absent, `prior_managed` is empty → nothing is deleted (safe default).
+- A changed **live** channel always lands in `update` (update-in-place) — its Tunarr id and
+  Plex DVR mapping are preserved. A planner-managed live channel the user **removes** from the
+  planner (name in `prior_managed`, absent from `desired`) IS deleted — intent wins. This is
+  distinct from delete-RECREATE (which is always forbidden for live channels).
+- **Orphan** channels (in Tunarr but absent from channels.json) are never passed into
+  `classify_channels` and therefore cannot appear in any bucket.
+- The route holds `scheduler.deploy_lock` for the full surgical operation.
 
 Channels in Tunarr without a `channels.json` entry are "orphans" — visible on the Channels
 page as read-only ("Not managed by Programmarr"). We deliberately do not reconstruct intent
@@ -250,18 +278,28 @@ are skipped for *Collections-only*; **AI Extras** appears only when the Planner'
 AI" toggle is on; Collections only if opted in.
 
 **Durable rules (these outlive any refactor of the step components):**
-- **Channel protection is decided once, on the Setup screen** (keep/wipe the existing Tunarr
-  lineup). Kept = protected; protected numbers pass to `create.py` via `--protect N1,N2,...`.
-  The start number auto-computes as the highest kept rounded up to the next 10. Deploy does
-  **not** re-ask protection — it only flags conflicts between kept numbers and deploy numbers.
+- **Deploy mode is a binary chosen on the Setup screen:**
+  - **🧨 Nuke** — wipe all managed channels, planner starts blank, numbers from 1. Uses the
+    existing `deploy-selective` path (create.py wipe+rebuild). Clears `planner_state.json`.
+  - **✏️ Add/Edit** — keep existing channels, restore prior Planner selections from
+    `planner_state.json`, numbers continue above the highest existing managed channel + 1
+    (no rounding). Uses the surgical diff deploy path. Defaults to Edit when channels exist.
+  - An **Advanced** disclosure under Edit mode lets a power user force-wipe specific channels.
+- **Planner state persists** to `data/planner_state.json`. Saved after every successful Build
+  (compose). Loaded when the Planner mounts in Add/Edit mode. Cleared on Nuke.
+  Contains: `activeGenres, activeDecades, selected, curate, aiExtras, commEnabled, commListId,
+  commPad, autoUpdate`. API: `GET/PUT/DELETE /api/pipeline/planner-state`.
 - **The Planner is deterministic:** selected candidates post as `CandidateSpec[]` to
   `POST /pipeline/compose`, which writes `channels.draft.json` (the AI and collections steps
-  append to the same draft; the Deploy step's probe and `deploy-selective` both read it).
-  Candidates are unchecked by default.
+  append to the same draft; the Deploy step's probe and `deploy-selective`/surgical-deploy both
+  read it). Candidates are unchecked by default.
 - **The AI layer merges on top** via `POST /pipeline/validate` with `append=true` (collisions
   renumbered, name-duplicates skipped) — it never overwrites the deterministic lineup.
-- **Deploy runs a cascade that always completes:** `deploy-selective` → (if art opted in)
-  `images` → `sync`, each streamed inline, ending in a per-stage summary.
+- **Deploy runs a cascade that always completes:**
+  - Nuke: `deploy-selective` → (art) → `sync`.
+  - Edit: `surgical-deploy` → (art) → `sync`.
+  Both stream inline, ending in a per-stage summary. In Edit mode no probe is run — the
+  surgical deploy handles all diff logic.
 - **The Planner body is a three-section accordion** (`AccordionSection` component, single-open
   at a time, `openSection` index state, Section 0 open initially):
   - **Section 0 — TV:** Marathons + Genre-blocks. Step 5 will insert Networks + Classic blocks.

@@ -90,6 +90,20 @@ export const api = {
     req<{ ok: boolean; number: number; program_count: number }>(
       `/channels/${n}/apply`, { method: 'POST' }),
 
+  // ── Planner state ──
+  getPlannerState: () => req<PlannerStateFile>('/pipeline/planner-state'),
+  savePlannerState: (state: PlannerStateFile) =>
+    req<{ ok: boolean }>('/pipeline/planner-state', {
+      method: 'PUT',
+      body: JSON.stringify(state),
+    }),
+  deletePlannerState: () =>
+    req<{ ok: boolean }>('/pipeline/planner-state', { method: 'DELETE' }),
+
+  // ── Surgical deploy (Add/Edit mode) ──
+  surgicalDeploy: () =>
+    fetch(`${BASE}/pipeline/surgical-deploy`, { method: 'POST' }),
+
   // ── Live channels (recipes) ──
   previewRecipe: (value: string, order?: string | null, exclude: string[] = []) =>
     req<RecipePreview>('/recipes/preview', {
@@ -231,6 +245,20 @@ export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show
 export interface PlexCollection { id: string; name: string; count: number; section: string; summary: string; has_poster: boolean }
 export interface CollectionSelection { name: string; channel_number: number; include: boolean }
 export interface LogEntry { name: string; size: number; modified: number }
+
+/** Persisted Planner intent saved to data/planner_state.json after each Build. */
+export interface PlannerStateFile {
+  activeGenres: Record<string, boolean>;
+  activeDecades: Record<string, boolean>;
+  selected: Record<string, CandidateSpec>;
+  curate: Record<string, boolean>;
+  // batch toggles
+  aiExtras: boolean;
+  commEnabled: boolean;
+  commListId: string | null;
+  commPad: string;
+  autoUpdate: boolean;
+}
 
 // ── SSE streaming ──────────────────────────────────────────────────────────────
 

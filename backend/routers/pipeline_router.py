@@ -13,6 +13,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, Response, Uploa
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+import channel_engine  # noqa: E402
 import scheduler  # noqa: E402  (backend/ on sys.path) — shared deploy_lock
 
 # scheduler's import added SCRIPTS_DIR to sys.path, so the pure pipeline modules
@@ -967,6 +968,25 @@ def _reconcile_channels_json(protected_numbers: list[int]) -> None:
     with open(canon_path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
 
+    # Persist managed_names so surgical-deploy knows which channels the planner owns.
+    deployed_names = [(c.get("name") or "").strip() for c in deployed_channels if c.get("name")]
+    planner_state_path = DATA_DIR / "planner_state.json"
+    existing_ps: dict = {}
+    if planner_state_path.exists():
+        try:
+            with open(planner_state_path, encoding="utf-8") as f:
+                existing_ps = json.load(f)
+        except Exception:
+            existing_ps = {}
+    updated_ps = {**existing_ps, "managed_names": deployed_names}
+    try:
+        tmp = planner_state_path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(updated_ps, f, indent=2, ensure_ascii=False)
+        tmp.replace(planner_state_path)
+    except Exception:
+        pass  # Non-fatal — deploy already succeeded
+
     for p in (draft_path, deployed_path):
         if p.exists():
             p.unlink()
@@ -1038,6 +1058,273 @@ def get_draft():
             return json.load(f)
     except Exception:
         return {"channels": [], "orphaned": [], "suggested_channels": []}
+
+
+@router.get("/pipeline/planner-state")
+def get_planner_state():
+    """Return the persisted Planner intent (data/planner_state.json), or {} if absent.
+
+    Saved after every successful Build; restored when the user opens Add/Edit mode.
+    Cleared (file deleted) when the user chooses Nuke.
+    """
+    p = DATA_DIR / "planner_state.json"
+    if not p.exists():
+        return {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+@router.put("/pipeline/planner-state")
+def save_planner_state(state: dict):
+    """Persist the full Planner intent so Add/Edit mode can restore prior selections."""
+    p = DATA_DIR / "planner_state.json"
+    try:
+        tmp = DATA_DIR / "planner_state.json.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        tmp.replace(p)
+    except Exception as e:
+        raise HTTPException(500, f"Could not save planner state: {e}")
+    return {"ok": True}
+
+
+@router.delete("/pipeline/planner-state")
+def delete_planner_state():
+    """Clear planner_state.json (called on Nuke, so the next Add/Edit starts blank)."""
+    p = DATA_DIR / "planner_state.json"
+    if p.exists():
+        p.unlink()
+    return {"ok": True}
+
+
+class SurgicalDeployRequest(BaseModel):
+    # No extra parameters needed: desired = draft, deployed = channels.json.
+    # These flags mirror DeployRequest for the cascade.
+    pass
+
+
+@router.post("/pipeline/surgical-deploy")
+async def run_surgical_deploy():
+    """Surgical diff deploy for Add/Edit mode.
+
+    Desired state  = channels.draft.json  (the planner's fresh output).
+    Current state  = channels.json        (managed channels only — no orphans).
+
+    Classifies each channel as create / delete / update-in-place / unchanged
+    using channel_engine.classify_channels, then executes the minimum set of
+    Tunarr operations:
+      - create  → channels.json is written first, then create.py deploys just
+                  those channels (via a temp file).
+      - delete  → removed from Tunarr and from channels.json.
+      - update  → update_channel_in_place (preserves Tunarr id + Plex DVR mapping).
+      - unchanged → no Tunarr calls.
+
+    Invariants (enforced by classify_channels + route):
+      1. Live channels are NEVER in the delete bucket — they land in update-in-place.
+      2. Orphan channels (in Tunarr but absent from channels.json) are outside both
+         input sets and are never touched.
+
+    Holds scheduler.deploy_lock for the full operation.
+    """
+    draft_path = DATA_DIR / "channels.draft.json"
+    if not draft_path.exists():
+        raise HTTPException(404, "channels.draft.json not found — compose a lineup first")
+
+    canon_path = DATA_DIR / "channels.json"
+
+    with open(draft_path, encoding="utf-8") as f:
+        draft_data = json.load(f)
+    desired: list[dict] = draft_data.get("channels", [])
+
+    if canon_path.exists():
+        with open(canon_path, encoding="utf-8") as f:
+            canon_data = json.load(f)
+        deployed: list[dict] = canon_data.get("channels", []) if isinstance(canon_data, dict) else canon_data
+    else:
+        deployed = []
+
+    # Load prior_managed from planner_state.json for provenance-based delete safety.
+    planner_state_path = DATA_DIR / "planner_state.json"
+    planner_state: dict = {}
+    if planner_state_path.exists():
+        try:
+            with open(planner_state_path, encoding="utf-8") as f:
+                planner_state = json.load(f)
+        except Exception:
+            planner_state = {}
+    prior_managed: set[str] = {
+        n.strip().lower() for n in planner_state.get("managed_names", []) if n
+    }
+
+    diff = channel_engine.classify_channels(desired, deployed, prior_managed)
+
+    cfg = _load_config()
+    tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    plex_url = cfg.get("plex_url", "").rstrip("/")
+    plex_token = cfg.get("plex_token", "")
+    if not tunarr_url:
+        raise HTTPException(400, "Tunarr not configured")
+
+    async def _stream_surgical() -> AsyncGenerator[str, None]:
+        def _emit(text: str) -> str:
+            return f"data: {json.dumps({'type': 'line', 'text': text})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'start', 'cmd': 'surgical-deploy', 'log': 'surgical'})}\n\n"
+        yield _emit(f"Surgical deploy: {len(diff['create'])} create, {len(diff['delete'])} delete, "
+                    f"{len(diff['update'])} update, {len(diff['unchanged'])} unchanged, "
+                    f"{len(diff['foreign'])} foreign (untouched)")
+
+        errors: list[str] = []
+
+        async with scheduler.deploy_lock:
+            # ── 0. Build Tunarr library index once for all updates ────────────
+            # Hoisted out of the per-channel closure so the index is fetched only once
+            # regardless of how many channels need updating (Fix 3 — efficiency).
+            if diff["update"]:
+                library_index = await asyncio.to_thread(
+                    channel_engine.build_library_index, tunarr_url
+                )
+                movie_map_shared, show_map_shared = library_index
+            else:
+                movie_map_shared, show_map_shared = {}, {}
+
+            # ── 1. Updates in place ───────────────────────────────────────────
+            for item in diff["update"]:
+                desired_ch = item["desired"]
+                num = desired_ch.get("number") or item["deployed"].get("number")
+                name = desired_ch.get("name", "")
+                yield _emit(f"  Updating #{num} {name} in place…")
+
+                def _do_update(ch=desired_ch, n=num, mv=movie_map_shared, sh=show_map_shared):
+                    plex_sections, collection_cache = [], {}
+                    if any(isinstance(it, dict) and "collection" in it for it in ch.get("content", [])):
+                        if plex_url and plex_token:
+                            plex_sections = channel_engine.get_plex_sections(plex_url, plex_token)
+                    resolved, missing = channel_engine.resolve_content(
+                        ch.get("content", []), mv, sh,
+                        plex_url=plex_url, plex_token=plex_token,
+                        plex_sections=plex_sections, collection_cache=collection_cache,
+                    )
+                    if not resolved:
+                        raise channel_engine.ChannelEngineError(
+                            f"Channel #{n}: resolved to empty — refusing to update")
+                    comm = ch.get("commercials") or {}
+                    pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm.get("filler_list_id") else 0
+                    channel_engine.update_channel_in_place(
+                        tunarr_url, n, ch.get("shuffle", "shuffle"), resolved, pad_ms=pad_ms)
+                    return missing
+
+                try:
+                    missing = await asyncio.to_thread(_do_update)
+                    if missing:
+                        yield _emit(f"    WARNING: {len(missing)} titles not found in library: {', '.join(missing[:5])}")
+                    yield _emit(f"  ✓ Updated #{num} {name}")
+                except channel_engine.ChannelEngineError as e:
+                    errors.append(f"#{num} {name}: {e}")
+                    yield _emit(f"  ! Error updating #{num} {name}: {e}")
+
+            # ── 2. Deletes ────────────────────────────────────────────────────
+            for dep_ch in diff["delete"]:
+                num = dep_ch.get("number")
+                name = dep_ch.get("name", "")
+                yield _emit(f"  Deleting #{num} {name}…")
+
+                def _do_delete(n=num):
+                    tunarr_ch = channel_engine.find_channel_by_number(tunarr_url, n)
+                    if tunarr_ch:
+                        channel_engine.api(tunarr_url, "DELETE", f"/api/channels/{tunarr_ch['id']}")
+                    return tunarr_ch is not None
+
+                try:
+                    found = await asyncio.to_thread(_do_delete)
+                    if not found:
+                        yield _emit(f"    (#{num} not in Tunarr — skipped)")
+                    yield _emit(f"  ✓ Deleted #{num} {name}")
+                except Exception as e:
+                    errors.append(f"delete #{num} {name}: {e}")
+                    yield _emit(f"  ! Error deleting #{num} {name}: {e}")
+
+            # ── 3. Creates — run via create.py on a temp file ─────────────────
+            if diff["create"]:
+                create_temp = DATA_DIR / "surgical_create_temp.json"
+                create_data = {**draft_data, "channels": diff["create"]}
+                with open(create_temp, "w", encoding="utf-8") as f:
+                    json.dump(create_data, f, indent=2, ensure_ascii=False)
+                yield _emit(f"  Creating {len(diff['create'])} new channel(s) via create.py…")
+
+                collected: list[str] = []
+                create_ok = False
+                async for chunk in _stream("create.py", ["--json", "surgical_create_temp.json", "--no-delete"], "surgical_create"):
+                    if chunk.startswith("data: "):
+                        try:
+                            payload = json.loads(chunk[6:].strip())
+                            if payload.get("type") == "line":
+                                collected.append(payload["text"])
+                                yield chunk
+                            elif payload.get("type") == "done":
+                                create_ok = payload.get("returncode") == 0
+                                yield chunk
+                        except Exception:
+                            yield chunk
+                    else:
+                        yield chunk
+
+                if create_temp.exists():
+                    create_temp.unlink()
+
+                if not create_ok:
+                    errors.append("create.py failed for new channels")
+
+            # ── 4. Write channels.json — merge all buckets ────────────────────
+            # The new channels.json contains:
+            #   • all desired channels (create + update + unchanged — from the draft)
+            #   • all foreign channels (hand-authored, absent from desired, NOT in
+            #     prior_managed — must be preserved untouched)
+            # Channels in diff["delete"] are intentionally excluded.
+            new_managed = list(desired)  # create + update(desired-side) + unchanged
+
+            # Append foreign channels — they were not in desired but must be kept.
+            new_managed.extend(diff["foreign"])
+
+            new_managed.sort(key=lambda c: c.get("number", 0))
+            out_data = {
+                "channels": new_managed,
+                "orphaned": [],
+                "suggested_channels": [],
+            }
+            with open(canon_path, "w", encoding="utf-8") as f:
+                json.dump(out_data, f, indent=2, ensure_ascii=False)
+
+            # Persist managed_names so future surgical deploys know which channels
+            # were planner-built (provenance for delete safety).
+            new_managed_names = [(ch.get("name") or "").strip() for ch in desired if ch.get("name")]
+            updated_planner_state = {**planner_state, "managed_names": new_managed_names}
+            try:
+                tmp = planner_state_path.with_suffix(".json.tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(updated_planner_state, f, indent=2, ensure_ascii=False)
+                tmp.replace(planner_state_path)
+            except Exception as e:
+                # Non-fatal — log but don't fail the deploy.
+                yield _emit(f"  WARNING: could not update planner_state.json managed_names: {e}")
+
+            # Clear the draft.
+            if draft_path.exists():
+                draft_path.unlink()
+
+        if errors:
+            yield _emit(f"Completed with {len(errors)} error(s): {'; '.join(errors)}")
+            yield f"data: {json.dumps({'type': 'done', 'returncode': 1, 'log': 'surgical'})}\n\n"
+        else:
+            yield _emit(f"Done: {len(diff['create'])} created, {len(diff['delete'])} deleted, "
+                        f"{len(diff['update'])} updated, {len(diff['unchanged'])} unchanged, "
+                        f"{len(diff['foreign'])} foreign kept")
+            yield f"data: {json.dumps({'type': 'done', 'returncode': 0, 'log': 'surgical'})}\n\n"
+
+    return _sse(_stream_surgical())
 
 
 @router.post("/pipeline/images")
