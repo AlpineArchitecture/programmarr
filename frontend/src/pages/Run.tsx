@@ -15,7 +15,7 @@ import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
   FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile, ProgrammingBlock,
-  FranchiseCandidate,
+  FranchiseCandidate, DeployPreviewResult,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -1618,6 +1618,14 @@ function DeployStep({ setup }: { setup: SetupState }) {
   const [showArt, setShowArt] = useState(false);
   const [showSync, setShowSync] = useState(false);
 
+  // Preview gate: fetch the diff summary before the deploy button is shown.
+  const [preview, setPreview] = useState<DeployPreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewConfirmed, setPreviewConfirmed] = useState(false);
+  // Collapsed state for long preview bucket lists.
+  const [previewExpanded, setPreviewExpanded] = useState<Record<string, boolean>>({});
+
   const [config, setConfig] = useState<Record<string, string>>({});
   useEffect(() => { api.getConfig().then(setConfig).catch(() => {}); }, []);
 
@@ -1626,6 +1634,22 @@ function DeployStep({ setup }: { setup: SetupState }) {
   const effectiveProtected = new Set(protectedNums);
   const activeDeployNums = new Set(channelSels.filter(s => s.include).map(s => s.deployNumber));
   const conflictNums = new Set([...effectiveProtected].filter(n => activeDeployNums.has(n)));
+
+  async function loadPreview() {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreview(null);
+    setPreviewConfirmed(false);
+    setPreviewExpanded({});
+    try {
+      const result = await api.deployPreview(isEditMode ? 'edit' : 'nuke');
+      setPreview(result);
+    } catch (e: any) {
+      setPreviewError(e?.message ?? 'Failed to load preview');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
 
   async function runProbe() {
     setProbeLines([]); setProbeDone(false); setChannelSels([]); setProbing(true);
@@ -1650,8 +1674,56 @@ function DeployStep({ setup }: { setup: SetupState }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load preview once the review gate is ready (after probe passes for nuke,
+  // immediately for edit mode).
+  useEffect(() => {
+    if (probeDone && probeOk) {
+      loadPreview();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probeDone, probeOk]);
+
   function updateChannelSel(idx: number, patch: Partial<ChannelSel>) {
     setChannelSels(prev => prev.map((s, i) => i === idx ? { ...s, ...patch } : s));
+  }
+
+  // Render a preview bucket row: label + count badge + collapsible channel list.
+  function PreviewBucket({
+    label, channels, color, symbol,
+  }: {
+    label: string;
+    channels: DeployPreviewResult[keyof DeployPreviewResult];
+    color: string;
+    symbol: string;
+  }) {
+    const key = label;
+    const expanded = previewExpanded[key] ?? false;
+    const COLLAPSE_AT = 8;
+    const shown = expanded ? channels : channels.slice(0, COLLAPSE_AT);
+    return (
+      <Box>
+        <Group gap="xs" mb={2}>
+          <Text size="sm" fw={600} c={color}>{symbol} {channels.length} {label}</Text>
+        </Group>
+        {channels.length > 0 && (
+          <Box pl="md">
+            {shown.map((ch, i) => (
+              <Text key={i} size="xs" c="dimmed">
+                {ch.number !== null ? `#${ch.number} ` : ''}{ch.name}
+              </Text>
+            ))}
+            {channels.length > COLLAPSE_AT && (
+              <Button
+                size="compact-xs" variant="subtle" color="gray" mt={2}
+                onClick={() => setPreviewExpanded(e => ({ ...e, [key]: !expanded }))}
+              >
+                {expanded ? 'show less' : `show all ${channels.length}`}
+              </Button>
+            )}
+          </Box>
+        )}
+      </Box>
+    );
   }
 
   async function runCascade() {
@@ -1805,20 +1877,74 @@ function DeployStep({ setup }: { setup: SetupState }) {
             changed channels are updated in place (preserving their Tunarr id and Plex DVR mapping), and unchanged channels are left alone.
             Live channels are always updated in place — never deleted.
           </Text>
-          {cascadeRunning && (
-            <Stack gap="xs" mb="md">
-              <StatusRow status={phase === 'deploying' ? 'running' : 'ok'} label="Applying surgical diff to Tunarr" />
-              {setup.fetchArt && <StatusRow status={phase === 'art' ? 'running' : phase === 'sync' ? 'ok' : 'pending'} label="Fetching channel art" />}
-              <StatusRow status={phase === 'sync' ? 'running' : 'pending'} label="Syncing with Plex" />
-              <TerminalOutput
-                lines={phase === 'deploying' ? deployLines : phase === 'art' ? artLines : syncLines}
-                done={false} success height={200} />
-            </Stack>
+
+          {/* Preview gate */}
+          {!cascadeRunning && !previewConfirmed && (
+            <>
+              {previewLoading && (
+                <Group gap="xs" mb="md">
+                  <Loader size="xs" />
+                  <Text size="sm" c="dimmed">Calculating diff…</Text>
+                </Group>
+              )}
+              {previewError && (
+                <Alert color="red" variant="light" icon={<IconAlertCircle size={16} />} mb="md">
+                  Could not load preview: {previewError}
+                  <Button size="compact-xs" variant="subtle" ml="sm" onClick={loadPreview}>Retry</Button>
+                </Alert>
+              )}
+              {preview && !previewLoading && (
+                <Stack gap="xs" mb="md">
+                  <Text size="sm" fw={600}>What will happen:</Text>
+                  {preview.create.length > 0 && (
+                    <PreviewBucket label="new (create)" channels={preview.create} color="green" symbol="+" />
+                  )}
+                  {preview.update.length > 0 && (
+                    <PreviewBucket label="changed (update in place)" channels={preview.update} color="blue" symbol="~" />
+                  )}
+                  {preview.delete.length > 0 && (
+                    <PreviewBucket label="removed (delete)" channels={preview.delete} color="red" symbol="−" />
+                  )}
+                  {preview.unchanged.length > 0 && (
+                    <PreviewBucket label="unchanged (left alone)" channels={preview.unchanged} color="dimmed" symbol="=" />
+                  )}
+                  {preview.foreign.length > 0 && (
+                    <PreviewBucket label="not managed by Programmarr (untouched)" channels={preview.foreign} color="dimmed" symbol="·" />
+                  )}
+                  {preview.create.length === 0 && preview.update.length === 0 && preview.delete.length === 0 && (
+                    <Text size="sm" c="dimmed">Nothing to do — lineup is already deployed.</Text>
+                  )}
+                  <Group gap="sm" mt="xs">
+                    <Button color="orange" leftSection={<IconCheck size={15} />}
+                      onClick={() => setPreviewConfirmed(true)}>
+                      Confirm deploy
+                    </Button>
+                    <Button variant="subtle" color="gray" onClick={loadPreview}>Refresh</Button>
+                  </Group>
+                </Stack>
+              )}
+            </>
           )}
-          {!cascadeRunning && (
-            <Button color="orange" leftSection={<IconPlayerPlay size={15} />} onClick={runCascade}>
-              Apply Changes
-            </Button>
+
+          {/* Cascade running or confirmed */}
+          {(cascadeRunning || previewConfirmed) && (
+            <Stack gap="xs" mb="md">
+              {cascadeRunning && (
+                <>
+                  <StatusRow status={phase === 'deploying' ? 'running' : 'ok'} label="Applying surgical diff to Tunarr" />
+                  {setup.fetchArt && <StatusRow status={phase === 'art' ? 'running' : phase === 'sync' ? 'ok' : 'pending'} label="Fetching channel art" />}
+                  <StatusRow status={phase === 'sync' ? 'running' : 'pending'} label="Syncing with Plex" />
+                  <TerminalOutput
+                    lines={phase === 'deploying' ? deployLines : phase === 'art' ? artLines : syncLines}
+                    done={false} success height={200} />
+                </>
+              )}
+              {previewConfirmed && !cascadeRunning && (
+                <Button color="orange" leftSection={<IconPlayerPlay size={15} />} onClick={runCascade}>
+                  Apply Changes
+                </Button>
+              )}
+            </Stack>
           )}
         </Card>
       </Stack>
@@ -1885,6 +2011,56 @@ function DeployStep({ setup }: { setup: SetupState }) {
             <Text size="sm" c="dimmed" mb="md">
               Deploying writes to Tunarr now.{setup.fetchArt ? ' Channel art and' : ' '} Plex sync run automatically right after.
             </Text>
+
+            {/* Preview gate */}
+            {!cascadeRunning && !previewConfirmed && (
+              <>
+                {previewLoading && (
+                  <Group gap="xs" mb="md">
+                    <Loader size="xs" />
+                    <Text size="sm" c="dimmed">Calculating diff…</Text>
+                  </Group>
+                )}
+                {previewError && (
+                  <Alert color="red" variant="light" icon={<IconAlertCircle size={16} />} mb="md">
+                    Could not load preview: {previewError}
+                    <Button size="compact-xs" variant="subtle" ml="sm" onClick={loadPreview}>Retry</Button>
+                  </Alert>
+                )}
+                {preview && !previewLoading && (
+                  <Stack gap="xs" mb="md">
+                    <Text size="sm" fw={600}>What will happen:</Text>
+                    {preview.create.length > 0 && (
+                      <PreviewBucket label="new (create)" channels={preview.create} color="green" symbol="+" />
+                    )}
+                    {preview.update.length > 0 && (
+                      <PreviewBucket label="changed (update in place)" channels={preview.update} color="blue" symbol="~" />
+                    )}
+                    {preview.delete.length > 0 && (
+                      <PreviewBucket label="removed (delete)" channels={preview.delete} color="red" symbol="−" />
+                    )}
+                    {preview.unchanged.length > 0 && (
+                      <PreviewBucket label="unchanged (left alone)" channels={preview.unchanged} color="dimmed" symbol="=" />
+                    )}
+                    {preview.foreign.length > 0 && (
+                      <PreviewBucket label="not managed by Programmarr (untouched)" channels={preview.foreign} color="dimmed" symbol="·" />
+                    )}
+                    {preview.create.length === 0 && preview.update.length === 0 && preview.delete.length === 0 && (
+                      <Text size="sm" c="dimmed">Nothing to do — lineup is already deployed.</Text>
+                    )}
+                    <Group gap="sm" mt="xs">
+                      <Button color="orange" leftSection={<IconCheck size={15} />}
+                        disabled={includedCount === 0 || conflictNums.size > 0}
+                        onClick={() => setPreviewConfirmed(true)}>
+                        Confirm deploy
+                      </Button>
+                      <Button variant="subtle" color="gray" onClick={() => { setPreviewConfirmed(false); loadPreview(); }}>Refresh</Button>
+                    </Group>
+                  </Stack>
+                )}
+              </>
+            )}
+
             {cascadeRunning && (
               <Stack gap="xs" mb="md">
                 <StatusRow status={phase === 'deploying' ? 'running' : 'ok'} label="Deploying to Tunarr" />
@@ -1895,7 +2071,7 @@ function DeployStep({ setup }: { setup: SetupState }) {
                   done={false} success height={200} />
               </Stack>
             )}
-            {!cascadeRunning && (
+            {previewConfirmed && !cascadeRunning && (
               <Button color="orange" leftSection={<IconPlayerPlay size={15} />} onClick={runCascade}
                 disabled={includedCount === 0 || conflictNums.size > 0}>
                 Deploy {includedCount} Channel{includedCount !== 1 ? 's' : ''}

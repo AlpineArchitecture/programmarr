@@ -103,6 +103,13 @@ export const api = {
   deletePlannerState: () =>
     req<{ ok: boolean }>('/pipeline/planner-state', { method: 'DELETE' }),
 
+  // ── Deploy preview (diff without Tunarr writes) ──
+  deployPreview: (mode: 'edit' | 'nuke') =>
+    req<DeployPreviewResult>('/pipeline/deploy-preview', {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
+
   // ── Surgical deploy (Add/Edit mode) ──
   surgicalDeploy: () =>
     fetch(`${BASE}/pipeline/surgical-deploy`, { method: 'POST' }),
@@ -284,6 +291,17 @@ export interface PlannerStateFile {
   commListId: string | null;
   commPad: string;
   autoUpdate: boolean;
+}
+
+/** A single channel entry in a deploy-preview bucket. */
+export interface DeployPreviewChannel { number: number | null; name: string }
+/** Result of POST /pipeline/deploy-preview — five named diff buckets. */
+export interface DeployPreviewResult {
+  create: DeployPreviewChannel[];
+  update: DeployPreviewChannel[];
+  delete: DeployPreviewChannel[];
+  unchanged: DeployPreviewChannel[];
+  foreign: DeployPreviewChannel[];
 }
 
 // ── SSE streaming ──────────────────────────────────────────────────────────────

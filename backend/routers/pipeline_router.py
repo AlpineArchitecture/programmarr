@@ -1400,6 +1400,113 @@ def delete_planner_state():
     return {"ok": True}
 
 
+def _load_deploy_inputs() -> tuple[list[dict], list[dict], set[str]]:
+    """Load the three inputs shared by deploy-preview and surgical-deploy.
+
+    Returns (desired, deployed, prior_managed) where:
+      desired      — channels from channels.draft.json
+      deployed     — channels from channels.json (managed set only)
+      prior_managed — lowercased name set from planner_state.json["managed_names"]
+    """
+    draft_path = DATA_DIR / "channels.draft.json"
+    canon_path = DATA_DIR / "channels.json"
+    planner_state_path = DATA_DIR / "planner_state.json"
+
+    if not draft_path.exists():
+        raise HTTPException(404, "channels.draft.json not found — compose a lineup first")
+
+    with open(draft_path, encoding="utf-8") as f:
+        draft_data = json.load(f)
+    desired: list[dict] = draft_data.get("channels", [])
+
+    if canon_path.exists():
+        with open(canon_path, encoding="utf-8") as f:
+            canon_data = json.load(f)
+        deployed: list[dict] = canon_data.get("channels", []) if isinstance(canon_data, dict) else canon_data
+    else:
+        deployed = []
+
+    planner_state: dict = {}
+    if planner_state_path.exists():
+        try:
+            with open(planner_state_path, encoding="utf-8") as f:
+                planner_state = json.load(f)
+        except Exception:
+            planner_state = {}
+    prior_managed: set[str] = {
+        n.strip().lower() for n in planner_state.get("managed_names", []) if n
+    }
+
+    return desired, deployed, prior_managed
+
+
+class DeployPreviewRequest(BaseModel):
+    mode: str = "edit"  # "edit" | "nuke"
+
+
+@router.post("/pipeline/deploy-preview")
+def deploy_preview(req: DeployPreviewRequest = DeployPreviewRequest()):
+    """Return a diff preview of what the next deploy would do — NO Tunarr writes.
+
+    Reads channels.draft.json (desired), channels.json (deployed managed set), and
+    planner_state.json managed_names (prior_managed).
+
+    For **edit** mode: runs channel_engine.classify_channels and returns the five
+    named buckets (create / update / delete / unchanged / foreign), each as a list
+    of {number, name}.  Update uses the DEPLOYED number (the real Tunarr channel),
+    consistent with how surgical-deploy actually targets updates.
+
+    For **nuke** mode: reflects what a wipe-and-rebuild would do — everything in the
+    draft is in the "create" bucket; all currently-deployed managed channels are in
+    the "delete" bucket (they will be wiped and recreated from scratch).  Foreign
+    (hand-authored) channels are listed in "foreign" as always.
+    """
+    desired, deployed, prior_managed = _load_deploy_inputs()
+
+    def _entry(ch: dict) -> dict:
+        return {"number": ch.get("number"), "name": ch.get("name", "")}
+
+    if req.mode == "nuke":
+        # Nuke preview: honest about what wipe-and-rebuild does.
+        # All draft channels will be (re)created; all managed deployed channels will
+        # be deleted first.  Foreign channels are untouched.
+        deployed_by_name = {(ch.get("name") or "").strip().lower(): ch for ch in deployed}
+        create_items = [_entry(ch) for ch in desired]
+        delete_items = []
+        foreign_items = []
+        for ch in deployed:
+            name_key = (ch.get("name") or "").strip().lower()
+            if name_key in prior_managed:
+                delete_items.append(_entry(ch))
+            else:
+                foreign_items.append(_entry(ch))
+        return {
+            "create": create_items,
+            "update": [],
+            "delete": delete_items,
+            "unchanged": [],
+            "foreign": foreign_items,
+        }
+
+    # Edit mode: surgical classify.
+    diff = channel_engine.classify_channels(desired, deployed, prior_managed)
+
+    # For updates, return the DEPLOYED number (the real Tunarr channel number),
+    # not the draft number.  This is consistent with how surgical-deploy targets them.
+    update_items = [
+        {"number": item["deployed"].get("number"), "name": item["desired"].get("name", "")}
+        for item in diff["update"]
+    ]
+
+    return {
+        "create": [_entry(ch) for ch in diff["create"]],
+        "update": update_items,
+        "delete": [_entry(ch) for ch in diff["delete"]],
+        "unchanged": [_entry(ch) for ch in diff["unchanged"]],
+        "foreign": [_entry(ch) for ch in diff["foreign"]],
+    }
+
+
 class SurgicalDeployRequest(BaseModel):
     # No extra parameters needed: desired = draft, deployed = channels.json.
     # These flags mirror DeployRequest for the cascade.
@@ -1429,24 +1536,17 @@ async def run_surgical_deploy():
 
     Holds scheduler.deploy_lock for the full operation.
     """
+    # Load draft_data separately (we need the full structure for the create step).
     draft_path = DATA_DIR / "channels.draft.json"
     if not draft_path.exists():
         raise HTTPException(404, "channels.draft.json not found — compose a lineup first")
-
-    canon_path = DATA_DIR / "channels.json"
-
     with open(draft_path, encoding="utf-8") as f:
         draft_data = json.load(f)
-    desired: list[dict] = draft_data.get("channels", [])
 
-    if canon_path.exists():
-        with open(canon_path, encoding="utf-8") as f:
-            canon_data = json.load(f)
-        deployed: list[dict] = canon_data.get("channels", []) if isinstance(canon_data, dict) else canon_data
-    else:
-        deployed = []
+    desired, deployed, prior_managed = _load_deploy_inputs()
+    canon_path = DATA_DIR / "channels.json"
 
-    # Load prior_managed from planner_state.json for provenance-based delete safety.
+    # Also reload planner_state for the managed_names merge after deploy.
     planner_state_path = DATA_DIR / "planner_state.json"
     planner_state: dict = {}
     if planner_state_path.exists():
@@ -1455,9 +1555,6 @@ async def run_surgical_deploy():
                 planner_state = json.load(f)
         except Exception:
             planner_state = {}
-    prior_managed: set[str] = {
-        n.strip().lower() for n in planner_state.get("managed_names", []) if n
-    }
 
     diff = channel_engine.classify_channels(desired, deployed, prior_managed)
 
