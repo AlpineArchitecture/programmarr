@@ -221,6 +221,8 @@ export interface TvGenreFacet { genre: string; count: number }
 export interface MarathonFacet { title: string; episodes: number; seasons: number }
 /** Genres present in BOTH the movie and TV libraries above the TV_MOVIE_MIX_MIN floor. */
 export interface TvMovieGenreFacet { genre: string; tv_count: number; movie_count: number }
+/** A TMDB-keyword themed channel candidate (computed from the F9 enrichment cache). */
+export interface ThemeFacet { name: string; count: number; keyword_ids: number[]; titles: string[] }
 export interface LibraryFacets {
   exists: boolean;
   movies?: number;
@@ -239,12 +241,14 @@ export interface LibraryFacets {
   tv_movie_genres?: TvMovieGenreFacet[];
   /** TV show counts by TVmaze network, above NETWORK_MIN floor. Empty while the TVmaze scan is running. */
   networks?: EntityFacet[];
+  /** TMDB-keyword themed channel candidates. Empty until the TMDB enrichment scan completes. */
+  themes?: ThemeFacet[];
 }
 
 // ── Planner v2 candidate composition ──
 export type CandidateKind =
   | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon'
-  | 'tv_movie_mix' | 'network' | 'programming_block' | 'franchise';
+  | 'tv_movie_mix' | 'network' | 'programming_block' | 'franchise' | 'theme';
 export interface CandidateSpec {
   kind: CandidateKind;
   name?: string;

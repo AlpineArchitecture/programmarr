@@ -15,7 +15,7 @@ import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
   FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile, ProgrammingBlock,
-  FranchiseCandidate, DeployPreviewResult,
+  FranchiseCandidate, DeployPreviewResult, ThemeFacet,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -72,6 +72,7 @@ const cid = {
   network: (v: string) => `net:${v}`,
   progblock: (n: string) => `pb:${n}`,
   franchise: (n: string) => `fr:${n}`,
+  theme: (n: string) => `theme:${n}`,
 };
 
 interface PlannerState {
@@ -791,6 +792,12 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     function loadFranchises() {
       if (franchisesFetched) return;
       setFranchisesFetched(true);
+      // Reload facets so the themes list (F11) populates from the fresh enrichment cache.
+      api.getFacets().then((freshFacets) => {
+        if (!cancelled && freshFacets.exists) {
+          setPlanner(prev => ({ ...prev, facets: freshFacets }));
+        }
+      }).catch(() => { /* non-fatal */ });
       api.getFranchises().then((frs) => {
         if (cancelled) return;
         setFranchises(frs);
@@ -1327,9 +1334,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
           ...(f.studios ?? []).map(s => cid.studio(s.value)),
           ...(f.directors ?? []).map(d => cid.director(d.value)),
           ...(f.actors ?? []).map(a => cid.actor(a.value)),
+          ...(f.themes ?? []).map(t => cid.theme(t.name)),
         ])}
       >
-        {activeGenreTags.size === 0 ? (
+        {activeGenreTags.size === 0 && (f.themes?.length ?? 0) === 0 && !tmdbScanRunning ? (
           <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
         ) : (
           <Stack gap="sm">
@@ -1381,6 +1389,42 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
                 {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
                 {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+              </>
+            )}
+
+            {/* ── Themed channels — from TMDB keyword catalog (F9 enrichment cache) ── */}
+            {(tmdbScanRunning || (f.themes?.length ?? 0) > 0) && (
+              <>
+                <Divider label="Themed" labelPosition="left" />
+                {tmdbScanRunning ? (
+                  <Text size="xs" c="dimmed">Scanning TMDB for themes…</Text>
+                ) : (() => {
+                  const themes = f.themes as ThemeFacet[];
+                  const items: AddItem[] = themes.map(t => ({
+                    id: cid.theme(t.name),
+                    spec: { kind: 'theme' as CandidateKind, name: t.name, titles: t.titles },
+                  }));
+                  return (
+                    <CollapsibleSection
+                      title="Themed channels"
+                      count={themes.length}
+                      selectedCount={countSel(items.map(i => i.id))}
+                      addItems={items}
+                      onAdd={addMany}
+                    >
+                      {themes.map((t, i) => (
+                        <CandRow
+                          key={items[i].id}
+                          id={items[i].id}
+                          count={t.count}
+                          label={t.name}
+                          checked={isSel(items[i].id)}
+                          onToggle={() => toggleSel(items[i].id, items[i].spec)}
+                        />
+                      ))}
+                    </CollapsibleSection>
+                  );
+                })()}
               </>
             )}
           </Stack>

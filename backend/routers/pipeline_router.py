@@ -258,6 +258,7 @@ TV_MOVIE_MIX_MIN = 3  # minimum on each side for a cross-library mixed-genre can
 NETWORK_MIN = 3    # minimum TV shows from a network for it to be offered
 BLOCK_MIN = 3      # minimum programming-block members present in library
 FRANCHISE_MIN = 2  # minimum library members for a TMDB collection to be offered
+THEME_MIN = 4      # minimum library movies matching a themed keyword for it to be offered
 ENTITY_CAP = 60    # cap each entity list; UI searches for the long tail
 
 
@@ -350,6 +351,15 @@ def library_facets(min_items: int = 5):
             if net:
                 network_counts[net] = network_counts.get(net, 0) + 1
 
+    # Themes facet: derived from the F9 TMDB enrichment cache (no new TMDB calls).
+    # Returns [] while the scan is running or if no cache exists yet — the frontend
+    # reloads facets after the TMDB scan completes (same pattern as networks).
+    enrichment_cache = _load_enrichment_cache(DATA_DIR, sig)
+    themed_catalog = _load_themed_keywords()
+    themes_facet: list[dict] = []
+    if enrichment_cache is not None and themed_catalog:
+        themes_facet = _themes_from_enrichment(enrichment_cache, themed_catalog)
+
     # Genre chips the UI offers: canonical (always) + 'more' above min_items.
     canonical_tags = {tag.lower() for _, tag in CANONICAL_GENRES}
     ci_counts = {tag.lower(): n for tag, n in genre_counts.items()}
@@ -434,6 +444,7 @@ def library_facets(min_items: int = 5):
         "marathons": marathons,
         "tv_movie_genres": tv_movie_genres,
         "networks": entity_list(network_counts, NETWORK_MIN),
+        "themes": themes_facet,
     }
 
 
@@ -785,6 +796,53 @@ def tvmaze_scan_status():
 
 
 # ── End TVmaze helpers ─────────────────────────────────────────────────────────
+
+
+def _load_themed_keywords() -> list[dict]:
+    """Load the curated themed-keyword catalog from SCRIPTS_DIR/themed_keywords.json.
+
+    Each entry: {"name": str, "keyword_ids": [int, ...]}
+    Returns [] if the file is absent or malformed.
+    """
+    try:
+        p = SCRIPTS_DIR / "themed_keywords.json"
+        if not p.exists():
+            return []
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _themes_from_enrichment(enrichment: dict[str, dict], catalog: list[dict]) -> list[dict]:
+    """Compute theme facets from the TMDB enrichment cache.
+
+    For each catalog theme, count library movies whose enrichment keywords contain
+    ANY of the theme's keyword_ids.  Returns themes with count >= THEME_MIN,
+    sorted by count descending, each entry {"name": str, "count": int,
+    "keyword_ids": [int, ...], "titles": [str, ...]}.
+
+    No TMDB calls — reads only the local enrichment cache built by F9.
+    """
+    results: list[dict] = []
+    for theme in catalog:
+        name = theme.get("name", "")
+        kw_ids = set(theme.get("keyword_ids", []))
+        if not name or not kw_ids:
+            continue
+        matched_titles: list[str] = []
+        for title, record in enrichment.items():
+            movie_kw_ids = {kw["id"] for kw in record.get("keywords", []) if kw.get("id")}
+            if movie_kw_ids & kw_ids:
+                matched_titles.append(title)
+        if len(matched_titles) >= THEME_MIN:
+            results.append({
+                "name": name,
+                "count": len(matched_titles),
+                "keyword_ids": list(kw_ids),
+                "titles": sorted(matched_titles),
+            })
+    results.sort(key=lambda t: (-t["count"], t["name"].lower()))
+    return results
 
 
 def _franchises_from_enrichment(enrichment: dict[str, dict]) -> list[dict]:
@@ -1258,7 +1316,7 @@ def discover_prompt(opts: DiscoverOptions = DiscoverOptions()):
 # ── Planner v2: deterministic candidate composition ──────────────────────────────
 
 class CandidateSpec(BaseModel):
-    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon | network | programming_block
+    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon | network | programming_block | theme
     name: Optional[str] = None
     genre: Optional[str] = None
     genres: Optional[list[str]] = None
@@ -1291,9 +1349,10 @@ _CATEGORY = {
     "network":           ("network",           "shuffle"),
     "programming_block": ("programming_block", "ordered"),
     "franchise":         ("franchise",         "ordered"),
+    "theme":             ("specialty",         "shuffle"),
 }
 # Compose categories in the order they appear in CANONICAL_ORDER (subset).
-_CATEGORY_ORDER = ["marathon", "tv_block", "network", "programming_block", "tv_movie_mix", "movie", "entity", "franchise"]
+_CATEGORY_ORDER = ["marathon", "tv_block", "network", "programming_block", "tv_movie_mix", "movie", "entity", "franchise", "specialty"]
 _DECADE_LABEL = {start: label for label, start, _ in DECADE_BUCKETS}
 
 
@@ -1359,6 +1418,13 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         # Intersect the block's pre-resolved member titles against the library TV show titles.
         show_title_set = {s["Title"].lower(): s["Title"] for s in shows}
         titles = [show_title_set[t.lower()] for t in spec.titles if t.lower() in show_title_set]
+    elif spec.kind == "theme" and spec.titles:
+        # Theme: intersect the pre-resolved movie titles (from the facets query) against
+        # the library movie titles.  The facets endpoint already resolved which movies match
+        # the theme's keyword ids — we just need to intersect with what's currently in the
+        # library (in case the library was re-exported since the facet was computed).
+        movie_title_set = {m["Title"].lower(): m["Title"] for m in movies}
+        titles = [movie_title_set[t.lower()] for t in spec.titles if t.lower() in movie_title_set]
     elif spec.kind == "franchise" and spec.titles:
         # Franchise: intersect the checked member titles against both movies AND TV shows,
         # then sort by year ascending (so content plays in release order).
@@ -1400,6 +1466,8 @@ def _auto_name(spec: CandidateSpec) -> str:
         return spec.name or "Programming Block"
     if spec.kind == "franchise":
         return spec.name or "Franchise"
+    if spec.kind == "theme":
+        return spec.name or "Themed Channel"
     return spec.name or "Channel"
 
 
