@@ -1,11 +1,15 @@
 import {
-  ActionIcon, Alert, Box, Button, Card, Divider, Group,
+  Alert, Box, Button, Card, Group,
   NumberInput, PasswordInput, Stack, Switch, Text, TextInput, Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconAlertCircle, IconArrowDown, IconArrowUp, IconCheck,
-  IconDeviceFloppy, IconRepeat,
+  DragDropContext, Droppable, Draggable,
+  type DropResult,
+} from '@hello-pangea/dnd';
+import {
+  IconAlertCircle, IconCheck,
+  IconDeviceFloppy, IconGripVertical, IconRepeat,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { api } from '../api/client';
@@ -44,42 +48,63 @@ interface CategoryOrderEditorProps {
 }
 
 function CategoryOrderEditor({ order, onChange }: CategoryOrderEditorProps) {
-  function move(index: number, direction: -1 | 1) {
+  function onDragEnd(result: DropResult) {
+    if (!result.destination) return;
     const next = [...order];
-    const target = index + direction;
-    if (target < 0 || target >= next.length) return;
-    [next[index], next[target]] = [next[target], next[index]];
+    const [moved] = next.splice(result.source.index, 1);
+    next.splice(result.destination.index, 0, moved);
     onChange(next);
   }
 
   return (
-    <Stack gap={4}>
-      {order.map((key, i) => (
-        <Group key={key} gap="xs" wrap="nowrap">
-          <ActionIcon
-            variant="subtle"
-            size="sm"
-            disabled={i === 0}
-            onClick={() => move(i, -1)}
-            aria-label="Move up"
+    <DragDropContext onDragEnd={onDragEnd}>
+      <Droppable droppableId="category-order">
+        {(provided) => (
+          <Stack
+            gap={4}
+            ref={provided.innerRef}
+            {...provided.droppableProps}
           >
-            <IconArrowUp size={14} />
-          </ActionIcon>
-          <ActionIcon
-            variant="subtle"
-            size="sm"
-            disabled={i === order.length - 1}
-            onClick={() => move(i, 1)}
-            aria-label="Move down"
-          >
-            <IconArrowDown size={14} />
-          </ActionIcon>
-          <Text size="sm" style={{ flex: 1 }}>
-            {BLOCK_LABELS[key] ?? key}
-          </Text>
-        </Group>
-      ))}
-    </Stack>
+            {order.map((key, i) => (
+              <Draggable key={key} draggableId={key} index={i}>
+                {(drag, snapshot) => (
+                  <Group
+                    ref={drag.innerRef}
+                    {...drag.draggableProps}
+                    gap="xs"
+                    wrap="nowrap"
+                    px="xs"
+                    py={6}
+                    style={{
+                      ...drag.draggableProps.style,
+                      background: snapshot.isDragging
+                        ? 'var(--mantine-color-dark-6)'
+                        : undefined,
+                      borderRadius: 'var(--mantine-radius-sm)',
+                      border: '1px solid',
+                      borderColor: snapshot.isDragging
+                        ? 'var(--mantine-color-orange-7)'
+                        : 'var(--mantine-color-dark-4)',
+                    }}
+                  >
+                    <Box
+                      {...drag.dragHandleProps}
+                      style={{ display: 'flex', alignItems: 'center', color: 'var(--mantine-color-dimmed)', cursor: 'grab' }}
+                    >
+                      <IconGripVertical size={16} />
+                    </Box>
+                    <Text size="sm" style={{ flex: 1 }}>
+                      {BLOCK_LABELS[key] ?? key}
+                    </Text>
+                  </Group>
+                )}
+              </Draggable>
+            ))}
+            {provided.placeholder}
+          </Stack>
+        )}
+      </Droppable>
+    </DragDropContext>
   );
 }
 
