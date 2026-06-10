@@ -53,14 +53,14 @@ function LogRow({ entry }: { entry: LogEntry }) {
         <Box
           p="md"
           pt={0}
-          style={{ borderTop: '1px solid var(--mantine-color-dark-4)' }}
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           {content === null ? (
             <Loader size="xs" mt="sm" />
           ) : (
             <Code
               block
-              style={{ fontSize: 11, maxHeight: 400, overflow: 'auto', backgroundColor: '#0d0e0f' }}
+              style={{ fontSize: 11, maxHeight: 400, overflow: 'auto', backgroundColor: '#0d0e0f', color: '#d4d4d4' }}
             >
               {content}
             </Code>
