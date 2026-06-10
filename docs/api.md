@@ -13,6 +13,7 @@ change; don't restate it back into `CLAUDE.md`.
 | GET | `/api/guide` | Fetch and parse Tunarr's XMLTV feed. Returns `{channels:[{number,name,icon?}], programmes:[{number,start,stop,title,episode?}], error?}`. Channels sorted by number; timestamps as ISO 8601. Never throws — returns `error` field on failure. |
 | GET | `/api/tunarr/channels` | Live channel list from Tunarr: `[{number,name,id?}]` |
 | GET | `/api/tunarr/filler-lists` | Filler lists in Tunarr: `[{id,name,contentCount}]` — powers the Commercials picker |
+| GET | `/api/update-check?current=<semver>` | Compares the newest published GitHub release against the running version (passed as `current`). Cached server-side ~6 h. Honors the `update_check_enabled` config flag — returns `{"enabled":false}` when off. Returns `{enabled, update_available, current, latest, name, url}`. |
 
 ## Channels API Endpoints (`backend/routers/channels_router.py`)
 

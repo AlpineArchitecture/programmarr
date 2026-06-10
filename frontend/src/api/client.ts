@@ -18,6 +18,8 @@ export const api = {
 
   getStatus: () =>
     req<{ tunarr: ConnStatus; plex: ConnStatus }>('/status'),
+  updateCheck: (current: string) =>
+    req<UpdateInfo>(`/update-check?current=${encodeURIComponent(current)}`),
   getTunarrChannels: () => req<TunarrChannel[]>('/tunarr/channels'),
   getGuide: () => req<Guide>('/guide'),
   getFillerLists: () => req<FillerList[]>('/tunarr/filler-lists'),
@@ -156,6 +158,14 @@ export const api = {
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface ConnStatus { ok: boolean; url: string; error?: string }
+export interface UpdateInfo {
+  enabled: boolean;
+  update_available?: boolean;
+  current?: string;
+  latest?: string | null;
+  name?: string;
+  url?: string;
+}
 export interface TunarrChannel { number: number; name: string; id?: string }
 export interface GuideChannel { number: number; name: string; icon?: string | null }
 export interface GuideProgramme { number: number; start: string; stop: string; title: string; episode?: string }

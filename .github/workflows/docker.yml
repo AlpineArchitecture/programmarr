@@ -2,9 +2,9 @@ name: Build and push Docker image
 
 on:
   push:
-    branches: [master]
+    branches: [master]      # build-check only — publishes NOTHING (see push: below)
   release:
-    types: [published]
+    types: [published]      # the ONLY event that publishes :latest + version tags
 
 permissions:
   contents: read
@@ -18,7 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Login only needed when we actually push (release). Master build-check skips it.
       - name: Log in to GHCR
+        if: github.event_name == 'release'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -31,15 +33,17 @@ jobs:
         with:
           images: ghcr.io/alpinearchitecture/programmarr
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
             type=semver,pattern={{version}}
             type=semver,pattern=v{{major}}.{{minor}}
-            type=sha,prefix=sha-,format=short
+            type=sha,prefix=sha-,format=short,enable=${{ github.event_name == 'release' }}
 
+      # push: true ONLY on a release. On a master push this is a pure build-check —
+      # it proves the image compiles but pushes nothing to GHCR, so no user ever pulls it.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: ${{ github.event_name == 'release' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

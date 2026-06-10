@@ -31,7 +31,7 @@ Channels can also be **self-maintaining**: mark one "live" and Programmarr re-ch
 docker compose up -d
 ```
 
-That's it — the image is pre-built on [GHCR](https://github.com/AlpineArchitecture/programmarr/pkgs/container/programmarr) and pulls automatically. No local build step needed.
+That's it — the image is pre-built on [GHCR](https://github.com/AlpineArchitecture/programmarr/pkgs/container/programmarr). No local build step needed.
 
 ### 2. Open the UI
 
@@ -41,9 +41,50 @@ http://<your-server-ip>:7979
 
 First run shows an onboarding wizard — create a login, enter your Tunarr and Plex URLs, done.
 
-### Updates
+### TrueNAS
 
-Add [Watchtower](https://containrrr.dev/watchtower/) to your compose file and updates happen automatically — no SSH, no manual pulls, no Portainer. Watchtower checks every 5 minutes and restarts the container if a new image is available:
+Paste this as a complete compose file in Apps → Custom App:
+
+```yaml
+services:
+  programmarr:
+    image: ghcr.io/alpinearchitecture/programmarr:latest
+    container_name: programmarr
+    restart: unless-stopped
+    ports:
+      - "7979:7979"
+    volumes:
+      - /mnt/YourPool/AppData/programmarr/data:/data
+```
+
+Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your pool.
+
+---
+
+## Updating
+
+Programmarr only publishes a new image when a **version is released** — your container
+never changes on its own. When a new release is out, the app shows an **"update available"**
+banner in the top bar with a link to the release notes. Update when it suits you:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Your data (config, channels, library export) lives in the mounted `./data` volume and is
+untouched by an update.
+
+> Prefer hands-off? You can add [Watchtower](https://containrrr.dev/watchtower/) to
+> auto-pull releases — see "Optional: automatic updates with Watchtower" below. Because
+> images now publish only on releases, Watchtower will only ever pull *released versions*,
+> never in-progress work.
+
+## Optional: automatic updates with Watchtower
+
+If you'd rather not think about updates at all, add Watchtower to your compose file. It
+checks for a new image on the configured interval and restarts the container automatically
+when one is available. Because Programmarr only publishes images on releases, Watchtower
+will only ever pull released versions — never work-in-progress.
 
 ```yaml
 services:
@@ -68,40 +109,6 @@ services:
 ```
 
 > **Note:** The `DOCKER_API_VERSION=1.44` env var is required on newer Docker engines (TrueNAS, Docker Desktop 4.x+). Without it, Watchtower crash-loops with "client version 1.25 is too old".
-
-Or update manually any time:
-
-```bash
-docker compose pull && docker compose up -d
-```
-
-### TrueNAS
-
-Paste this as a complete compose file in Apps → Custom App:
-
-```yaml
-services:
-  programmarr:
-    image: ghcr.io/alpinearchitecture/programmarr:latest
-    container_name: programmarr
-    restart: unless-stopped
-    ports:
-      - "7979:7979"
-    volumes:
-      - /mnt/YourPool/AppData/programmarr/data:/data
-
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    environment:
-      - DOCKER_API_VERSION=1.44
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 300 programmarr
-    restart: unless-stopped
-```
-
-Replace `/mnt/YourPool/AppData/programmarr/data` with a real path on your pool.
 
 ---
 
