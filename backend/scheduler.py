@@ -194,6 +194,15 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
         if not tch:
             summary["skipped"].append({"number": number, "name": name, "reason": "not in Tunarr"})
             continue
+        # Guard the by-number scramble: if the Tunarr channel at this number is not the
+        # one our record names, channels.json has drifted out of sync with Tunarr — skip
+        # rather than overwrite the wrong channel. (See channel_engine.update_channel_in_place.)
+        if (tch.get("name") or "").strip().lower() != name.strip().lower():
+            summary["skipped"].append({
+                "number": number, "name": name,
+                "reason": (f"name mismatch — Tunarr #{number} is '{tch.get('name')}', "
+                           f"record expects '{name}'; refusing to overwrite (out of sync)")})
+            continue
         cur_ids = channel_engine.read_channel_programming(tunarr_url, tch["id"])
         if cur_ids is None:
             summary["skipped"].append({"number": number, "name": name, "reason": "could not read programming"})
@@ -222,7 +231,8 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
                 comm = ch.get("commercials") or {}
                 pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm.get("filler_list_id") else 0
                 channel_engine.update_channel_in_place(
-                    tunarr_url, number, ch.get("shuffle", "shuffle"), resolved, pad_ms=pad_ms)
+                    tunarr_url, number, ch.get("shuffle", "shuffle"), resolved,
+                    pad_ms=pad_ms, expected_name=name)
                 change["applied"] = True
             except channel_engine.ChannelEngineError as e:
                 summary["skipped"].append({"number": number, "name": name, "reason": str(e)})

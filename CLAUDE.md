@@ -157,7 +157,7 @@ and the code — don't restate them here.
 - **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/specialty). Numbers channels sequentially using `channel_blocks.assign_numbers` + `channel_blocks.resolve_order`; `--order KEY,KEY,…` overrides category order; `--start N` sets the first number.
 - **`channel_blocks.py`** — shared, **pure, importable** channel-numbering logic (no `config.json`/argv). `assign_numbers(order, counts, start)` packs categories tight sequentially; `resolve_order(configured)` validates/fills the configured order against `CANONICAL_ORDER`. Single source of truth for compose, the LLM prompt, and `generate_no_ai`. **Must stay in the Dockerfile `COPY` line.**
 - **`generate_from_collections.py`** — one channel per Plex collection via `{"collection":"Name"}`. Manages the collection block (default ch 80+): keeps everything below `--base`, regenerates from `--base` up. Re-run any time Kometa changes collections.
-- **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**.
+- **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**. `build_library_index` indexes **all** enabled movie and shows libraries (not just the first — a Plex server can expose several, e.g. `TV Shows` + `Cartoons`), and indexes a show that appears in more than one library **once**, preferring the copy with the most playable (non-`missing`) episodes so a dead duplicate can't shadow the real one or inflate the live-diff into churn.
 - **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels.
 - **`fetch_images.py`** — for solo-title channels, finds the best TMDB clearlogo and sets the Tunarr channel `icon.path` so Plex shows a real logo in the guide. Multi-title channels are skipped. Dry-run by default; `--apply` to commit. Requires `tmdb_api_key`.
 - **`sync_plex.py`** — reconciles Tunarr's XMLTV channel list into Plex's DVR mapping (read-then-update; **never deletes** the DVR). Falls back to printing the XMLTV URL + manual steps.
@@ -393,7 +393,11 @@ default (`recipes_enabled: false`).
 1. **Update in place.** Look the channel up by number and `set_programming` on the existing
    Tunarr id. **Never** delete-and-recreate a live channel — that changes the Tunarr id and
    breaks the Plex DVR mapping. (`create.py`'s delete/recreate path is for *initial* deploy
-   only; the scheduler must never use it.)
+   only; the scheduler must never use it.) **Name-match guard:** `update_channel_in_place`
+   takes `expected_name` and refuses to patch (raises) if the Tunarr channel at that number
+   carries a different name — so a `channels.json` that has drifted out of sync with Tunarr's
+   numbering (two writers on one Tunarr; an orphan shifting numbers) can never silently
+   overwrite the wrong channel. The scheduler skips + logs such mismatches instead of scrambling.
 2. **Tunarr is the source of truth.** Each cycle diffs freshly-resolved program ids against the
    channel's *current* Tunarr programming and patches **only on a difference**. No state file
    drives correctness — `data/recipe_state.json` is cosmetic UI-only metadata (last-synced

@@ -88,36 +88,54 @@ def build_library_index(tunarr_url):
         raise ChannelEngineError("No Plex source found in Tunarr")
 
     libs = source.get("libraries", [])
-    movie_lib = next((l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")), None)
-    tv_lib = next((l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")), None)
+    # A Plex server can expose MULTIPLE movie or shows libraries (e.g. 'TV Shows' AND
+    # 'Cartoons'). Index every enabled one of each kind — picking only the first
+    # silently drops whole libraries, so channels referencing shows that live in a
+    # secondary library would resolve to empty.
+    movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
+    tv_libs = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
 
     movie_map = {}
     show_map = {}
 
-    if movie_lib:
+    if movie_libs:
         print(f"  Indexing movie library...")
-        programs = api(tunarr_url, "GET", f"/api/media-libraries/{movie_lib['id']}/programs", timeout=120) or []
-        for p in programs:
-            title = p.get("program", {}).get("title", "")
-            if title:
-                movie_map[title.lower().strip()] = p
+        for lib in movie_libs:
+            programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+            for p in programs:
+                title = p.get("program", {}).get("title", "")
+                if title:
+                    movie_map[title.lower().strip()] = p
         print(f"  Indexed {len(movie_map)} movies")
 
-    if tv_lib:
+    if tv_libs:
         print(f"  Indexing TV library...")
-        programs = api(tunarr_url, "GET", f"/api/media-libraries/{tv_lib['id']}/programs", timeout=120) or []
-        by_show = {}
-        for p in programs:
-            show = p.get("program", {}).get("show", {})
-            show_id = show.get("uuid") or p.get("program", {}).get("showId")
-            title = show.get("title", "")
-            if not show_id or not title:
-                continue
-            key = title.lower().strip()
-            if key not in by_show:
-                by_show[key] = {"title": title, "showId": show_id, "programs": []}
-            by_show[key]["programs"].append(p)
-        show_map = by_show
+        # Collect every copy of each show, per library. A title can appear in more than
+        # one library (e.g. filed under both 'TV Shows' and 'Cartoons'), sometimes with
+        # one copy dead (all files missing). We must index each show ONCE — otherwise
+        # resolve() doubles its episodes while Tunarr's single show-slot enumerates one,
+        # so the live-channel diff never converges (churn).
+        candidates = {}  # title-key -> {title, by_lib: {lib_id: {showId, programs}}}
+        for lib in tv_libs:
+            programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+            for p in programs:
+                prog = p.get("program", {})
+                show = prog.get("show", {})
+                show_id = show.get("uuid") or prog.get("showId")
+                title = show.get("title", "")
+                if not show_id or not title:
+                    continue
+                key = title.lower().strip()
+                c = candidates.setdefault(key, {"title": title, "by_lib": {}})
+                entry = c["by_lib"].setdefault(lib["id"], {"showId": show_id, "programs": []})
+                entry["programs"].append(p)
+        # For each show pick the single library copy with the most PLAYABLE episodes, so a
+        # dead duplicate (all state:'missing') never shadows the real one.
+        def _playable(entry):
+            return sum(1 for p in entry["programs"] if p.get("program", {}).get("state") != "missing")
+        for key, c in candidates.items():
+            best = max(c["by_lib"].values(), key=_playable)
+            show_map[key] = {"title": c["title"], "showId": best["showId"], "programs": best["programs"]}
         print(f"  Indexed {len(show_map)} TV shows")
 
     return movie_map, show_map
@@ -517,7 +535,7 @@ def read_channel_programming(tunarr_url, channel_id):
     return {i["id"] for i in pr.get("lineup", []) if i.get("type") == "content" and i.get("id")}
 
 
-def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0):
+def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, expected_name=None):
     """Patch an existing channel's programming in place — never delete/recreate.
 
     Looks the channel up by number (preserving its Tunarr id and Plex DVR mapping),
@@ -528,10 +546,23 @@ def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0):
     pad_ms preserves a commercials channel's gap on live updates (the attached filler
     list survives — only programming is replaced — but the pad must be re-applied or the
     gap, and thus the commercials, would vanish after a cycle).
+
+    expected_name guards against the by-number scramble: if given, the Tunarr channel
+    found at `number` must carry that name (case/space-insensitive) or we refuse to
+    patch. channels.json can drift out of sync with Tunarr's numbering (two Programmarr
+    instances writing one Tunarr; an orphan channel shifting numbers), in which case
+    blind by-number patching overwrites the wrong channel. Mismatch ⇒ skip, never scramble.
     """
     ch = find_channel_by_number(tunarr_url, number)
     if not ch:
         raise ChannelEngineError(f"Channel #{number} not found in Tunarr")
+    if expected_name is not None:
+        actual = (ch.get("name") or "").strip().lower()
+        if actual != expected_name.strip().lower():
+            raise ChannelEngineError(
+                f"Channel #{number} name mismatch: Tunarr has '{ch.get('name')}', "
+                f"expected '{expected_name}' — refusing to overwrite "
+                f"(channels.json out of sync with Tunarr)")
     schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved, pad_ms=pad_ms)
     if not schedule:
         raise ChannelEngineError(f"Channel #{number}: no schedule could be built (no content resolved)")
