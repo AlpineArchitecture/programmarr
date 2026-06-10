@@ -24,7 +24,7 @@ echo "  Backend (reload): http://localhost:7979"
 echo "  Ctrl+C to stop both."
 echo ""
 
-python3 -m uvicorn main:app --reload --port 7979 --app-dir "$ROOT/backend" &
+"$ROOT/.venv/bin/python3" -m uvicorn main:app --reload --port 7979 --app-dir "$ROOT/backend" &
 cd "$ROOT/frontend" && npm run dev &
 
 wait

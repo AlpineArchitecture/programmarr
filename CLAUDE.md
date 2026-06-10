@@ -69,6 +69,15 @@ data/             Bind-mounted volume — config.json, channels.json, plex_libra
 Two loops: the **fast loop** for iterating, the **parity loop** (Docker) for the final
 check before shipping. Always run the parity loop before a release.
 
+**One-time setup (Linux/WSL — fresh machine):**
+```bash
+# Python venv (requires python3-venv: sudo apt install python3.14-venv)
+python3 -m venv .venv && .venv/bin/pip install -r backend/requirements.txt
+# Frontend — must reinstall on Linux even if node_modules exists from Windows
+# (Windows-built native binaries don't work cross-platform)
+cd frontend && npm install && cd ..
+```
+
 **Fast loop — hot reload:**
 ```bash
 # Linux/WSL:
@@ -78,7 +87,6 @@ check before shipping. Always run the parity loop before a release.
 ```
 Open **http://localhost:5173** (not 7979). Vite serves the SPA with HMR and proxies `/api`
 → the reload backend. Both read/write the real `./data` files, so behavior matches Docker.
-Requires a local Python env with backend `requirements.txt` and `npm install` in `frontend/`.
 
 **Parity loop — Docker (run before shipping):**
 ```powershell
