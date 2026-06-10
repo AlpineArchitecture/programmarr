@@ -4,6 +4,55 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] — 2026-06-09
+
+A large Planner overhaul: smarter channel discovery from new data sources, a guided
+three-section Planner, sticky picks, and a safe surgical add/edit deploy.
+
+### Added
+
+- **Three-section Planner (TV / Movies / TV+Movies).** A single-open accordion replaces the
+  long candidate list. Categories open by default with a per-category **Done** collapse; a new
+  **TV+Movies** section builds mixed-genre channels that interleave episodes and films of a
+  shared genre.
+- **Sticky Planner picks.** Your selections persist to `planner_state.json` (saved on every
+  change, restored every run) — reopen the Planner and your last lineup is already checked.
+  **Nuke** keeps your picks (it only wipes Tunarr); **Clear all** is the sole reset.
+- **Add / Edit vs Nuke.** A top-of-Run choice. **Add/Edit** does a *surgical* deploy — creates
+  new channels, deletes unchecked ones, updates changed ones **in place** (preserving the Tunarr
+  id + Plex DVR mapping), and never touches live or hand-authored channels. **Nuke** wipes and
+  rebuilds from channel 1.
+- **Deploy diff preview.** Before anything touches Tunarr, see exactly what will change —
+  + new / ~ changed / − removed / = unchanged / · not-managed — then **Confirm**.
+- **Real networks from TVmaze** (HBO, NBC, Apple TV+…) — replaces the unreliable Plex "studio"
+  field, no API key needed.
+- **Franchise detection** spanning TV + film, from **TMDB + Wikidata** (per-member checkboxes —
+  pick your favorite entries). Runs as a cached background scan with a progress bar.
+- **Themed channels** from a curated TMDB-keyword catalog (Heist, Time Travel, Christmas,
+  Dystopian, Superhero, …) — deterministic, no AI step needed.
+- **Classic TV programming blocks** (TGIF, Must See TV, Saturday Morning Cartoons, …) matched
+  against your library from a built-in catalog.
+- **Country / Mood / Style channels** from Plex metadata (e.g. French Cinema, Film Noir).
+- **Dashboard:** open-in-new-tab buttons for Tunarr and Plex.
+- **Settings:** drag-and-drop reordering of the channel-numbering categories.
+
+### Changed
+
+- **Channel numbering is now sequential from 1, grouped by category.** No fixed block sizes or
+  caps — the lineup is exactly as long as what you pick, and the category order is configurable
+  (Settings + first-run onboarding). Replaces the old `channel_blocks` sizes with `channel_order`.
+- Collections stay in their own dedicated feature — they're no longer pulled into the Franchise step.
+
+### Fixed
+
+- **Surgical deploy now records the right channel numbers.** Editing an existing channel updates
+  it in place at its real Tunarr number instead of mislabeling it in `channels.json`.
+- **Dev loop export works on Windows.** The dev backend reloads at the process level (watchfiles)
+  instead of `uvicorn --reload`, which forced the Selector event loop and broke pipeline
+  subprocesses (`export.py` etc.). No-op on Docker.
+- Dashboard guide no longer repeats the channel number; the auto-update card is trimmed to status
+  + last-run.
+
 ## [0.4.4] — 2026-06-08
 
 ### Fixed
