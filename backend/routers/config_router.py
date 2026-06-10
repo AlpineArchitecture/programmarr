@@ -21,6 +21,9 @@ class ConfigModel(BaseModel):
     # Ordered list of category keys controlling channel numbering order.
     # Empty ⇒ canonical default from channel_blocks.CANONICAL_ORDER at use time.
     channel_order: list = []
+    # Whether the app polls GitHub for a newer release (the in-app update banner).
+    # Default on; stored explicitly so the falsy-prune below can't drop a False.
+    update_check_enabled: bool = True
 
 
 def _path() -> Path:
@@ -59,6 +62,8 @@ def save_config(config: ConfigModel):
     # skips the order step) must NOT wipe a previously-saved order — so handle it before
     # the blank-field pruning below.
     order = data.pop("channel_order", None) or []
+    # Booleans must bypass the falsy-prune below (False is falsy → would be deleted).
+    update_check = bool(data.pop("update_check_enabled", True))
     # Merge onto existing so keys the UI form doesn't manage are preserved — e.g.
     # the live-channel keys (recipes_enabled, recipe_interval_hours) and the advanced
     # config keys (tunarr_channel_group, tunarr_stream_mode), which are edited directly
@@ -71,6 +76,7 @@ def save_config(config: ConfigModel):
             merged.pop(k, None)
     if order:
         merged["channel_order"] = order
+    merged["update_check_enabled"] = update_check
     # Preserve old channel_blocks key silently (don't crash; just ignore it).
     with open(_path(), "w") as f:
         json.dump(merged, f, indent=4)

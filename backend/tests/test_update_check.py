@@ -122,3 +122,22 @@ def test_update_check_refetches_after_ttl(monkeypatch):
     sr.update_check(current="0.5.0")   # first call re-stamps + fetches
     sr.update_check(current="0.5.0")   # second is within fresh TTL → cached
     assert calls["n"] == 1
+
+
+import json as _json
+import importlib
+
+
+def test_update_check_enabled_persists_false(tmp_path, monkeypatch):
+    """A False toggle must survive save_config's falsy-prune."""
+    monkeypatch.setenv("PROGRAMMARR_DATA", str(tmp_path))
+    from routers import config_router as cr
+    importlib.reload(cr)  # re-bind DATA_DIR to the temp dir
+
+    cr.save_config(cr.ConfigModel(update_check_enabled=False))
+    saved = _json.loads((tmp_path / "config.json").read_text())
+    assert saved["update_check_enabled"] is False
+
+    cr.save_config(cr.ConfigModel(update_check_enabled=True))
+    saved = _json.loads((tmp_path / "config.json").read_text())
+    assert saved["update_check_enabled"] is True
