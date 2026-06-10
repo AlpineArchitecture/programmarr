@@ -535,7 +535,7 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
   onToggle: (id: string, spec: CandidateSpec) => void;
   onAddMany: (items: { id: string; spec: CandidateSpec }[]) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [q, setQ] = useState('');
   const filtered = q ? items.filter(i => i.value.toLowerCase().includes(q.toLowerCase())) : items;
   const selN = items.filter(i => isSel(makeId(i.value))).length;
@@ -563,6 +563,10 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
             {filtered.length === 0 && <Text size="xs" c="dimmed" p="xs">No matches.</Text>}
           </Stack>
         </ScrollArea.Autosize>
+        <Group justify="flex-end" mt="xs">
+          <Button size="compact-xs" variant="subtle" color="dimmed"
+            onClick={(e) => { e.stopPropagation(); setOpen(false); }}>Done</Button>
+        </Group>
       </Collapse>
     </Card>
   );
@@ -570,26 +574,29 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
 
 type AddItem = { id: string; spec: CandidateSpec };
 
-// Collapsible candidate group with bulk "Top 10" / "Add all" buttons. Adding from a
-// header collapses the group, so a handled category folds away (minimises the wall).
-function BulkButtons({ items, onAdd, onAfter }: { items: AddItem[]; onAdd: (i: AddItem[]) => void; onAfter?: () => void }) {
+// Collapsible candidate group with bulk "Top 10" / "Add all" buttons. Bulk-add only
+// adds items — it does NOT collapse the category (so the user can see what was added).
+function BulkButtons({ items, onAdd }: { items: AddItem[]; onAdd: (i: AddItem[]) => void }) {
   return (
     <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
       {items.length > 10 && (
         <Button size="compact-xs" variant="subtle" color="gray"
-          onClick={(e) => { e.stopPropagation(); onAdd(items.slice(0, 10)); onAfter?.(); }}>Top 10</Button>
+          onClick={(e) => { e.stopPropagation(); onAdd(items.slice(0, 10)); }}>Top 10</Button>
       )}
       <Button size="compact-xs" variant="subtle" color="gray"
-        onClick={(e) => { e.stopPropagation(); onAdd(items); onAfter?.(); }}>Add all</Button>
+        onClick={(e) => { e.stopPropagation(); onAdd(items); }}>Add all</Button>
     </Group>
   );
 }
 
-function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, defaultOpen, children }: {
+// Category groups start expanded when their section is open. A "Done" button in the
+// footer collapses a handled category to its header summary. Re-openable by clicking
+// the header. Top 10 / Add all no longer collapse the group.
+function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, children }: {
   title: string; count: number; selectedCount?: number;
-  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; defaultOpen?: boolean; children: React.ReactNode;
+  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(!!defaultOpen);
+  const [open, setOpen] = useState(true);
   return (
     <Card withBorder p="sm">
       <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
@@ -598,9 +605,15 @@ function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, defa
           <Text fw={600} size="sm" lineClamp={1}>{title} <Text span c="dimmed" size="xs">({count})</Text></Text>
           {selectedCount ? <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>{selectedCount} added</Badge> : null}
         </Group>
-        {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} onAfter={() => setOpen(false)} />}
+        {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} />}
       </Group>
-      <Collapse in={open}>{children}</Collapse>
+      <Collapse in={open}>
+        {children}
+        <Group justify="flex-end" mt="xs">
+          <Button size="compact-xs" variant="subtle" color="dimmed"
+            onClick={(e) => { e.stopPropagation(); setOpen(false); }}>Done</Button>
+        </Group>
+      </Collapse>
     </Card>
   );
 }
