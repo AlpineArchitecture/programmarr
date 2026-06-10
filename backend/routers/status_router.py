@@ -118,12 +118,14 @@ def update_check(current: str = ""):
 
     now = time.time()
     if now - _update_cache["at"] > _UPDATE_TTL:
-        # Bound to one fetch per TTL even on failure: keep any prior (stale) data,
-        # accept a 6h gap on outage rather than hammering GitHub from a home lab.
+        # Stamp `at` BEFORE the blocking fetch so a racing threadpool request sees a
+        # fresh timestamp and skips it — worst case is one stale read, not two GitHub
+        # hits. Keep any prior (stale) data on failure; accept a 6h gap on outage
+        # rather than hammering GitHub from a home lab.
+        _update_cache["at"] = now
         fetched = _fetch_latest_release()
         if fetched is not None:
             _update_cache["data"] = fetched
-        _update_cache["at"] = now
 
     data = _update_cache["data"]
     if not data:

@@ -6,7 +6,10 @@ degrade to "no update", never crash the footer.
 """
 
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
@@ -44,9 +47,6 @@ def test_is_newer_no_current_is_false():
 def test_is_newer_junk_is_false():
     assert sr.is_newer("not-a-version", "0.5.0") is False
     assert sr.is_newer("", "0.5.0") is False
-
-
-import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -107,3 +107,18 @@ def test_update_check_fetch_failure_is_safe(monkeypatch):
     assert out["enabled"] is True
     assert out["update_available"] is False
     assert out["latest"] is None
+
+
+def test_update_check_refetches_after_ttl(monkeypatch):
+    monkeypatch.setattr(sr, "load_config", lambda: {})
+    calls = {"n": 0}
+
+    def fake_fetch():
+        calls["n"] += 1
+        return {"latest": "0.6.0", "name": "v0.6.0", "url": "x"}
+
+    monkeypatch.setattr(sr, "_fetch_latest_release", fake_fetch)
+    sr._update_cache["at"] = time.time() - sr._UPDATE_TTL - 1  # force-expire
+    sr.update_check(current="0.5.0")   # first call re-stamps + fetches
+    sr.update_check(current="0.5.0")   # second is within fresh TTL → cached
+    assert calls["n"] == 1
