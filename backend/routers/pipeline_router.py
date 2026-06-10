@@ -259,6 +259,9 @@ NETWORK_MIN = 3    # minimum TV shows from a network for it to be offered
 BLOCK_MIN = 3      # minimum programming-block members present in library
 FRANCHISE_MIN = 2  # minimum library members for a TMDB collection to be offered
 THEME_MIN = 4      # minimum library movies matching a themed keyword for it to be offered
+COUNTRY_MIN = 3    # minimum movies for a country to appear in the facet
+MOOD_MIN = 3       # minimum movies for a mood tag to appear in the facet
+STYLE_MIN = 3      # minimum movies for a style tag to appear in the facet
 ENTITY_CAP = 60    # cap each entity list; UI searches for the long tail
 
 
@@ -302,6 +305,9 @@ def library_facets(min_items: int = 5):
     studio_counts: dict[str, int] = {}
     director_counts: dict[str, int] = {}
     actor_counts: dict[str, int] = {}
+    country_counts: dict[str, int] = {}
+    mood_counts: dict[str, int] = {}
+    style_counts: dict[str, int] = {}
     tv_genre_counts: dict[str, int] = {}
     movie_recs: list[tuple[list[str], int | None]] = []  # (genres, decade_start) for matrix/blends
     show_recs: list[dict] = []  # per-show marathon candidates
@@ -325,6 +331,12 @@ def library_facets(min_items: int = 5):
                     director_counts[d] = director_counts.get(d, 0) + 1
                 for a in _multi(row.get("Actors")):
                     actor_counts[a] = actor_counts.get(a, 0) + 1
+                for c in _multi(row.get("Country")):
+                    country_counts[c] = country_counts.get(c, 0) + 1
+                for m in _multi(row.get("Mood")):
+                    mood_counts[m] = mood_counts.get(m, 0) + 1
+                for st in _multi(row.get("Style")):
+                    style_counts[st] = style_counts.get(st, 0) + 1
                 movie_recs.append((genres, ds))
             elif t == "TV":
                 tv += 1
@@ -445,6 +457,9 @@ def library_facets(min_items: int = 5):
         "tv_movie_genres": tv_movie_genres,
         "networks": entity_list(network_counts, NETWORK_MIN),
         "themes": themes_facet,
+        "countries": entity_list(country_counts, COUNTRY_MIN),
+        "moods": entity_list(mood_counts, MOOD_MIN),
+        "styles": entity_list(style_counts, STYLE_MIN),
     }
 
 
@@ -1316,7 +1331,7 @@ def discover_prompt(opts: DiscoverOptions = DiscoverOptions()):
 # ── Planner v2: deterministic candidate composition ──────────────────────────────
 
 class CandidateSpec(BaseModel):
-    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon | network | programming_block | theme
+    kind: str  # genre | genre_decade | blend | studio | director | actor | tv_genre | marathon | network | programming_block | theme | country | mood | style
     name: Optional[str] = None
     genre: Optional[str] = None
     genres: Optional[list[str]] = None
@@ -1350,6 +1365,9 @@ _CATEGORY = {
     "programming_block": ("programming_block", "ordered"),
     "franchise":         ("franchise",         "ordered"),
     "theme":             ("specialty",         "shuffle"),
+    "country":           ("movie",             "shuffle"),
+    "mood":              ("movie",             "shuffle"),
+    "style":             ("movie",             "shuffle"),
 }
 # Compose categories in the order they appear in CANONICAL_ORDER (subset).
 _CATEGORY_ORDER = ["marathon", "tv_block", "network", "programming_block", "tv_movie_mix", "movie", "entity", "franchise", "specialty"]
@@ -1425,6 +1443,15 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         # library (in case the library was re-exported since the facet was computed).
         movie_title_set = {m["Title"].lower(): m["Title"] for m in movies}
         titles = [movie_title_set[t.lower()] for t in spec.titles if t.lower() in movie_title_set]
+    elif spec.kind == "country" and spec.value:
+        v = spec.value.lower()
+        titles = [m["Title"] for m in movies if any(c.lower() == v for c in _multi(m.get("Country")))]
+    elif spec.kind == "mood" and spec.value:
+        v = spec.value.lower()
+        titles = [m["Title"] for m in movies if any(mo.lower() == v for mo in _multi(m.get("Mood")))]
+    elif spec.kind == "style" and spec.value:
+        v = spec.value.lower()
+        titles = [m["Title"] for m in movies if any(s.lower() == v for s in _multi(m.get("Style")))]
     elif spec.kind == "franchise" and spec.titles:
         # Franchise: intersect the checked member titles against both movies AND TV shows,
         # then sort by year ascending (so content plays in release order).
@@ -1468,6 +1495,12 @@ def _auto_name(spec: CandidateSpec) -> str:
         return spec.name or "Franchise"
     if spec.kind == "theme":
         return spec.name or "Themed Channel"
+    if spec.kind == "country":
+        return f"{spec.value} Cinema" if spec.value else "World Cinema"
+    if spec.kind == "mood":
+        return spec.value or "Mood Channel"
+    if spec.kind == "style":
+        return spec.value or "Style Channel"
     return spec.name or "Channel"
 
 

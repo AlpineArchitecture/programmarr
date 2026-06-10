@@ -495,3 +495,140 @@ def test_franchise_no_titles_skipped(pr, seed):
     out = _compose(pr, [{"kind": "franchise", "name": "Empty", "titles": []}])
     assert out["count"] == 0
     assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+# ── F12: country / mood / style compose kinds ──────────────────────────────────
+
+def test_country_spec_resolves_titles(pr, seed):
+    """kind=country resolves movies whose Country column contains the value (case-insensitive)."""
+    seed([
+        movie("French Film A", country="France"),
+        movie("French Film B", country="france"),   # case-insensitive
+        movie("German Film", country="Germany"),
+    ])
+    out = _compose(pr, [{"kind": "country", "value": "France"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 2
+
+
+def test_country_multi_value_row(pr, seed):
+    """A co-production row with two country values is matched by either country."""
+    seed([
+        movie("Co-prod 1", country="France|Italy"),
+        movie("Co-prod 2", country="France|Italy"),
+        movie("Co-prod 3", country="France|Italy"),
+    ])
+    out = _compose(pr, [{"kind": "country", "value": "Italy"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 3
+
+
+def test_country_auto_name(pr, seed):
+    """_auto_name for country returns '<value> Cinema'."""
+    seed([movie(f"F{i}", country="Japan") for i in range(3)])
+    out = _compose(pr, [{"kind": "country", "value": "Japan"}])
+    assert out["channels"][0]["name"] == "Japan Cinema"
+
+
+def test_country_custom_name_overrides(pr, seed):
+    """Providing a name in the spec overrides the auto-name."""
+    seed([movie(f"F{i}", country="Japan") for i in range(3)])
+    out = _compose(pr, [{"kind": "country", "value": "Japan", "name": "J-Cinema"}])
+    assert out["channels"][0]["name"] == "J-Cinema"
+
+
+def test_country_no_match_skipped(pr, seed):
+    """A country spec with no matching movies is skipped."""
+    seed([movie("Film", country="France")])
+    out = _compose(pr, [{"kind": "country", "value": "Spain"}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+def test_mood_spec_resolves_titles(pr, seed):
+    """kind=mood resolves movies whose Mood column contains the value (case-insensitive)."""
+    seed([
+        movie("Upbeat 1", mood="Feel-Good"),
+        movie("Upbeat 2", mood="feel-good"),   # case-insensitive
+        movie("Dark 1", mood="Dark"),
+    ])
+    out = _compose(pr, [{"kind": "mood", "value": "Feel-Good"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 2
+
+
+def test_mood_auto_name(pr, seed):
+    """_auto_name for mood returns the value directly."""
+    seed([movie(f"F{i}", mood="Suspenseful") for i in range(3)])
+    out = _compose(pr, [{"kind": "mood", "value": "Suspenseful"}])
+    assert out["channels"][0]["name"] == "Suspenseful"
+
+
+def test_mood_no_match_skipped(pr, seed):
+    """A mood spec with no matching movies is skipped."""
+    seed([movie("Film", mood="Feel-Good")])
+    out = _compose(pr, [{"kind": "mood", "value": "Spooky"}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+def test_style_spec_resolves_titles(pr, seed):
+    """kind=style resolves movies whose Style column contains the value (case-insensitive)."""
+    seed([
+        movie("Noir 1", style="Film Noir"),
+        movie("Noir 2", style="film noir"),   # case-insensitive
+        movie("Screwball", style="Screwball Comedy"),
+    ])
+    out = _compose(pr, [{"kind": "style", "value": "Film Noir"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 2
+
+
+def test_style_auto_name(pr, seed):
+    """_auto_name for style returns the value directly."""
+    seed([movie(f"F{i}", style="Spaghetti Western") for i in range(3)])
+    out = _compose(pr, [{"kind": "style", "value": "Spaghetti Western"}])
+    assert out["channels"][0]["name"] == "Spaghetti Western"
+
+
+def test_style_no_match_skipped(pr, seed):
+    """A style spec with no matching movies is skipped."""
+    seed([movie("Film", style="Film Noir")])
+    out = _compose(pr, [{"kind": "style", "value": "Mockumentary"}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"
+
+
+def test_country_mood_style_map_to_movie_category(pr, seed):
+    """country/mood/style kinds all land in the movie category (tight-packed with genre channels)."""
+    seed([
+        movie("French 1", country="France"),
+        movie("French 2", country="France"),
+        movie("French 3", country="France"),
+        movie("Funny", genres="Comedy"),
+    ])
+    out = _compose(pr, [
+        {"kind": "genre", "genre": "Comedy"},
+        {"kind": "country", "value": "France"},
+    ])
+    assert out["count"] == 2
+    numbers = sorted(c["number"] for c in out["channels"])
+    # Both in movie category → consecutive numbers starting at 1.
+    assert numbers == [1, 2]
+
+
+def test_country_missing_column_returns_empty(pr, seed):
+    """When the CSV has no Country column (old export), country spec finds nothing and is skipped."""
+    import csv as _csv
+    from conftest import CSV_FIELDS
+    path = pr._test_data_dir / "plex_library.csv"
+    old_fields = [f for f in CSV_FIELDS if f not in ("Country", "Mood", "Style")]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(fh, fieldnames=old_fields)
+        w.writeheader()
+        w.writerow({"Title": "Old Film", "Year": "2000", "Type": "Movie", "Rating": "PG",
+                    "Genres": "Drama", "Director": "", "Studio": "", "Actors": "",
+                    "Seasons": "", "Episodes": ""})
+    out = _compose(pr, [{"kind": "country", "value": "France"}])
+    assert out["count"] == 0
+    assert out["skipped"][0]["reason"] == "no matching titles"

@@ -243,12 +243,19 @@ export interface LibraryFacets {
   networks?: EntityFacet[];
   /** TMDB-keyword themed channel candidates. Empty until the TMDB enrichment scan completes. */
   themes?: ThemeFacet[];
+  /** Movie counts by Plex Country tag, above COUNTRY_MIN floor. Empty when column absent from CSV (old export). */
+  countries?: EntityFacet[];
+  /** Movie counts by Plex Mood tag, above MOOD_MIN floor. Empty when column absent. */
+  moods?: EntityFacet[];
+  /** Movie counts by Plex Style tag, above STYLE_MIN floor. Empty when column absent. */
+  styles?: EntityFacet[];
 }
 
 // ── Planner v2 candidate composition ──
 export type CandidateKind =
   | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon'
-  | 'tv_movie_mix' | 'network' | 'programming_block' | 'franchise' | 'theme';
+  | 'tv_movie_mix' | 'network' | 'programming_block' | 'franchise' | 'theme'
+  | 'country' | 'mood' | 'style';
 export interface CandidateSpec {
   kind: CandidateKind;
   name?: string;

@@ -2,6 +2,8 @@
 
 from conftest import movie, show
 
+# ── F12: countries / moods / styles ────────────────────────────────────────────
+
 
 def test_canonical_genres_always_present_even_at_zero(pr, seed):
     seed([movie("Solo", genres="Comedy")])
@@ -323,3 +325,74 @@ def test_programming_blocks_no_csv_returns_empty(pr, tmp_path, monkeypatch):
     # No seed call — no CSV exists.
     result = pr.get_programming_blocks()
     assert result == []
+
+
+# ── F12: countries / moods / styles facets ─────────────────────────────────────
+
+def test_countries_facet_above_floor(pr, seed):
+    """countries facet returns countries with >= COUNTRY_MIN (3) movies."""
+    seed([movie(f"Fr{i}", country="France") for i in range(3)]
+         + [movie(f"Jp{i}", country="Japan") for i in range(2)]   # below floor
+         + [movie(f"De{i}", country="Germany") for i in range(4)])
+    f = pr.library_facets()
+    by_value = {c["value"]: c["count"] for c in f["countries"]}
+    assert by_value.get("France") == 3
+    assert by_value.get("Germany") == 4
+    assert "Japan" not in by_value
+
+
+def test_countries_facet_empty_when_column_absent(pr, seed):
+    """countries facet returns [] when the CSV has no Country column (old export)."""
+    # seed() writes all CSV_FIELDS, but rows built with movie() default country=""
+    # — so the column exists but is empty.  Simulate old CSV by omitting the column.
+    import csv
+    from conftest import CSV_FIELDS
+    path = pr._test_data_dir / "plex_library.csv"
+    old_fields = [f for f in CSV_FIELDS if f not in ("Country", "Mood", "Style")]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=old_fields)
+        w.writeheader()
+        w.writerow({"Title": "Film", "Year": "2000", "Type": "Movie", "Rating": "PG",
+                    "Genres": "Drama", "Director": "", "Studio": "", "Actors": "",
+                    "Seasons": "", "Episodes": ""})
+    f = pr.library_facets()
+    # No Country column → _multi(row.get("Country")) == [] → no counts → empty list.
+    assert f["countries"] == []
+
+
+def test_moods_facet_above_floor(pr, seed):
+    """moods facet returns moods with >= MOOD_MIN (3) movies."""
+    seed([movie(f"F{i}", mood="Feel-Good") for i in range(3)]
+         + [movie(f"D{i}", mood="Dark") for i in range(2)])  # below floor
+    f = pr.library_facets()
+    by_value = {m["value"]: m["count"] for m in f["moods"]}
+    assert by_value.get("Feel-Good") == 3
+    assert "Dark" not in by_value
+
+
+def test_styles_facet_above_floor(pr, seed):
+    """styles facet returns styles with >= STYLE_MIN (3) movies."""
+    seed([movie(f"N{i}", style="Film Noir") for i in range(3)]
+         + [movie(f"S{i}", style="Screwball Comedy") for i in range(5)])
+    f = pr.library_facets()
+    by_value = {s["value"]: s["count"] for s in f["styles"]}
+    assert by_value.get("Film Noir") == 3
+    assert by_value.get("Screwball Comedy") == 5
+
+
+def test_country_multi_value(pr, seed):
+    """A movie with multiple Country tags is counted for each country."""
+    seed([movie(f"Co-prod{i}", country="France|Germany") for i in range(3)])
+    f = pr.library_facets()
+    by_value = {c["value"]: c["count"] for c in f["countries"]}
+    assert by_value.get("France") == 3
+    assert by_value.get("Germany") == 3
+
+
+def test_countries_moods_styles_empty_by_default(pr, seed):
+    """When no Country/Mood/Style data is present, all three facets return []."""
+    seed([movie(f"M{i}", genres="Drama") for i in range(5)])
+    f = pr.library_facets()
+    assert f["countries"] == []
+    assert f["moods"] == []
+    assert f["styles"] == []

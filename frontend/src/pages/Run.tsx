@@ -73,6 +73,9 @@ const cid = {
   progblock: (n: string) => `pb:${n}`,
   franchise: (n: string) => `fr:${n}`,
   theme: (n: string) => `theme:${n}`,
+  country: (v: string) => `country:${v}`,
+  mood: (v: string) => `mood:${v}`,
+  style: (v: string) => `style:${v}`,
 };
 
 interface PlannerState {
@@ -1335,9 +1338,13 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
           ...(f.directors ?? []).map(d => cid.director(d.value)),
           ...(f.actors ?? []).map(a => cid.actor(a.value)),
           ...(f.themes ?? []).map(t => cid.theme(t.name)),
+          ...(f.countries ?? []).map(c => cid.country(c.value)),
+          ...(f.moods ?? []).map(m => cid.mood(m.value)),
+          ...(f.styles ?? []).map(s => cid.style(s.value)),
         ])}
       >
-        {activeGenreTags.size === 0 && (f.themes?.length ?? 0) === 0 && !tmdbScanRunning ? (
+        {activeGenreTags.size === 0 && (f.themes?.length ?? 0) === 0 && !tmdbScanRunning
+          && (f.countries?.length ?? 0) === 0 && (f.moods?.length ?? 0) === 0 && (f.styles?.length ?? 0) === 0 ? (
           <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
         ) : (
           <Stack gap="sm">
@@ -1425,6 +1432,49 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                     </CollapsibleSection>
                   );
                 })()}
+              </>
+            )}
+
+            {/* ── Countries / Moods / Vibes — from Plex tag columns (F12) ── */}
+            {((f.countries?.length ?? 0) > 0 || (f.moods?.length ?? 0) > 0 || (f.styles?.length ?? 0) > 0) && (
+              <>
+                <Divider label="Countries &amp; Vibes" labelPosition="left" />
+                {(f.countries?.length ?? 0) > 0 && (
+                  <EntitySection
+                    title="Countries"
+                    kind="country"
+                    items={f.countries!}
+                    makeId={cid.country}
+                    makeName={(v) => `${v} Cinema`}
+                    isSel={isSel}
+                    onToggle={toggleSel}
+                    onAddMany={addMany}
+                  />
+                )}
+                {(f.moods?.length ?? 0) > 0 && (
+                  <EntitySection
+                    title="Moods / Vibes"
+                    kind="mood"
+                    items={f.moods!}
+                    makeId={cid.mood}
+                    makeName={(v) => v}
+                    isSel={isSel}
+                    onToggle={toggleSel}
+                    onAddMany={addMany}
+                  />
+                )}
+                {(f.styles?.length ?? 0) > 0 && (
+                  <EntitySection
+                    title="Styles"
+                    kind="style"
+                    items={f.styles!}
+                    makeId={cid.style}
+                    makeName={(v) => v}
+                    isSel={isSel}
+                    onToggle={toggleSel}
+                    onAddMany={addMany}
+                  />
+                )}
               </>
             )}
           </Stack>
