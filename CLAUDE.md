@@ -95,8 +95,8 @@ Each test seeds a temp `DATA_DIR` with a synthetic `plex_library.csv` (the `seed
 `validate(append=True)`, `discover_prompt`, and `generate_no_ai`.
 
 **Environments:** **localhost:7979** = local Docker before pushing. **TrueNAS** = production,
-runs `ghcr.io/alpinearchitecture/programmarr:latest` with Watchtower (new image on GHCR ~1 min
-after a master push; Watchtower picks it up within ~5 min).
+runs `ghcr.io/alpinearchitecture/programmarr:latest` with Watchtower (`:latest` moves only when
+a GitHub Release is cut — not on a master push; Watchtower picks it up shortly after).
 
 **Demo dataset:** `python scripts/make_demo_data.py` (re)generates the committed `demo/` dir
 (synthetic `plex_library.csv` + `channels.json` + safe `config.json`) used for deterministic doc
@@ -340,29 +340,37 @@ for them. Refreshing/restarting Plex does not change this.
 
 ## Git Workflow
 
-`master` is **production**: every push triggers CI → GHCR → Watchtower → live redeploy within
-~5 min. So master is **release-gated** — it receives only tagged, versioned releases, never raw
-dev work. Two tracks keep that true:
+**`master` is the development trunk.** Pushing to it ships **nothing** — a master push runs
+a CI **build-check only** (`docker build` with `push: false`). The public `:latest` image —
+which end users run via the `docker compose` in the README — publishes **only when a GitHub
+Release is cut**. So users receive a new image exactly once per version, never on day-to-day
+commits. This is the whole point: accumulate many changes on trunk, release them as one version.
 
-1. **Branch track — daily work (`/ship`).** All image-affecting work (anything baked into the
-   image: `backend/`, `frontend/`, root `*.py`, `Dockerfile`, `docker-compose.yml`,
-   `requirements*.txt`) happens on a short-lived `feature/…`/`fix/…`/`chore/…` branch. `/ship`
-   commits and pushes to that branch — **never master**. Branches don't deploy.
-2. **Release track — going live (`/release`).** The single gate to master: Docker-verifies, asks
-   for the new semantic version, bumps `frontend/package.json` + `CHANGELOG.md`, merges the
-   branch, tags `vX.Y.Z`, and cuts the GitHub Release (firing the versioned GHCR build).
+**Two operations:**
+
+1. **`/ship` — daily work.** Commit + push to the current branch. Small/low-risk work can go
+   straight to master; use a short-lived `feature/…`/`fix/…`/`chore/…` branch for big or
+   abandon-able changes, then merge to master when done. Nothing here deploys.
+
+2. **`/release` — going live.** The single gate that publishes an image. Docker-verifies the
+   current trunk, asks for the new semantic version, bumps `frontend/package.json` +
+   `CHANGELOG.md`, tags `vX.Y.Z`, and cuts the GitHub Release — which fires the versioned GHCR
+   build (`:latest`, `X.Y.Z`, `vX.Y`, `sha-…`). End users then see an in-app **update banner**
+   (via `GET /api/update-check`) and pull on their own schedule.
+
+**The release-readiness gate lives at TAG time, not commit time.** Don't cut a release while
+trunk has half-finished work — but committing in-progress work to trunk is fine and expected.
 
 **SemVer:** patch = fixes/tweaks; minor = new features/UI/flags/endpoints; major = breaking
-pipeline/schema/API changes. `/release` suggests the bump and always asks you to confirm.
+pipeline/schema/API changes. `/release` suggests the bump and always confirms.
 
-**The one carve-out — docs straight to master.** Doc-/comment-/repo-meta-only changes (`*.md`,
-`docs/`, `.gitignore`, `README`) build an identical image (Watchtower never redeploys them), so
-they may go straight to master with no branch and no version bump.
+**Updates are opt-in for users.** The app polls GitHub for newer releases (toggle in Settings,
+default on) and shows a banner. Watchtower is documented as an *optional* auto-pull; because
+images publish only on releases, even Watchtower users only ever get released versions.
 
-**Always:** commit in small focused chunks with verbose *what + why* messages; **never commit
-secrets or personal data** (keys, passwords, IPs, the user's library — kept gitignored:
-`config*.json`, `channels*.json`, `*.csv`, `PROMPT.personal.md`); and **keep this file in sync in
-the same commit** as any behavior change.
+**Always:** commit in small focused chunks with verbose what+why messages; **never commit
+secrets or personal data** (`config*.json`, `channels*.json`, `*.csv`, `PROMPT.personal.md`
+stay gitignored); **keep this file in sync in the same commit** as any behavior change.
 
 ## Live Channels (Auto-Updating Channels)
 
