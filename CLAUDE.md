@@ -282,14 +282,20 @@ AI" toggle is on; Collections only if opted in.
 
 **Durable rules (these outlive any refactor of the step components):**
 - **Deploy mode is a binary chosen on the Setup screen:**
-  - **🧨 Nuke** — wipe all managed channels, planner starts blank, numbers from 1. Uses the
-    existing `deploy-selective` path (create.py wipe+rebuild). Clears `planner_state.json`.
-  - **✏️ Add/Edit** — keep existing channels, restore prior Planner selections from
-    `planner_state.json`, numbers continue above the highest existing managed channel + 1
-    (no rounding). Uses the surgical diff deploy path. Defaults to Edit when channels exist.
+  - **🧨 Nuke** — wipe all managed channels, numbers from 1. Uses the `deploy-selective` path
+    (create.py wipe+rebuild). **Nuke only affects deploy behavior — it does NOT reset Planner picks.**
+  - **✏️ Add/Edit** — keep existing channels, numbers continue above the highest existing managed
+    channel + 1 (no rounding). Uses the surgical diff deploy path. Defaults to Edit when channels
+    exist.
   - An **Advanced** disclosure under Edit mode lets a power user force-wipe specific channels.
-- **Planner state persists** to `data/planner_state.json`. Saved after every successful Build
-  (compose). Loaded when the Planner mounts in Add/Edit mode. Cleared on Nuke.
+- **Planner picks are always sticky** (`data/planner_state.json`):
+  - **Saved on every change** via a debounced (~500ms) PUT in `PlannerStep` (guarded by
+    `restoredRef` so the first-mount restore never overwrites the file).
+  - **Restored on every Planner mount** (both Nuke and Edit modes) — `isEdit` gate removed.
+  - **Nuke does NOT clear picks** — `handleNuke` is intentionally a no-op for state.
+  - **"Clear all"** in the Planner build bar is the only thing that resets picks: clears
+    `selected`, `curate`, active genre/decade toggles and all batch toggles to defaults, then
+    calls `DELETE /pipeline/planner-state`.
   Contains: `activeGenres, activeDecades, selected, curate, aiExtras, commEnabled, commListId,
   commPad, autoUpdate`. API: `GET/PUT/DELETE /api/pipeline/planner-state`.
 - **The Planner is deterministic:** selected candidates post as `CandidateSpec[]` to

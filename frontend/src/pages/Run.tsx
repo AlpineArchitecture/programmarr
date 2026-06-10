@@ -10,7 +10,7 @@ import {
   IconDownload, IconExternalLink, IconPlayerPlay, IconRefresh, IconRobot, IconSearch, IconSparkles,
   IconStack2, IconUpload, IconWand, IconX,
 } from '@tabler/icons-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
@@ -242,7 +242,7 @@ function SetupStep({ setup, onChange, onDone, onNuke }: {
             <ModeCard
               icon={<IconX size={22} />}
               title="🧨 Nuke and start over"
-              desc="Wipe all managed channels and build fresh. Planner starts blank, channels numbered from 1."
+              desc="Wipe all managed channels and build fresh from 1. Your Planner picks are kept."
               active={setup.mode === 'nuke'}
               onClick={() => setMode('nuke')}
             />
@@ -791,14 +791,17 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSection]);
 
-  useEffect(() => {
-    if (planner.loaded) { setLoading(false); return; }
+  // Guard: debounced save must not fire before the initial restore completes.
+  const restoredRef = useRef(false);
 
-    const isEdit = setup.mode === 'edit';
+  useEffect(() => {
+    // Already loaded (e.g. returning to the Planner step within a session): the picks
+    // are in parent state — just mark restore complete so the debounced save can run.
+    if (planner.loaded) { setLoading(false); restoredRef.current = true; return; }
 
     Promise.all([
       api.getFacets(),
-      isEdit ? api.getPlannerState().catch(() => null) : Promise.resolve(null),
+      api.getPlannerState().catch(() => null),
       api.getProgrammingBlocks().catch(() => [] as ProgrammingBlock[]),
     ])
       .then(([f, savedState, blocks]) => {
@@ -811,8 +814,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         let selected: Record<string, CandidateSpec> = {};
         let curate: Record<string, boolean> = {};
 
-        if (isEdit && savedState && (savedState as PlannerStateFile).activeGenres) {
-          // Restore prior planner intent in Add/Edit mode.
+        if (savedState && (savedState as PlannerStateFile).activeGenres) {
+          // Restore prior planner intent (any mode — picks are always sticky).
           const s = savedState as PlannerStateFile;
           activeGenres = s.activeGenres;
           activeDecades = s.activeDecades;
@@ -824,12 +827,13 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
           setCommPad(s.commPad || '5');
           setAutoUpdate(s.autoUpdate);
         } else {
-          // Fresh state: default genres/decades from facets.
+          // No saved state: default genres/decades from facets.
           (f.genres?.canonical ?? []).forEach(g => { activeGenres[g.tag] = g.count >= minItems; });
           (f.decades ?? []).forEach(d => { activeDecades[d.label] = true; });
         }
 
         setPlanner({ ...planner, facets: f, activeGenres, activeDecades, selected, curate, loaded: true });
+        restoredRef.current = true;
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -855,6 +859,30 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     items.forEach(({ id, spec }) => { next[id] = spec; });
     patch({ selected: next });
   }
+
+  // Debounced save: persist the full planner intent 500ms after any change.
+  // Guard: skip until the initial restore has completed so we don't clobber the saved file
+  // with an empty state on first mount.
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    const stateToSave: PlannerStateFile = {
+      activeGenres: planner.activeGenres,
+      activeDecades: planner.activeDecades,
+      selected: planner.selected,
+      curate: planner.curate,
+      aiExtras,
+      commEnabled,
+      commListId,
+      commPad,
+      autoUpdate,
+    };
+    const timer = setTimeout(() => {
+      api.savePlannerState(stateToSave).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planner.activeGenres, planner.activeDecades, planner.selected, planner.curate,
+      aiExtras, commEnabled, commListId, commPad, autoUpdate]);
 
   /** Get the currently-checked member titles for a franchise (defaults to all). */
   function franchiseCheckedTitles(fr: FranchiseCandidate): string[] {
@@ -1302,7 +1330,25 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             {curateCount > 0 && <Text size="xs" c="grape.4">+ {curateCount} pool{curateCount !== 1 ? 's' : ''} for AI to split by tone</Text>}
           </Box>
           <Group gap="xs">
-            {selectedCount > 0 && <Button variant="subtle" size="xs" color="gray" onClick={() => patch({ selected: {}, curate: {} })}>Clear</Button>}
+            <Button variant="subtle" size="xs" color="gray" onClick={() => {
+              // Reset all picks and toggles to defaults, then wipe the saved state file.
+              const minItems = f?.min_items ?? 5;
+              const defaultGenres: Record<string, boolean> = {};
+              const defaultDecades: Record<string, boolean> = {};
+              (f?.genres?.canonical ?? []).forEach(g => { defaultGenres[g.tag] = g.count >= minItems; });
+              (f?.decades ?? []).forEach(d => { defaultDecades[d.label] = true; });
+              patch({ selected: {}, curate: {}, activeGenres: defaultGenres, activeDecades: defaultDecades });
+              setAiExtras(false);
+              setCommEnabled(false);
+              setCommListId(null);
+              setCommPad('5');
+              setAutoUpdate(false);
+              api.deletePlannerState().catch(() => {});
+              // Suppress the save that would fire for this clear-all render, then re-enable
+              // so subsequent picks are saved normally.
+              restoredRef.current = false;
+              setTimeout(() => { restoredRef.current = true; }, 0);
+            }}>Clear all</Button>
             <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0 && !aiExtras} loading={building} onClick={build}>
               {exactSpecs.length === 0 ? 'Continue to AI' : `Build ${exactSpecs.length} Channel${exactSpecs.length !== 1 ? 's' : ''}`}
             </Button>
@@ -1878,10 +1924,10 @@ export default function Run() {
 
   const { method, includeCollections } = setup;
 
-  // Called when the user clicks Nuke: clear planner_state.json and reset planner.
+  // Called when the user clicks Nuke: only affects DEPLOY behavior (wipe Tunarr + number from 1).
+  // Picks are sticky — Nuke does NOT reset or delete planner_state.json.
   function handleNuke() {
-    api.deletePlannerState().catch(() => {});
-    setPlanner(blankPlanner);
+    // intentionally empty: picks are preserved; deploy behavior is governed by setup.mode
   }
 
   // Pools the user flagged for AI tonal-splitting (✨ on a broad/decade pick).
