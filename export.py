@@ -146,36 +146,50 @@ def _lead_actors(item):
     return "|".join(r["tag"] for r in item.get("Role", [])[:LEAD_CAST] if r.get("tag"))
 
 
+def _join_tags(item, tag_name):
+    """Return a pipe-joined string of tag values for a given tag array key.
+
+    Plex returns tag arrays as lists of dicts with a "tag" key, e.g.:
+        [{"tag": "France"}, {"tag": "Japan"}]
+    Returns an empty string when the key is absent or the list is empty.
+    Works for Genre, Country, Mood, Style, and any other tag array.
+    """
+    return "|".join(t["tag"] for t in item.get(tag_name, []) if t.get("tag"))
+
+
 def movie_to_row(item):
-    genres = "|".join(g["tag"] for g in item.get("Genre", []))
-    directors = "|".join(d["tag"] for d in item.get("Director", []))
     return {
         "Title": item.get("title", ""),
         "Year": item.get("year", ""),
         "Type": "Movie",
         "Rating": item.get("contentRating", ""),
-        "Genres": genres,
-        "Director": directors,
+        "Genres": _join_tags(item, "Genre"),
+        "Director": _join_tags(item, "Director"),
         "Studio": item.get("studio", ""),
         "Actors": _lead_actors(item),
         "Seasons": "",
         "Episodes": "",
+        "Country": _join_tags(item, "Country"),
+        "Mood": _join_tags(item, "Mood"),
+        "Style": _join_tags(item, "Style"),
     }
 
 
 def show_to_row(item):
-    genres = "|".join(g["tag"] for g in item.get("Genre", []))
     return {
         "Title": item.get("title", ""),
         "Year": item.get("year", ""),
         "Type": "TV",
         "Rating": item.get("contentRating", ""),
-        "Genres": genres,
+        "Genres": _join_tags(item, "Genre"),
         "Director": "",
         "Studio": item.get("studio", ""),
         "Actors": _lead_actors(item),
         "Seasons": item.get("childCount", ""),
         "Episodes": item.get("leafCount", ""),
+        "Country": _join_tags(item, "Country"),
+        "Mood": _join_tags(item, "Mood"),
+        "Style": _join_tags(item, "Style"),
     }
 
 
@@ -274,7 +288,8 @@ def main():
         rows.append(show_to_row(item))
 
     # ── Write CSV ──────────────────────────────────────────────────────────────
-    fieldnames = ["Title", "Year", "Type", "Rating", "Genres", "Director", "Studio", "Actors", "Seasons", "Episodes"]
+    fieldnames = ["Title", "Year", "Type", "Rating", "Genres", "Director", "Studio", "Actors", "Seasons", "Episodes",
+                  "Country", "Mood", "Style"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

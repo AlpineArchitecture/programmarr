@@ -17,7 +17,10 @@ be marked **live** to auto-update as the library grows.
 
 The web app's channel-creation experience is a single **Planner** (`Run.tsx`): pick
 genres/decades "in play," then check exact curated candidates — per-show marathons,
-genre×decade cuts, named sub-genres, and studio/director/actor channels — built
+genre×decade cuts, named sub-genres, studio/director/actor channels, **TV network channels**
+(from the `Studio` CSV column for TV rows), **classic programming blocks** (matched from
+`programming_blocks.json`), and **franchise channels** (detected from TMDB
+`belongs_to_collection` + Wikidata series/franchise membership, on-demand + cached, with per-member checkboxes) — built
 deterministically via `/pipeline/compose`. An optional "✨ Bring in AI" layer adds
 *discovery* (themed channels filters miss) and *tonal curation* (split a broad pool by
 vibe), merged on top.
@@ -127,10 +130,10 @@ See `config.json.example` for the full shape. Keys:
 - `recipes_enabled` (bool, default `false`), `recipe_interval_hours` (number, default `12`) — live-channel scheduler (see Live Channels).
 - `tunarr_channel_group` (string, optional) — Tunarr `groupTitle` for all created channels (default `"tunarr"`).
 - `tunarr_stream_mode` (string, optional) — Tunarr `streamMode`, lowercase enum: `hls`|`hls_slower`|`mpegts`|`hls_direct`|`hls_direct_v2` (default `"hls"`). Applied by `create.py` at channel creation; **not** exposed in the UI.
-- `channel_blocks` (object, optional) — per-category block sizes, e.g. `{"marathon":10,"tv_block":10,"movie":20,"franchise":20,"specialty":10}`. How many channel numbers each category reserves; omit for defaults. **Editable in Settings.** See Channel Numbering Scheme.
+- `channel_order` (array, optional) — ordered list of category keys controlling channel numbering, e.g. `["marathon","tv_block","movie","franchise","specialty"]`. Omit for the canonical default order. **Editable in Settings → Channel Numbering.** See Channel Numbering Scheme. (Old `channel_blocks` size key is silently ignored.)
 
 > `config_router.save_config` **merge-writes** `config.json`, so editing these (or the `recipes_*`) keys
-> by hand survives a Settings save — the UI form only overwrites the keys it manages. (`channel_blocks`
+> by hand survives a Settings save — the UI form only overwrites the keys it manages. (`channel_order`
 > is preserved on an empty save, never wiped — see `save_config`.)
 
 ## Architecture
@@ -139,9 +142,9 @@ Each script's role and the gotcha worth knowing. Flags and exact behavior live i
 and the code — don't restate them here.
 
 - **`programmarr.py`** — CLI entry point. Flat menu (AI / No-AI / Collections / images / sync / quit). Walks first-run config setup, **always probes before deploying**, and pre-deploy asks whether to wipe-and-rebuild or preserve channels below a number (so manual/lower channels and their custom images survive). Accepts JSONL or bare-array LLM output and normalizes to the internal `{"channels":[...]}` dict.
-- **`export.py`** — pulls full metadata from the Plex API. Includes **studio** + top-3 billed **actors** (both in the default `/all` response) which power the Planner's entity channels. Auto-detects all movie+TV sections (or scope with `--movie-sections`/`--tv-sections`); cross-references Tunarr to flag unsynced content. Output: `plex_library.csv` + `export_summary.json`.
-- **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/themed). Numbers each block from the shared `channel_blocks` layout (sizes come from config when invoked by the backend; `--block-sizes K=N,…` for standalone use); movie-block numbers are assigned sequentially so any toggle set avoids collisions. `--start N` sets the first block's number.
-- **`channel_blocks.py`** — shared, **pure, importable** channel-numbering layout (no `config.json`/argv). `resolve_layout(sizes, start)` accumulates per-category block sizes from a base so resizing a block shifts the rest. Single source of truth for compose, the LLM prompt, and `generate_no_ai`. **Must stay in the Dockerfile `COPY` line.**
+- **`export.py`** — pulls full metadata from the Plex API. Includes **studio** + top-3 billed **actors** plus **Country / Mood / Style** tags (all from the `/all` response, via `_join_tags`) which power the Planner's entity/country/mood/style channels. Auto-detects all movie+TV sections (or scope with `--movie-sections`/`--tv-sections`); cross-references Tunarr to flag unsynced content. Output: `plex_library.csv` + `export_summary.json`.
+- **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/specialty). Numbers channels sequentially using `channel_blocks.assign_numbers` + `channel_blocks.resolve_order`; `--order KEY,KEY,…` overrides category order; `--start N` sets the first number.
+- **`channel_blocks.py`** — shared, **pure, importable** channel-numbering logic (no `config.json`/argv). `assign_numbers(order, counts, start)` packs categories tight sequentially; `resolve_order(configured)` validates/fills the configured order against `CANONICAL_ORDER`. Single source of truth for compose, the LLM prompt, and `generate_no_ai`. **Must stay in the Dockerfile `COPY` line.**
 - **`generate_from_collections.py`** — one channel per Plex collection via `{"collection":"Name"}`. Manages the collection block (default ch 80+): keeps everything below `--base`, regenerates from `--base` up. Re-run any time Kometa changes collections.
 - **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**.
 - **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels.
@@ -150,28 +153,33 @@ and the code — don't restate them here.
 
 ## Channel Numbering Scheme
 
-Five ordered blocks, each reserving a configurable number of channel slots. Block starts are
-**derived by accumulating sizes from a base** (`channel_blocks.resolve_layout`), so enlarging
-one block shifts every later block down — there are no fixed absolute lanes. Default sizes
-(`10/10/20/20/10`) reproduce the historical layout when the base is 10:
+Channels are numbered **sequentially from 1, tight-packed in category order** — no fixed block
+sizes, no gaps. 15 marathons → channels 1–15; next category starts at 16. Empty categories
+consume no numbers. The only configurable knob is **the order of categories**, stored as
+`channel_order` (list of category keys) in `config.json`.
 
-| Block  | Default size | Default range (base 10) | Content |
-|--------|------|-------|---------|
-| TV Marathons | 10 | 10–19 | 24/7 single-show loops (50+ episodes) |
-| TV Blocks    | 10 | 20–29 | Themed multi-show rotations |
-| Movies       | 20 | 30–49 | Genre and decade channels |
-| Franchise    | 20 | 50–69 | Ordered series (MCU, Batman, etc.) |
-| Specialty    | 10 | 70–79 | Single-movie loops, holiday, niche |
+Canonical category order and labels are defined in `channel_blocks.py` (`CANONICAL_ORDER`,
+`BLOCK_LABELS`). The full set (in default order):
 
-**Sizes are configurable** per category via the `channel_blocks` config key (Settings →
-Channel Numbering) — scale a category up for a large library (e.g. 100 movie channels). The
-Planner's entity channels (studio/director/actor) share the **Franchise** block's start.
+| Category key | Label | Content |
+|---|---|---|
+| `marathon` | TV Marathons | 24/7 single-show loops (50+ episodes) |
+| `tv_block` | TV Blocks | Themed multi-show rotations |
+| `tv_movie_mix` | TV & Movie Mix | Mixed-genre channels spanning shows + films |
+| `movie` | Movie Channels | Genre and decade channels |
+| `entity` | Studios / Directors / Actors | Curated by creator or studio |
+| `network` | Networks | All shows from a single network |
+| `programming_block` | Classic TV Blocks | Historical lineups (TGIF, Must See TV…) |
+| `franchise` | Franchise & Series | Ordered collections (MCU, Star Wars, etc.) |
+| `specialty` | Specialty | Single-movie loops, holiday, niche themes |
 
-**The base is the start number, default 1.** A fresh deploy (nothing kept) numbers from channel
-**1**; keeping existing channels rounds the start up above the highest kept one. In the Planner
-the block starts are **soft hints**: `/pipeline/compose` assigns sequentially per category and
-**spills into the next gap on overflow** rather than colliding. All three generators (compose,
-the LLM prompt, `generate_no_ai`) read the same `channel_blocks` layout, so they stay in sync.
+**`channel_order` is configurable** via Settings → Channel Numbering (drag up/down) or directly
+in `config.json`. An absent or empty `channel_order` key falls back to the canonical order.
+Old configs with `channel_blocks` (sizes) are silently ignored — no crash.
+
+**Fresh deploys** start at channel 1; keeping existing channels rounds the start up above the
+highest kept one. All three generators (`/pipeline/compose`, the LLM prompt, `generate_no_ai`)
+call `channel_blocks.resolve_order` + `channel_blocks.assign_numbers` — single source of truth.
 
 ## channels.json Schema
 
@@ -205,12 +213,40 @@ and must stay in sync with Tunarr. Two rules:
 1. **Planner-flow builders** (`compose`, `validate`, `discover-prompt`, `apply_collections`)
    read/write **`channels.draft.json`** only — never the deployed record. Abandoning a creation
    can at worst leave a stale draft.
-2. **`channels.json` is written in exactly two ways:**
+2. **`channels.json` is written in exactly three ways:**
    - `deploy-selective` (`pipeline_router.py`: `_reconcile_channels_json`) — on a successful
-     `create.py` exit, writes the deployed set (wipe mode) or merges kept + deployed (keep mode),
-     then clears `channels.draft.json` and `deploy_temp.json`.
+     `create.py` exit (Nuke mode), writes the deployed set then clears `channels.draft.json`
+     and `deploy_temp.json`.
+   - `POST /api/pipeline/surgical-deploy` — Add/Edit mode: diffs draft vs deployed using
+     `channel_engine.classify_channels`, executes the minimum Tunarr ops (create/delete/
+     update-in-place/skip), then writes the merged managed set to `channels.json` and clears
+     the draft. The create step passes `--no-delete` to `create.py` so it never wipes existing
+     Tunarr channels — it only adds the new ones. Never touches orphan channels; never
+     delete-recreates live channels.
    - `POST /api/channels/{number}/apply` — saves one entry and immediately patches Tunarr in
      place; they are always written together.
+
+**Surgical deploy invariants (Add/Edit mode — never relax these):**
+- `classify_channels(desired, deployed, prior_managed)` in `channel_engine.py` is the pure,
+  testable diff function. Signature:
+  `(desired: list[dict], deployed: list[dict], prior_managed: set[str] | None) -> dict`
+  with keys `create | delete | update | unchanged | foreign`.
+- **Provenance (`prior_managed`):** only channels whose lowercased name appears in
+  `prior_managed` (the set of names the planner deployed last time, persisted in
+  `planner_state.json["managed_names"]`) are eligible for deletion. Channels NOT in
+  `prior_managed` (hand-authored on the Channels page, never built by the planner) go to
+  the `foreign` bucket and are **never auto-deleted, created, or updated** by a surgical
+  deploy. `channels.json` always includes foreign channels in its output.
+- `managed_names` is written into `planner_state.json` on every successful deploy — both the
+  surgical path and `_reconcile_channels_json` (the nuke/deploy-selective path). Bootstrapping:
+  if `managed_names` is absent, `prior_managed` is empty → nothing is deleted (safe default).
+- A changed **live** channel always lands in `update` (update-in-place) — its Tunarr id and
+  Plex DVR mapping are preserved. A planner-managed live channel the user **removes** from the
+  planner (name in `prior_managed`, absent from `desired`) IS deleted — intent wins. This is
+  distinct from delete-RECREATE (which is always forbidden for live channels).
+- **Orphan** channels (in Tunarr but absent from channels.json) are never passed into
+  `classify_channels` and therefore cannot appear in any bucket.
+- The route holds `scheduler.deploy_lock` for the full surgical operation.
 
 Channels in Tunarr without a `channels.json` entry are "orphans" — visible on the Channels
 page as read-only ("Not managed by Programmarr"). We deliberately do not reconstruct intent
@@ -245,18 +281,51 @@ are skipped for *Collections-only*; **AI Extras** appears only when the Planner'
 AI" toggle is on; Collections only if opted in.
 
 **Durable rules (these outlive any refactor of the step components):**
-- **Channel protection is decided once, on the Setup screen** (keep/wipe the existing Tunarr
-  lineup). Kept = protected; protected numbers pass to `create.py` via `--protect N1,N2,...`.
-  The start number auto-computes as the highest kept rounded up to the next 10. Deploy does
-  **not** re-ask protection — it only flags conflicts between kept numbers and deploy numbers.
+- **Deploy mode is a binary chosen on the Setup screen:**
+  - **🧨 Nuke** — wipe all managed channels, numbers from 1. Uses the `deploy-selective` path
+    (create.py wipe+rebuild). **Nuke only affects deploy behavior — it does NOT reset Planner picks.**
+  - **✏️ Add/Edit** — keep existing channels, numbers continue above the highest existing managed
+    channel + 1 (no rounding). Uses the surgical diff deploy path. Defaults to Edit when channels
+    exist.
+  - An **Advanced** disclosure under Edit mode lets a power user force-wipe specific channels.
+- **Planner picks are always sticky** (`data/planner_state.json`):
+  - **Saved on every change** via a debounced (~500ms) PUT in `PlannerStep` (guarded by
+    `restoredRef` so the first-mount restore never overwrites the file).
+  - **Restored on every Planner mount** (both Nuke and Edit modes) — `isEdit` gate removed.
+  - **Nuke does NOT clear picks** — `handleNuke` is intentionally a no-op for state.
+  - **"Clear all"** in the Planner build bar is the only thing that resets picks: clears
+    `selected`, `curate`, active genre/decade toggles and all batch toggles to defaults, then
+    calls `DELETE /pipeline/planner-state`.
+  Contains: `activeGenres, activeDecades, selected, curate, aiExtras, commEnabled, commListId,
+  commPad, autoUpdate`. API: `GET/PUT/DELETE /api/pipeline/planner-state`.
 - **The Planner is deterministic:** selected candidates post as `CandidateSpec[]` to
   `POST /pipeline/compose`, which writes `channels.draft.json` (the AI and collections steps
-  append to the same draft; the Deploy step's probe and `deploy-selective` both read it).
-  Candidates are unchecked by default.
+  append to the same draft; the Deploy step's probe and `deploy-selective`/surgical-deploy both
+  read it). Candidates are unchecked by default.
 - **The AI layer merges on top** via `POST /pipeline/validate` with `append=true` (collisions
   renumbered, name-duplicates skipped) — it never overwrites the deterministic lineup.
-- **Deploy runs a cascade that always completes:** `deploy-selective` → (if art opted in)
-  `images` → `sync`, each streamed inline, ending in a per-stage summary.
+- **Deploy runs a cascade that always completes:**
+  - Nuke: `deploy-selective` → (art) → `sync`.
+  - Edit: `surgical-deploy` → (art) → `sync`.
+  Both stream inline, ending in a per-stage summary. In Edit mode no probe is run — the
+  surgical deploy handles all diff logic.
+- **The Planner body is a three-section accordion** (`AccordionSection` component, single-open
+  at a time, `openSection` index state, Section 0 open initially):
+  - **Section 0 — TV:** Marathons + Genre-blocks + **Networks** (from TV `Studio` values above `NETWORK_MIN=3`, via `EntitySection`) + **Classic TV Blocks** (from `programming_blocks.json` matched against library, `BLOCK_MIN=3`; spec carries `titles` field with present shows).
+  - **Section 1 — Movies:** genre×decade, sub-genres, broad genres, Studios/Directors/Actors.
+  - **Section 2 — TV + Movies:** mixed-genre candidates from `tv_movie_genres` facet (genres
+    present in both libraries above `TV_MOVIE_MIX_MIN`) + **Franchises** (expandable cards with
+    per-member checkboxes; **detected from TMDB + Wikidata** (P179 "part of the series" / P8345
+    "media franchise", conservative label+year match, keyless-friendly) — Plex collections live
+    in the separate Collections feature, not here. `data/wikidata_cache.json` alongside the TMDB cache). A background TMDB enrichment scan (`POST /pipeline/tmdb-scan`,
+    `GET /pipeline/tmdb-scan/status`) runs each library movie through TMDB once with
+    `append_to_response=keywords` (bounded concurrency), caching `belongs_to_collection` **and**
+    `keywords` to `data/tmdb_enrichment.json` (keyed by library signature; shared with the themed
+    channels). The Planner kicks the scan on mount and shows a progress bar; `GET /pipeline/franchises`
+    reads the cache.
+  Each section header opens/closes it (collapsing the other). A "Done — continue" footer
+  button collapses the current and opens the next. The genres/decades chips and toggle cards
+  (AI/commercials/auto-update) sit above the sections; the build bar sits below.
 
 The blow-by-blow of each step's components and props is the code's job — read the `.tsx`.
 

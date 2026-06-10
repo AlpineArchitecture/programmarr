@@ -367,6 +367,129 @@ def set_programming(tunarr_url, channel_id, schedule_payload):
     return api(tunarr_url, "POST", f"/api/channels/{channel_id}/programming", body=schedule_payload, timeout=120)
 
 
+# ── Surgical diff deploy (Add/Edit mode) ───────────────────────────────────────
+
+def classify_channels(
+    desired: list[dict],
+    deployed: list[dict],
+    prior_managed: set[str] | None = None,
+) -> dict:
+    """Classify channels for a surgical diff deploy (Add/Edit mode).
+
+    Pure function — no Tunarr or file I/O; fully unit-testable.
+
+    Parameters
+    ----------
+    desired       : list of channel dicts from channels.draft.json (the planner's output).
+    deployed      : list of channel dicts from channels.json (the currently-deployed managed set).
+    prior_managed : set of lowercased channel names the planner built/deployed last time
+                    (from ``planner_state.json["managed_names"]``).  When ``None`` or empty,
+                    defaults to an empty set — no channels are deleted (safe, conservative
+                    bootstrapping behaviour for installs that have no planner history yet).
+
+    Returns a dict with five keys:
+        create    — channels in desired but NOT in deployed (by name, case-insensitive).
+        delete    — channels in deployed, absent from desired, AND whose name is in
+                    ``prior_managed`` (i.e. the planner previously owned them and the user
+                    intentionally removed them).
+        update    — channels in both desired and deployed whose content, shuffle, or live
+                    flag differs.  A ``live`` channel whose content changed always lands here
+                    (update-in-place) — its Tunarr id is preserved.
+        unchanged — channels present in both sets where nothing changed.
+        foreign   — channels in deployed, absent from desired, whose name is NOT in
+                    ``prior_managed``.  These are hand-authored channels (created outside
+                    the planner) and are NEVER touched — not deleted, not created, not
+                    updated.
+
+    Identity = channel name (case-insensitive, stripped).  Names are deterministic
+    in the Planner, so they are a stable key.
+
+    Invariant enforcement (HARD — never relaxed):
+    1. The ``delete`` bucket only ever contains planner-managed channels (prior_managed).
+       Hand-authored / foreign channels land in ``foreign`` and are never auto-deleted.
+    2. A ``live`` channel in the ``update`` bucket is always patched in place (never
+       delete-and-recreated) — the caller's update loop preserves the Tunarr id and
+       Plex DVR mapping.  A planner-managed live channel that the user explicitly removes
+       (absent from desired, name in prior_managed) IS eligible for deletion — removing a
+       channel from the planner is an intentional act and does not violate invariant 2
+       (delete-RECREATE is what's forbidden; a plain delete is fine).
+    3. Orphan channels (those in Tunarr but absent from channels.json) are not part of
+       either input list and therefore cannot appear in any output bucket.
+    """
+    if prior_managed is None:
+        prior_managed = set()
+
+    def _key(ch):
+        return (ch.get("name") or "").strip().lower()
+
+    def _content_sig(ch):
+        """Canonical content + shuffle signature for change-detection."""
+        return (
+            json.dumps(ch.get("content", []), sort_keys=True),
+            ch.get("shuffle", ""),
+            bool(ch.get("live")),
+        )
+
+    desired_by_name: dict[str, dict] = {}
+    for ch in desired:
+        k = _key(ch)
+        if k:
+            desired_by_name[k] = ch
+
+    deployed_by_name: dict[str, dict] = {}
+    for ch in deployed:
+        k = _key(ch)
+        if k:
+            deployed_by_name[k] = ch
+
+    result: dict[str, list] = {"create": [], "delete": [], "update": [], "unchanged": [], "foreign": []}
+
+    # desired channels: new or changed vs deployed
+    for name, d_ch in desired_by_name.items():
+        if name not in deployed_by_name:
+            result["create"].append(d_ch)
+        else:
+            dep_ch = deployed_by_name[name]
+            if _content_sig(d_ch) != _content_sig(dep_ch):
+                result["update"].append({"desired": d_ch, "deployed": dep_ch})
+            else:
+                result["unchanged"].append(d_ch)
+
+    # deployed channels not in desired: delete only if planner-managed; otherwise foreign
+    for name, dep_ch in deployed_by_name.items():
+        if name not in desired_by_name:
+            if name in prior_managed:
+                # Planner previously owned this channel and the user removed it — delete it.
+                result["delete"].append(dep_ch)
+            else:
+                # Hand-authored or foreign — never auto-delete.
+                result["foreign"].append(dep_ch)
+
+    return result
+
+
+def merge_deployed_numbers(desired: list[dict], deployed: list[dict]) -> list[dict]:
+    """Return ``desired`` with each EXISTING channel's number set to its deployed number.
+
+    Match is by name (case-insensitive, stripped).  A channel present in ``deployed``
+    keeps the deployed number; a channel absent from ``deployed`` (a genuinely new
+    channel) keeps its own number.
+
+    Why: in Add/Edit mode ``compose`` renumbers the whole selection from ``highest+1``,
+    so an already-deployed channel carries a throwaway high number in the draft.  The
+    surgical deploy updates it IN PLACE (preserving the real Tunarr channel), so the
+    written record must mirror the deployed number, not the draft number — otherwise
+    channels.json desyncs from Tunarr.  New channels keep their draft number (which is
+    above the existing set, so it can't collide).
+    """
+    dep_by_name = {(c.get("name") or "").strip().lower(): c.get("number") for c in deployed}
+    out: list[dict] = []
+    for ch in desired:
+        dep_num = dep_by_name.get((ch.get("name") or "").strip().lower())
+        out.append({**ch, "number": dep_num} if dep_num is not None else ch)
+    return out
+
+
 # ── In-place channel updates (live recipes) ────────────────────────────────────
 
 def find_channel_by_number(tunarr_url, number):

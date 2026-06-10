@@ -1,16 +1,79 @@
 import {
-  Alert, Box, Button, Card, Center, Divider, Group,
+  ActionIcon, Alert, Box, Button, Card, Center, Divider, Group,
   PasswordInput, Stack, Stepper, Text, TextInput, Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconBroadcast, IconCheck, IconLock, IconPlugConnected, IconArrowRight,
+  IconArrowDown, IconArrowUp, IconBroadcast, IconCheck,
+  IconLock, IconPlugConnected, IconSortAscending, IconArrowRight,
 } from '@tabler/icons-react';
 import { useState } from 'react';
 import { api } from '../api/client';
 
 interface Props {
   onComplete: () => void;
+}
+
+// Mirrors channel_blocks.py CANONICAL_ORDER + BLOCK_LABELS.
+const CANONICAL_ORDER = [
+  'marathon', 'tv_block', 'tv_movie_mix', 'movie', 'entity',
+  'network', 'programming_block', 'franchise', 'specialty',
+];
+const BLOCK_LABELS: Record<string, string> = {
+  marathon:          'TV Marathons',
+  tv_block:          'TV Blocks',
+  tv_movie_mix:      'TV & Movie Mix',
+  movie:             'Movie Channels',
+  entity:            'Studios / Directors / Actors',
+  network:           'Networks',
+  programming_block: 'Classic TV Blocks',
+  franchise:         'Franchise & Series',
+  specialty:         'Specialty',
+};
+
+interface CategoryOrderEditorProps {
+  order: string[];
+  onChange: (order: string[]) => void;
+}
+
+function CategoryOrderEditor({ order, onChange }: CategoryOrderEditorProps) {
+  function move(index: number, direction: -1 | 1) {
+    const next = [...order];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  }
+
+  return (
+    <Stack gap={4}>
+      {order.map((key, i) => (
+        <Group key={key} gap="xs" wrap="nowrap">
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            disabled={i === 0}
+            onClick={() => move(i, -1)}
+            aria-label="Move up"
+          >
+            <IconArrowUp size={14} />
+          </ActionIcon>
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            disabled={i === order.length - 1}
+            onClick={() => move(i, 1)}
+            aria-label="Move down"
+          >
+            <IconArrowDown size={14} />
+          </ActionIcon>
+          <Text size="sm" style={{ flex: 1 }}>
+            {BLOCK_LABELS[key] ?? key}
+          </Text>
+        </Group>
+      ))}
+    </Stack>
+  );
 }
 
 export default function Onboarding({ onComplete }: Props) {
@@ -28,15 +91,19 @@ export default function Onboarding({ onComplete }: Props) {
   const [plexToken, setPlexToken] = useState('');
   const [tmdbKey, setTmdbKey] = useState('');
 
+  // Step 2 — Category order
+  const [channelOrder, setChannelOrder] = useState<string[]>(CANONICAL_ORDER);
+
   const passwordMismatch = password !== passwordConfirm && passwordConfirm !== '';
 
   async function saveAndFinish() {
     setSaving(true);
     try {
-      const config: Record<string, string> = {
+      const config: Record<string, any> = {
         tunarr_url: tunarrUrl.trim(),
         plex_url: plexUrl.trim(),
         plex_token: plexToken.trim(),
+        channel_order: channelOrder,
       };
       if (tmdbKey.trim()) config.tmdb_api_key = tmdbKey.trim();
       if (username.trim() && password) {
@@ -72,6 +139,7 @@ export default function Onboarding({ onComplete }: Props) {
           <Stepper active={step} color="orange" mb="xl" size="sm">
             <Stepper.Step label="Security" icon={<IconLock size={16} />} />
             <Stepper.Step label="Connect" icon={<IconPlugConnected size={16} />} />
+            <Stepper.Step label="Channels" icon={<IconSortAscending size={16} />} />
           </Stepper>
 
           {step === 0 && (
@@ -189,13 +257,55 @@ export default function Onboarding({ onComplete }: Props) {
                 </Button>
                 <Button
                   color="orange"
-                  leftSection={<IconCheck size={16} />}
+                  rightSection={<IconArrowRight size={16} />}
                   disabled={!tunarrUrl.trim() || !plexUrl.trim() || !plexToken.trim()}
-                  loading={saving}
-                  onClick={saveAndFinish}
+                  onClick={() => setStep(2)}
                 >
-                  Finish Setup
+                  Next
                 </Button>
+              </Group>
+            </Stack>
+          )}
+
+          {step === 2 && (
+            <Stack gap="md">
+              <Box>
+                <Text fw={700} mb={4}>Channel category order</Text>
+                <Text size="sm" c="dimmed">
+                  Channels are numbered 1, 2, 3… in this order. You can reorder categories
+                  now or change it later in Settings. Skip to use the default order.
+                </Text>
+              </Box>
+
+              <CategoryOrderEditor order={channelOrder} onChange={setChannelOrder} />
+
+              <Divider />
+
+              <Group justify="space-between">
+                <Button variant="subtle" color="gray" onClick={() => setStep(1)}>
+                  Back
+                </Button>
+                <Group gap="xs">
+                  <Button
+                    variant="subtle"
+                    color="gray"
+                    loading={saving}
+                    onClick={() => {
+                      setChannelOrder(CANONICAL_ORDER);
+                      saveAndFinish();
+                    }}
+                  >
+                    Skip
+                  </Button>
+                  <Button
+                    color="orange"
+                    leftSection={<IconCheck size={16} />}
+                    loading={saving}
+                    onClick={saveAndFinish}
+                  >
+                    Finish Setup
+                  </Button>
+                </Group>
               </Group>
             </Stack>
           )}

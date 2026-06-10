@@ -1,7 +1,7 @@
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
   Image, Loader, NumberInput, ScrollArea, Select, SimpleGrid, Stack,
-  Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip,
+  Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { Dropzone } from '@mantine/dropzone';
@@ -10,11 +10,12 @@ import {
   IconDownload, IconExternalLink, IconPlayerPlay, IconRefresh, IconRobot, IconSearch, IconSparkles,
   IconStack2, IconUpload, IconWand, IconX,
 } from '@tabler/icons-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   api, streamPipeline, StreamEvent, PlexCollection, PlexLibrary, CollectionSelection,
   LibraryFacets, CandidateSpec, CandidateKind, EntityFacet, GenreDecadeFacet, BlendFacet, ValidateResult,
-  FillerList, Commercials,
+  FillerList, Commercials, TvMovieGenreFacet, PlannerStateFile, ProgrammingBlock,
+  FranchiseCandidate, DeployPreviewResult, ThemeFacet,
 } from '../api/client';
 import TerminalOutput from '../components/TerminalOutput';
 
@@ -49,6 +50,7 @@ type Method = 'build' | 'collections';
 
 // Setup carries the upfront decisions through the whole flow.
 interface SetupState {
+  mode: 'nuke' | 'edit';
   method: Method;
   includeCollections: boolean;
   fetchArt: boolean;
@@ -66,6 +68,14 @@ const cid = {
   actor: (v: string) => `actor:${v}`,
   tv: (g: string) => `tv:${g}`,
   marathon: (t: string) => `m:${t}`,
+  tvmix: (g: string) => `tvm:${g}`,
+  network: (v: string) => `net:${v}`,
+  progblock: (n: string) => `pb:${n}`,
+  franchise: (n: string) => `fr:${n}`,
+  theme: (n: string) => `theme:${n}`,
+  country: (v: string) => `country:${v}`,
+  mood: (v: string) => `mood:${v}`,
+  style: (v: string) => `style:${v}`,
 };
 
 interface PlannerState {
@@ -98,8 +108,13 @@ function ResultsCard({ title, subtitle, children }: { title: string; subtitle?: 
 
 function parseRunStats(lines: string[]) {
   const summaryLine = lines.slice().reverse().find(l => l.includes('Done:'));
+  // Nuke deploy: "Done: N created, N skipped"
   const m = summaryLine?.match(/Done:\s*(\d+) created,\s*(\d+) skipped/);
-  return { created: m ? parseInt(m[1]) : null, skipped: m ? parseInt(m[2]) : null };
+  if (m) return { created: parseInt(m[1]), skipped: parseInt(m[2]), updated: null, deleted: null };
+  // Surgical deploy: "Done: N created, N deleted, N updated, N unchanged"
+  const ms = summaryLine?.match(/Done:\s*(\d+) created,\s*(\d+) deleted,\s*(\d+) updated,\s*(\d+) unchanged/);
+  if (ms) return { created: parseInt(ms[1]), skipped: 0, deleted: parseInt(ms[2]), updated: parseInt(ms[3]) };
+  return { created: null, skipped: null, deleted: null, updated: null };
 }
 
 // ── Setup screen ───────────────────────────────────────────────────────────────
@@ -129,19 +144,51 @@ function MethodCard({ icon, title, desc, active, onClick }: {
   );
 }
 
-function SetupStep({ setup, onChange, onDone }: {
+function ModeCard({ icon, title, desc, active, onClick }: {
+  icon: React.ReactNode; title: string; desc: string; active: boolean; onClick: () => void;
+}) {
+  return (
+    <UnstyledButton onClick={onClick} style={{ display: 'block', width: '100%' }}>
+      <Card
+        withBorder p="lg"
+        style={{
+          cursor: 'pointer',
+          borderColor: active ? 'var(--mantine-color-orange-5)' : 'var(--mantine-color-dark-4)',
+          backgroundColor: active ? 'var(--mantine-color-dark-6)' : undefined,
+          transition: 'border-color .12s, background-color .12s',
+        }}
+      >
+        <Group gap="md" wrap="nowrap">
+          <ThemeIcon color={active ? 'orange' : 'gray'} variant={active ? 'filled' : 'light'} size={40} radius="md" style={{ flexShrink: 0 }}>
+            {icon}
+          </ThemeIcon>
+          <Box>
+            <Text fw={700} size="md">{title}</Text>
+            <Text size="sm" c="dimmed">{desc}</Text>
+          </Box>
+        </Group>
+      </Card>
+    </UnstyledButton>
+  );
+}
+
+function SetupStep({ setup, onChange, onDone, onNuke }: {
   setup: SetupState;
   onChange: (patch: Partial<SetupState>) => void;
   onDone: () => void;
+  onNuke: () => void;
 }) {
   const [hasTmdb, setHasTmdb] = useState(false);
   const [tunarrChannels, setTunarrChannels] = useState<{ number: number; name: string }[]>([]);
   const [checkedNums, setCheckedNums] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  function calcStart(checked: Set<number>): number {
-    if (checked.size === 0) return 1;
-    return Math.ceil((Math.max(...checked) + 1) / 10) * 10;
+  // Edit mode: start = highest kept channel + 1 (no rounding).
+  // Nuke mode: start = 1.
+  function calcStart(mode: 'nuke' | 'edit', checked: Set<number>): number {
+    if (mode === 'nuke' || checked.size === 0) return 1;
+    return Math.max(...checked) + 1;
   }
 
   useEffect(() => {
@@ -152,7 +199,9 @@ function SetupStep({ setup, onChange, onDone }: {
         setTunarrChannels(sorted);
         const all = new Set(sorted.map(c => c.number));
         setCheckedNums(all);
-        onChange({ protectedNums: [...all], start: calcStart(all) });
+        // Default to Edit if there are existing channels, Nuke if starting fresh.
+        const defaultMode: 'nuke' | 'edit' = sorted.length > 0 ? 'edit' : 'nuke';
+        onChange({ mode: defaultMode, protectedNums: [...all], start: calcStart(defaultMode, all) });
       }).catch(() => {}),
     ]).finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,23 +213,59 @@ function SetupStep({ setup, onChange, onDone }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasTmdb]);
 
+  function setMode(mode: 'nuke' | 'edit') {
+    const nums = mode === 'nuke' ? new Set<number>() : new Set(tunarrChannels.map(c => c.number));
+    setCheckedNums(nums);
+    onChange({ mode, protectedNums: [...nums], start: calcStart(mode, nums) });
+    if (mode === 'nuke') onNuke();
+  }
+
   function toggleChannel(num: number, checked: boolean) {
     const next = new Set(checkedNums);
     if (checked) next.add(num); else next.delete(num);
     setCheckedNums(next);
-    onChange({ protectedNums: [...next], start: calcStart(next) });
+    onChange({ protectedNums: [...next], start: calcStart(setup.mode, next) });
   }
 
   function setAll(on: boolean) {
     const next = on ? new Set(tunarrChannels.map(c => c.number)) : new Set<number>();
     setCheckedNums(next);
-    onChange({ protectedNums: [...next], start: calcStart(next) });
+    onChange({ protectedNums: [...next], start: calcStart(setup.mode, next) });
   }
 
   const checkedCount = checkedNums.size;
+  const isEdit = setup.mode === 'edit';
 
   return (
     <Stack gap="lg">
+      {/* Primary binary: Nuke vs Edit */}
+      {!loading && tunarrChannels.length > 0 && (
+        <Card withBorder p="md">
+          <Text fw={700} mb="sm">How do you want to deploy?</Text>
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <ModeCard
+              icon={<IconX size={22} />}
+              title="🧨 Nuke and start over"
+              desc="Wipe all managed channels and build fresh from 1. Your Planner picks are kept."
+              active={setup.mode === 'nuke'}
+              onClick={() => setMode('nuke')}
+            />
+            <ModeCard
+              icon={<IconWand size={22} />}
+              title="✏️ Add / edit what you've got"
+              desc="Keep your existing channels. Restore prior Planner picks, add new ones, update or remove channels surgically."
+              active={setup.mode === 'edit'}
+              onClick={() => setMode('edit')}
+            />
+          </SimpleGrid>
+          {isEdit && (
+            <Text size="xs" c="dimmed" mt="xs">
+              New channels will be numbered from #{setup.start} (above your existing {checkedCount} channels).
+            </Text>
+          )}
+        </Card>
+      )}
+
       {/* Method */}
       <Card withBorder p="md">
         <Text fw={700} mb="sm">What do you want to do?</Text>
@@ -225,46 +310,73 @@ function SetupStep({ setup, onChange, onDone }: {
         </Stack>
       </Card>
 
-      {/* Existing lineup keep/wipe */}
-      <Card withBorder p="md">
-        <Group justify="space-between" mb="sm">
-          <Text fw={700}>Existing Tunarr channels</Text>
-          {tunarrChannels.length > 0 && (
-            <Group gap={4}>
-              <Button size="xs" variant="subtle" py={2} onClick={() => setAll(true)}>Keep all</Button>
-              <Button size="xs" variant="subtle" py={2} onClick={() => setAll(false)}>Wipe all</Button>
+      {/* Advanced: per-channel force-wipe (Edit mode only) */}
+      {isEdit && tunarrChannels.length > 0 && (
+        <Card withBorder p="md">
+          <UnstyledButton onClick={() => setAdvancedOpen(v => !v)} style={{ width: '100%' }}>
+            <Group gap="sm">
+              <IconChevronDown size={14} style={{ transform: advancedOpen ? undefined : 'rotate(-90deg)', transition: 'transform .15s' }} />
+              <Text fw={600} size="sm">Advanced — force-wipe specific channels</Text>
+              <Text size="xs" c="dimmed">(power users)</Text>
             </Group>
-          )}
-        </Group>
-        {loading ? (
-          <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Checking Tunarr…</Text></Group>
-        ) : tunarrChannels.length === 0 ? (
-          <Text size="sm" c="dimmed">No channels in Tunarr yet — starting fresh.</Text>
-        ) : (
-          <>
-            <ScrollArea h={170} style={{ borderRadius: 4, border: '1px solid var(--mantine-color-dark-5)' }}>
-              <Stack gap={0}>
-                {tunarrChannels.map(c => (
-                  <Group key={c.number} gap="xs" px="sm" py={5}
-                    style={{ borderBottom: '1px solid var(--mantine-color-dark-6)', opacity: checkedNums.has(c.number) ? 1 : 0.4 }}>
-                    <Checkbox size="xs" checked={checkedNums.has(c.number)}
-                      onChange={(e) => toggleChannel(c.number, e.currentTarget.checked)} style={{ flexShrink: 0 }} />
-                    <Text size="xs" c="dimmed" w={36} style={{ flexShrink: 0 }}>#{c.number}</Text>
-                    <Text size="xs" lineClamp={1}>{c.name}</Text>
-                  </Group>
-                ))}
-              </Stack>
-            </ScrollArea>
-            <Text size="xs" c={checkedCount < tunarrChannels.length ? 'yellow.5' : 'dimmed'} mt="xs">
-              {checkedCount === tunarrChannels.length
-                ? `All ${checkedCount} kept. New channels start at #${setup.start}.`
-                : checkedCount === 0
-                  ? 'All existing channels will be wiped and rebuilt.'
-                  : `${checkedCount} kept, ${tunarrChannels.length - checkedCount} wiped. New channels start at #${setup.start}.`}
-            </Text>
-          </>
-        )}
-      </Card>
+          </UnstyledButton>
+          <Collapse in={advancedOpen}>
+            <Box mt="sm">
+              <Text size="xs" c="dimmed" mb="xs">
+                Uncheck a channel to force-delete it from Tunarr before deploying. Normally the surgical deploy
+                handles this automatically — only use this if you want to remove a channel the Planner still knows about.
+              </Text>
+              <Group justify="space-between" mb="xs">
+                <Text size="xs" fw={600}>Existing channels</Text>
+                <Group gap={4}>
+                  <Button size="xs" variant="subtle" py={2} onClick={() => setAll(true)}>Keep all</Button>
+                  <Button size="xs" variant="subtle" py={2} onClick={() => setAll(false)}>Wipe all</Button>
+                </Group>
+              </Group>
+              {loading ? (
+                <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Checking Tunarr…</Text></Group>
+              ) : (
+                <>
+                  <ScrollArea h={160} style={{ borderRadius: 4, border: '1px solid var(--mantine-color-dark-5)' }}>
+                    <Stack gap={0}>
+                      {tunarrChannels.map(c => (
+                        <Group key={c.number} gap="xs" px="sm" py={5}
+                          style={{ borderBottom: '1px solid var(--mantine-color-dark-6)', opacity: checkedNums.has(c.number) ? 1 : 0.4 }}>
+                          <Checkbox size="xs" checked={checkedNums.has(c.number)}
+                            onChange={(e) => toggleChannel(c.number, e.currentTarget.checked)} style={{ flexShrink: 0 }} />
+                          <Text size="xs" c="dimmed" w={36} style={{ flexShrink: 0 }}>#{c.number}</Text>
+                          <Text size="xs" lineClamp={1}>{c.name}</Text>
+                        </Group>
+                      ))}
+                    </Stack>
+                  </ScrollArea>
+                  {checkedCount < tunarrChannels.length && (
+                    <Text size="xs" c="yellow.5" mt="xs">
+                      {tunarrChannels.length - checkedCount} channel{tunarrChannels.length - checkedCount !== 1 ? 's' : ''} will be force-deleted before deploy.
+                    </Text>
+                  )}
+                </>
+              )}
+            </Box>
+          </Collapse>
+        </Card>
+      )}
+
+      {/* Show channel list in Nuke mode (no channels yet or fresh start) */}
+      {(!isEdit || tunarrChannels.length === 0) && !loading && tunarrChannels.length > 0 && (
+        <Card withBorder p="md">
+          <Text fw={700} mb="sm">Existing Tunarr channels</Text>
+          <Text size="sm" c="dimmed">
+            All {tunarrChannels.length} existing channel{tunarrChannels.length !== 1 ? 's' : ''} will be wiped and rebuilt from scratch.
+          </Text>
+        </Card>
+      )}
+
+      {!loading && tunarrChannels.length === 0 && (
+        <Alert color="blue" variant="light">
+          No channels in Tunarr yet — starting fresh.
+        </Alert>
+      )}
 
       <Group>
         <Button color="orange" rightSection={<IconArrowRight size={15} />} onClick={onDone}>
@@ -427,7 +539,7 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
   onToggle: (id: string, spec: CandidateSpec) => void;
   onAddMany: (items: { id: string; spec: CandidateSpec }[]) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [q, setQ] = useState('');
   const filtered = q ? items.filter(i => i.value.toLowerCase().includes(q.toLowerCase())) : items;
   const selN = items.filter(i => isSel(makeId(i.value))).length;
@@ -455,6 +567,10 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
             {filtered.length === 0 && <Text size="xs" c="dimmed" p="xs">No matches.</Text>}
           </Stack>
         </ScrollArea.Autosize>
+        <Group justify="flex-end" mt="xs">
+          <Button size="compact-xs" variant="subtle" color="dimmed"
+            onClick={(e) => { e.stopPropagation(); setOpen(false); }}>Done</Button>
+        </Group>
       </Collapse>
     </Card>
   );
@@ -462,26 +578,29 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
 
 type AddItem = { id: string; spec: CandidateSpec };
 
-// Collapsible candidate group with bulk "Top 10" / "Add all" buttons. Adding from a
-// header collapses the group, so a handled category folds away (minimises the wall).
-function BulkButtons({ items, onAdd, onAfter }: { items: AddItem[]; onAdd: (i: AddItem[]) => void; onAfter?: () => void }) {
+// Collapsible candidate group with bulk "Top 10" / "Add all" buttons. Bulk-add only
+// adds items — it does NOT collapse the category (so the user can see what was added).
+function BulkButtons({ items, onAdd }: { items: AddItem[]; onAdd: (i: AddItem[]) => void }) {
   return (
     <Group gap={6} wrap="nowrap" style={{ flexShrink: 0 }}>
       {items.length > 10 && (
         <Button size="compact-xs" variant="subtle" color="gray"
-          onClick={(e) => { e.stopPropagation(); onAdd(items.slice(0, 10)); onAfter?.(); }}>Top 10</Button>
+          onClick={(e) => { e.stopPropagation(); onAdd(items.slice(0, 10)); }}>Top 10</Button>
       )}
       <Button size="compact-xs" variant="subtle" color="gray"
-        onClick={(e) => { e.stopPropagation(); onAdd(items); onAfter?.(); }}>Add all</Button>
+        onClick={(e) => { e.stopPropagation(); onAdd(items); }}>Add all</Button>
     </Group>
   );
 }
 
-function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, defaultOpen, children }: {
+// Category groups start expanded when their section is open. A "Done" button in the
+// footer collapses a handled category to its header summary. Re-openable by clicking
+// the header. Top 10 / Add all no longer collapse the group.
+function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, children }: {
   title: string; count: number; selectedCount?: number;
-  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; defaultOpen?: boolean; children: React.ReactNode;
+  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(!!defaultOpen);
+  const [open, setOpen] = useState(true);
   return (
     <Card withBorder p="sm">
       <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
@@ -490,9 +609,56 @@ function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, defa
           <Text fw={600} size="sm" lineClamp={1}>{title} <Text span c="dimmed" size="xs">({count})</Text></Text>
           {selectedCount ? <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>{selectedCount} added</Badge> : null}
         </Group>
-        {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} onAfter={() => setOpen(false)} />}
+        {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} />}
       </Group>
-      <Collapse in={open}>{children}</Collapse>
+      <Collapse in={open}>
+        {children}
+        <Group justify="flex-end" mt="xs">
+          <Button size="compact-xs" variant="subtle" color="dimmed"
+            onClick={(e) => { e.stopPropagation(); setOpen(false); }}>Done</Button>
+        </Group>
+      </Collapse>
+    </Card>
+  );
+}
+
+// ── Accordion section ─────────────────────────────────────────────────────────
+// A top-level section in the Planner's three-part accordion (TV / Movies / TV+Movies).
+// Only one section is open at a time (controlled by `openSection` in PlannerStep).
+// Each section has a "Done — continue" button in its footer to open the next.
+function AccordionSection({ index, openSection, onToggle, onNext, title, hint, selCount, isLast, children }: {
+  index: number;
+  openSection: number;
+  onToggle: (idx: number) => void;
+  onNext: (current: number) => void;
+  title: string;
+  hint?: string;
+  selCount: number;
+  isLast?: boolean;
+  children: React.ReactNode;
+}) {
+  const open = openSection === index;
+  return (
+    <Card withBorder p="sm" style={{ borderColor: open ? 'var(--mantine-color-orange-8)' : undefined }}>
+      <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => onToggle(index)}>
+        <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+          <IconChevronDown size={16} style={{ transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .15s', flexShrink: 0 }} />
+          <Text fw={700} size="sm">{title}</Text>
+          {selCount > 0 && <Badge size="xs" color="orange" variant="filled" style={{ flexShrink: 0 }}>{selCount} picked</Badge>}
+          {hint && open && <Text size="xs" c="grape.4" style={{ flexShrink: 0 }}>{hint}</Text>}
+        </Group>
+      </Group>
+      <Collapse in={open}>
+        <Box mt="sm">{children}</Box>
+        {!isLast && (
+          <Group justify="flex-end" mt="sm">
+            <Button size="xs" variant="light" color="orange" rightSection={<IconArrowRight size={13} />}
+              onClick={(e) => { e.stopPropagation(); onNext(index); }}>
+              Done — continue
+            </Button>
+          </Group>
+        )}
+      </Collapse>
     </Card>
   );
 }
@@ -515,9 +681,65 @@ const SUBGENRES: SubGenre[] = [
   { name: 'War Dramas', a: 'War', b: 'Drama' },
 ];
 
+// Expandable card for a single franchise candidate with per-member checkboxes.
+function FranchiseCard({ franchise, isSelected, checkedTitles, onToggle, onToggleMember }: {
+  franchise: FranchiseCandidate;
+  isSelected: boolean;
+  checkedTitles: string[];
+  onToggle: () => void;
+  onToggleMember: (title: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const partial = isSelected && checkedTitles.length < franchise.members.length;
+  return (
+    <Card withBorder p="xs" style={{ borderColor: isSelected ? 'var(--mantine-color-orange-8)' : undefined }}>
+      <Group justify="space-between" wrap="nowrap">
+        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1, cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+          <IconChevronDown size={13} style={{ transform: open ? undefined : 'rotate(-90deg)', transition: 'transform .15s', flexShrink: 0 }} />
+          <Checkbox
+            size="xs"
+            checked={isSelected}
+            indeterminate={partial}
+            onChange={(e) => { e.stopPropagation(); onToggle(); }}
+            onClick={(e) => e.stopPropagation()}
+            style={{ flexShrink: 0 }}
+          />
+          <Box style={{ minWidth: 0 }}>
+            <Text size="sm" fw={600} lineClamp={1}>{franchise.name}</Text>
+            <Text size="xs" c="dimmed">
+              {isSelected ? `${checkedTitles.length} of ` : ''}{franchise.members.length} title{franchise.members.length !== 1 ? 's' : ''}
+              {franchise.source === 'tmdb' && <Text span c="blue.4"> · TMDB</Text>}
+              {franchise.source === 'wikidata' && <Text span c="teal.4"> · Wikidata</Text>}
+            </Text>
+          </Box>
+        </Group>
+      </Group>
+      <Collapse in={open}>
+        <Stack gap={2} mt="xs" pl="md">
+          {franchise.members.map((m) => (
+            <Group key={m.title} gap="xs" wrap="nowrap">
+              <Checkbox
+                size="xs"
+                checked={checkedTitles.includes(m.title)}
+                onChange={() => onToggleMember(m.title)}
+              />
+              <Text size="xs" lineClamp={1} style={{ flex: 1, minWidth: 0 }}>
+                {m.title}{m.year ? <Text span c="dimmed"> ({m.year})</Text> : null}
+              </Text>
+              <Badge size="xs" variant="outline" color={m.type === 'Movie' ? 'blue' : 'teal'}>
+                {m.type === 'Movie' ? 'film' : 'TV'}
+              </Badge>
+            </Group>
+          ))}
+        </Stack>
+      </Collapse>
+    </Card>
+  );
+}
+
 function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone }: {
   planner: PlannerState;
-  setPlanner: (p: PlannerState) => void;
+  setPlanner: (p: PlannerState | ((prev: PlannerState) => PlannerState)) => void;
   setup: SetupState;
   aiExtras: boolean;
   setAiExtras: (v: boolean) => void;
@@ -527,6 +749,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [error, setError] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  // Accordion: which of the three sections (0=TV, 1=Movies, 2=TV+Movies) is open. Section 0 starts open.
+  const [openSection, setOpenSection] = useState<number>(0);
+  function openNext(current: number) { setOpenSection(current + 1); }
+  function toggleSection(idx: number) { setOpenSection(s => s === idx ? -1 : idx); }
 
   // Batch options applied to every channel built here (commercials + auto-update).
   const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
@@ -535,19 +761,216 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [commPad, setCommPad] = useState('5');
   const [autoUpdate, setAutoUpdate] = useState(false);
 
+  const [programmingBlocks, setProgrammingBlocks] = useState<ProgrammingBlock[]>([]);
+
+  // Franchise state.
+  const [franchises, setFranchises] = useState<FranchiseCandidate[]>([]);
+  const [franchisesFetched, setFranchisesFetched] = useState(false);
+  // Per-franchise member override: franchise name → Set of checked titles (undefined = all checked).
+  const [franchiseMemberOverrides, setFranchiseMemberOverrides] = useState<Record<string, Set<string>>>({});
+
+  // TMDB scan state — poll while the background scan is running.
+  const [tmdbScanRunning, setTmdbScanRunning] = useState(false);
+  const [tmdbScanScanned, setTmdbScanScanned] = useState(0);
+  const [tmdbScanTotal, setTmdbScanTotal] = useState(0);
+  const tmdbPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // TVmaze scan state — poll while the network scan is running.
+  const [tvmazeScanRunning, setTvmazeScanRunning] = useState(false);
+  const [tvmazeScanScanned, setTvmazeScanScanned] = useState(0);
+  const [tvmazeScanTotal, setTvmazeScanTotal] = useState(0);
+  const tvmazePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Eager scan: kick off on Planner mount so the scan runs while the user works
+  // through the TV and Movies sections.  When done, load franchises immediately.
+  useEffect(() => {
+    let cancelled = false;
+
+    function stopPoll() {
+      if (tmdbPollRef.current !== null) {
+        clearInterval(tmdbPollRef.current);
+        tmdbPollRef.current = null;
+      }
+    }
+
+    function loadFranchises() {
+      if (franchisesFetched) return;
+      setFranchisesFetched(true);
+      // Reload facets so the themes list (F11) populates from the fresh enrichment cache.
+      api.getFacets().then((freshFacets) => {
+        if (!cancelled && freshFacets.exists) {
+          setPlanner(prev => ({ ...prev, facets: freshFacets }));
+        }
+      }).catch(() => { /* non-fatal */ });
+      api.getFranchises().then((frs) => {
+        if (cancelled) return;
+        setFranchises(frs);
+        // Edit-mode restore: a saved franchise spec carries a subset of member titles.
+        // Reconcile that into the member-override map so per-member checkboxes reflect
+        // the saved selection instead of defaulting to all-checked.
+        setFranchiseMemberOverrides(prev => {
+          const next = { ...prev };
+          for (const fr of frs) {
+            const sel = planner.selected[cid.franchise(fr.name)];
+            if (sel?.titles && sel.titles.length < fr.members.length) {
+              next[fr.name] = new Set(sel.titles);
+            }
+          }
+          return next;
+        });
+      }).catch(() => { if (!cancelled) setFranchises([]); });
+    }
+
+    function startPolling() {
+      stopPoll();
+      tmdbPollRef.current = setInterval(() => {
+        api.tmdbScanStatus().then((s) => {
+          if (cancelled) { stopPoll(); return; }
+          setTmdbScanScanned(s.scanned);
+          setTmdbScanTotal(s.total);
+          if (s.done || !s.running) {
+            setTmdbScanRunning(false);
+            stopPoll();
+            loadFranchises();
+          }
+        }).catch(() => {
+          stopPoll();
+          setTmdbScanRunning(false);
+        });
+      }, 1500);
+    }
+
+    api.startTmdbScan().then((res) => {
+      if (cancelled) return;
+      if (res.cached) {
+        // Cache already valid — fetch franchises immediately.
+        loadFranchises();
+      } else if (res.running) {
+        setTmdbScanRunning(true);
+        startPolling();
+      } else {
+        // No TMDB key or no CSV.  TMDB won't scan, but Wikidata may still have
+        // franchises from its own cache (started by the backend on this request).
+        // Always call loadFranchises so Wikidata results are shown.
+        loadFranchises();
+      }
+    }).catch(() => {
+      if (!cancelled) setFranchisesFetched(true);
+    });
+
+    return () => {
+      cancelled = true;
+      stopPoll();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // TVmaze scan: kick off on Planner mount alongside the TMDB scan.
+  // When done (or already cached), facets will include real network data.
+  // When the facets are reloaded after scan completion, the networks list populates.
+  useEffect(() => {
+    let cancelled = false;
+
+    function stopTvmazePoll() {
+      if (tvmazePollRef.current !== null) {
+        clearInterval(tvmazePollRef.current);
+        tvmazePollRef.current = null;
+      }
+    }
+
+    function startTvmazePoll() {
+      stopTvmazePoll();
+      tvmazePollRef.current = setInterval(() => {
+        api.tvmazeScanStatus().then((s) => {
+          if (cancelled) { stopTvmazePoll(); return; }
+          setTvmazeScanScanned(s.scanned);
+          setTvmazeScanTotal(s.total);
+          if (s.done || !s.running) {
+            setTvmazeScanRunning(false);
+            stopTvmazePoll();
+            // Reload facets so the networks list is populated from the fresh cache.
+            api.getFacets().then((freshFacets) => {
+              if (!cancelled && freshFacets.exists) {
+                // Functional update: merge fresh facets into the LATEST planner state,
+                // not the stale closure snapshot — otherwise picks made while the scan
+                // ran would be reverted (clobbering the sticky picks from F7).
+                setPlanner(prev => ({ ...prev, facets: freshFacets }));
+              }
+            }).catch(() => { /* non-fatal */ });
+          }
+        }).catch(() => {
+          stopTvmazePoll();
+          setTvmazeScanRunning(false);
+        });
+      }, 1500);
+    }
+
+    api.startTvmazeScan().then((res) => {
+      if (cancelled) return;
+      if (res.cached) {
+        // Cache already valid — networks will be in the facets on next load.
+        setTvmazeScanRunning(false);
+      } else if (res.running) {
+        setTvmazeScanRunning(true);
+        startTvmazePoll();
+      }
+      // else: no CSV yet — nothing to scan.
+    }).catch(() => {
+      if (!cancelled) setTvmazeScanRunning(false);
+    });
+
+    return () => {
+      cancelled = true;
+      stopTvmazePoll();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => { api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([])); }, []);
 
+  // Guard: debounced save must not fire before the initial restore completes.
+  const restoredRef = useRef(false);
+
   useEffect(() => {
-    if (planner.loaded) { setLoading(false); return; }
-    api.getFacets()
-      .then((f) => {
+    // Already loaded (e.g. returning to the Planner step within a session): the picks
+    // are in parent state — just mark restore complete so the debounced save can run.
+    if (planner.loaded) { setLoading(false); restoredRef.current = true; return; }
+
+    Promise.all([
+      api.getFacets(),
+      api.getPlannerState().catch(() => null),
+      api.getProgrammingBlocks().catch(() => [] as ProgrammingBlock[]),
+    ])
+      .then(([f, savedState, blocks]) => {
+        setProgrammingBlocks(blocks);
         if (!f.exists) { setError('Run Export first.'); return; }
         const minItems = f.min_items ?? 5;
-        const activeGenres: Record<string, boolean> = {};
-        (f.genres?.canonical ?? []).forEach(g => { activeGenres[g.tag] = g.count >= minItems; });
-        const activeDecades: Record<string, boolean> = {};
-        (f.decades ?? []).forEach(d => { activeDecades[d.label] = true; });
-        setPlanner({ ...planner, facets: f, activeGenres, activeDecades, loaded: true });
+
+        let activeGenres: Record<string, boolean> = {};
+        let activeDecades: Record<string, boolean> = {};
+        let selected: Record<string, CandidateSpec> = {};
+        let curate: Record<string, boolean> = {};
+
+        if (savedState && (savedState as PlannerStateFile).activeGenres) {
+          // Restore prior planner intent (any mode — picks are always sticky).
+          const s = savedState as PlannerStateFile;
+          activeGenres = s.activeGenres;
+          activeDecades = s.activeDecades;
+          selected = s.selected;
+          curate = s.curate;
+          setAiExtras(s.aiExtras);
+          setCommEnabled(s.commEnabled);
+          setCommListId(s.commListId);
+          setCommPad(s.commPad || '5');
+          setAutoUpdate(s.autoUpdate);
+        } else {
+          // No saved state: default genres/decades from facets.
+          (f.genres?.canonical ?? []).forEach(g => { activeGenres[g.tag] = g.count >= minItems; });
+          (f.decades ?? []).forEach(d => { activeDecades[d.label] = true; });
+        }
+
+        setPlanner({ ...planner, facets: f, activeGenres, activeDecades, selected, curate, loaded: true });
+        restoredRef.current = true;
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
@@ -572,6 +995,78 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     const next = { ...planner.selected };
     items.forEach(({ id, spec }) => { next[id] = spec; });
     patch({ selected: next });
+  }
+
+  // Debounced save: persist the full planner intent 500ms after any change.
+  // Guard: skip until the initial restore has completed so we don't clobber the saved file
+  // with an empty state on first mount.
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    const stateToSave: PlannerStateFile = {
+      activeGenres: planner.activeGenres,
+      activeDecades: planner.activeDecades,
+      selected: planner.selected,
+      curate: planner.curate,
+      aiExtras,
+      commEnabled,
+      commListId,
+      commPad,
+      autoUpdate,
+    };
+    const timer = setTimeout(() => {
+      api.savePlannerState(stateToSave).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planner.activeGenres, planner.activeDecades, planner.selected, planner.curate,
+      aiExtras, commEnabled, commListId, commPad, autoUpdate]);
+
+  /** Get the currently-checked member titles for a franchise (defaults to all). */
+  function franchiseCheckedTitles(fr: FranchiseCandidate): string[] {
+    const override = franchiseMemberOverrides[fr.name];
+    if (!override) return fr.members.map(m => m.title);
+    return fr.members.map(m => m.title).filter(t => override.has(t));
+  }
+
+  /** Toggle a single member within a franchise; update both the override map and the planner spec. */
+  function toggleFranchiseMember(fr: FranchiseCandidate, title: string) {
+    const allTitles = fr.members.map(m => m.title);
+    const prevOverride = franchiseMemberOverrides[fr.name];
+    // Materialize: if no override yet, all are checked.
+    const current = new Set<string>(prevOverride ?? allTitles);
+    if (current.has(title)) { current.delete(title); } else { current.add(title); }
+    const nextOverrides = { ...franchiseMemberOverrides, [fr.name]: current };
+    setFranchiseMemberOverrides(nextOverrides);
+    // Sync planner selection.
+    const checkedTitles = allTitles.filter(t => current.has(t));
+    const id = cid.franchise(fr.name);
+    const nextSelected = { ...planner.selected };
+    if (checkedTitles.length === 0) {
+      delete nextSelected[id];
+    } else {
+      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: checkedTitles };
+    }
+    patch({ selected: nextSelected });
+  }
+
+  /** Toggle the entire franchise (select all / deselect all). */
+  function toggleFranchise(fr: FranchiseCandidate) {
+    const id = cid.franchise(fr.name);
+    const nextSelected = { ...planner.selected };
+    if (id in nextSelected) {
+      // Deselect: remove from selected and clear member override.
+      delete nextSelected[id];
+      const nextOverrides = { ...franchiseMemberOverrides };
+      delete nextOverrides[fr.name];
+      setFranchiseMemberOverrides(nextOverrides);
+    } else {
+      // Select all members.
+      const nextOverrides = { ...franchiseMemberOverrides };
+      delete nextOverrides[fr.name]; // clear any partial override → all selected
+      setFranchiseMemberOverrides(nextOverrides);
+      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: fr.members.map(m => m.title) };
+    }
+    patch({ selected: nextSelected });
   }
 
   if (loading) return <Center py="xl"><Stack align="center" gap="sm"><Loader color="orange" /><Text size="sm" c="dimmed">Reading your library…</Text></Stack></Center>;
@@ -614,6 +1109,21 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
       if (r.skipped.length) notifications.show({ message: `${r.skipped.length} candidate(s) skipped — no matching titles`, color: 'yellow' });
       const extras = [commercials && 'commercials', autoUpdate && 'auto-update'].filter(Boolean).join(' + ');
       notifications.show({ message: `${r.count} channels built${extras ? ` (${extras})` : ''}`, color: 'green', icon: <IconCheck size={14} /> });
+
+      // Persist planner intent so Add/Edit mode can restore it next time.
+      const stateToSave: PlannerStateFile = {
+        activeGenres: planner.activeGenres,
+        activeDecades: planner.activeDecades,
+        selected: planner.selected,
+        curate: planner.curate,
+        aiExtras,
+        commEnabled,
+        commListId,
+        commPad,
+        autoUpdate,
+      };
+      api.savePlannerState(stateToSave).catch(() => {});
+
       onDone();
     } catch (e: any) {
       notifications.show({ message: `Build failed: ${e.message}`, color: 'red', icon: <IconX size={14} /> });
@@ -704,54 +1214,146 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         </Group>
       </Card>
 
-      {/* TV channels — lowest channel numbers, so they lead. Marathons (~10s) then blocks (~20s). */}
-      {((f.marathons?.length ?? 0) > 0 || (f.tv_genres?.length ?? 0) > 0) && (
-        <Box>
-          <Text fw={700} size="sm" mb={6}>TV channels</Text>
-          <Stack gap="sm">
-            {(f.marathons?.length ?? 0) > 0 && (() => {
-              const items: AddItem[] = f.marathons!.map(m => ({ id: cid.marathon(m.title), spec: { kind: 'marathon', value: m.title, name: `${m.title} Marathon` } }));
-              return (
-                <CollapsibleSection title="Marathons — one channel per show" count={f.marathons!.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {f.marathons!.map((m, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={m.episodes} label={m.title} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                  ))}
-                </CollapsibleSection>
-              );
-            })()}
-            {(f.tv_genres?.length ?? 0) > 0 && (() => {
-              const items: AddItem[] = f.tv_genres!.map(t => ({ id: cid.tv(t.genre), spec: { kind: 'tv_genre', genre: t.genre, name: `${t.genre} TV` } }));
-              return (
-                <CollapsibleSection title="Genre blocks — themed multi-show" count={f.tv_genres!.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {f.tv_genres!.map((t, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={t.count} label={`${t.genre} TV`} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                  ))}
-                </CollapsibleSection>
-              );
-            })()}
-          </Stack>
-        </Box>
-      )}
+      {/* ── Three-section accordion ──────────────────────────────────────────────────
+          Section 0: TV       — Marathons + Genre blocks
+                                (Step 5 will insert Networks + Classic blocks here)
+          Section 1: Movies   — Genre×decade, sub-genres, broad genres, Entities
+          Section 2: TV+Movies — Mixed-genre channels from tv_movie_genres
+                                (Step 6 will insert Franchises here)
+          One section open at a time; "Done — continue" in each footer opens the next.
+      ─────────────────────────────────────────────────────────────────────────── */}
 
-      {/* Movie channels (~30s) */}
-      <Box>
-        <Group justify="space-between" mb={6}>
-          <Text fw={700} size="sm">Movie channels</Text>
-          {aiExtras && activeGenreTags.size > 0 && (
-            <Text size="xs" c="grape.4">✨ tap the sparkle on a checked genre/decade pick to let AI split it by tone</Text>
+      {/* ── SECTION 0: TV ─────────────────────────────────────────────────────── */}
+      <AccordionSection
+        index={0} openSection={openSection} onToggle={toggleSection} onNext={openNext}
+        title="TV"
+        selCount={countSel([
+          ...(f.marathons ?? []).map(m => cid.marathon(m.title)),
+          ...(f.tv_genres ?? []).map(t => cid.tv(t.genre)),
+          ...(f.networks ?? []).map(n => cid.network(n.value)),
+          ...programmingBlocks.map(b => cid.progblock(b.name)),
+        ])}
+      >
+        <Stack gap="sm">
+          {(f.marathons?.length ?? 0) > 0 && (() => {
+            const items: AddItem[] = f.marathons!.map(m => ({ id: cid.marathon(m.title), spec: { kind: 'marathon' as CandidateKind, value: m.title, name: `${m.title} Marathon` } }));
+            return (
+              <CollapsibleSection title="Marathons — one channel per show" count={f.marathons!.length}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                {f.marathons!.map((m, i) => (
+                  <CandRow key={items[i].id} id={items[i].id} count={m.episodes} label={m.title} checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {(f.tv_genres?.length ?? 0) > 0 && (() => {
+            const items: AddItem[] = f.tv_genres!.map(t => ({ id: cid.tv(t.genre), spec: { kind: 'tv_genre' as CandidateKind, genre: t.genre, name: `${t.genre} TV` } }));
+            return (
+              <CollapsibleSection title="Genre blocks — themed multi-show" count={f.tv_genres!.length}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                {f.tv_genres!.map((t, i) => (
+                  <CandRow key={items[i].id} id={items[i].id} count={t.count} label={`${t.genre} TV`} checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {tvmazeScanRunning && (
+            <Text size="xs" c="dimmed" fs="italic">
+              Scanning networks… {tvmazeScanScanned} / {tvmazeScanTotal}
+            </Text>
           )}
-        </Group>
-        {activeGenreTags.size === 0 ? (
+          {!tvmazeScanRunning && (f.networks?.length ?? 0) > 0 && (() => {
+            const netItems: AddItem[] = f.networks!.map(n => ({
+              id: cid.network(n.value),
+              spec: { kind: 'network' as CandidateKind, value: n.value, name: n.value },
+            }));
+            return (
+              <CollapsibleSection
+                title="Networks"
+                count={f.networks!.length}
+                selectedCount={countSel(netItems.map(i => i.id))}
+                addItems={netItems}
+                onAdd={addMany}
+              >
+                {f.networks!.map((n, i) => (
+                  <CandRow
+                    key={netItems[i].id}
+                    id={netItems[i].id}
+                    count={n.count}
+                    label={n.value}
+                    checked={isSel(netItems[i].id)}
+                    onToggle={() => toggleSel(netItems[i].id, netItems[i].spec)}
+                  />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {programmingBlocks.length > 0 && (() => {
+            const items: AddItem[] = programmingBlocks.map(b => ({
+              id: cid.progblock(b.name),
+              spec: {
+                kind: 'programming_block' as CandidateKind,
+                name: b.name,
+                titles: b.present_shows,
+              },
+            }));
+            return (
+              <CollapsibleSection
+                title="Classic TV Blocks"
+                count={programmingBlocks.length}
+                selectedCount={countSel(items.map(i => i.id))}
+                addItems={items}
+                onAdd={addMany}
+              >
+                {programmingBlocks.map((b, i) => (
+                  <CandRow
+                    key={items[i].id}
+                    id={items[i].id}
+                    count={b.present_count}
+                    label={`${b.name} — ${b.present_count} of ${b.shows.length} shows  (${b.network}, ${b.era})`}
+                    checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)}
+                  />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
+          {(f.marathons?.length ?? 0) === 0 && (f.tv_genres?.length ?? 0) === 0 &&
+           (f.networks?.length ?? 0) === 0 && programmingBlocks.length === 0 && !tvmazeScanRunning && (
+            <Text size="sm" c="dimmed">No TV channels available — run Export to scan your library.</Text>
+          )}
+        </Stack>
+      </AccordionSection>
+
+      {/* ── SECTION 1: Movies ─────────────────────────────────────────────────── */}
+      <AccordionSection
+        index={1} openSection={openSection} onToggle={toggleSection} onNext={openNext}
+        title="Movies"
+        hint={aiExtras && activeGenreTags.size > 0 ? '✨ tap the sparkle on a checked genre/decade pick to let AI split it by tone' : undefined}
+        selCount={countSel([
+          ...(f.genres?.canonical ?? []).filter(g => activeGenreTags.has(g.tag)).map(g => cid.genre(g.tag)),
+          ...(f.genres?.more ?? []).filter(g => activeGenreTags.has(g.tag)).map(g => cid.genre(g.tag)),
+          ...(f.genre_decade ?? []).map(c => cid.gd(c.genre, c.decade_start)),
+          ...subGenres.map(x => cid.blend(x.blend.genres[0], x.blend.genres[1])),
+          ...(f.studios ?? []).map(s => cid.studio(s.value)),
+          ...(f.directors ?? []).map(d => cid.director(d.value)),
+          ...(f.actors ?? []).map(a => cid.actor(a.value)),
+          ...(f.themes ?? []).map(t => cid.theme(t.name)),
+          ...(f.countries ?? []).map(c => cid.country(c.value)),
+          ...(f.moods ?? []).map(m => cid.mood(m.value)),
+          ...(f.styles ?? []).map(s => cid.style(s.value)),
+        ])}
+      >
+        {activeGenreTags.size === 0 && (f.themes?.length ?? 0) === 0 && !tmdbScanRunning
+          && (f.countries?.length ?? 0) === 0 && (f.moods?.length ?? 0) === 0 && (f.styles?.length ?? 0) === 0 ? (
           <Text size="sm" c="dimmed">Pick some genres above to see movie channel candidates.</Text>
         ) : (
           <Stack gap="sm">
             {(f.decades ?? []).filter(d => activeDecadeLabels.has(d.label) && genreDecadeByDecade[d.label]?.length).map(d => {
               const cells = genreDecadeByDecade[d.label];
-              const items: AddItem[] = cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade', genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } }));
+              const items: AddItem[] = cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade' as CandidateKind, genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } }));
               return (
                 <CollapsibleSection key={d.label} title={d.label} count={cells.length}
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
@@ -765,7 +1367,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             })}
 
             {subGenres.length > 0 && (() => {
-              const items: AddItem[] = subGenres.map(x => ({ id: cid.blend(x.blend.genres[0], x.blend.genres[1]), spec: { kind: 'blend', genres: x.blend.genres, name: x.s.name } }));
+              const items: AddItem[] = subGenres.map(x => ({ id: cid.blend(x.blend.genres[0], x.blend.genres[1]), spec: { kind: 'blend' as CandidateKind, genres: x.blend.genres, name: x.s.name } }));
               return (
                 <CollapsibleSection title="Sub-genres" count={subGenres.length}
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
@@ -777,8 +1379,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               );
             })()}
 
-            {(() => {
-              const items: AddItem[] = broadCands.map(g => ({ id: cid.genre(g.tag), spec: { kind: 'genre', genre: g.tag, name: `${g.display} Movies` } }));
+            {broadCands.length > 0 && (() => {
+              const items: AddItem[] = broadCands.map(g => ({ id: cid.genre(g.tag), spec: { kind: 'genre' as CandidateKind, genre: g.tag, name: `${g.display} Movies` } }));
               return (
                 <CollapsibleSection title="Broad genres" count={broadCands.length}
                   selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
@@ -790,23 +1392,200 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 </CollapsibleSection>
               );
             })()}
+
+            {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
+              <>
+                <Divider label="Studios, directors &amp; actors" labelPosition="left" />
+                {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+                {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+                {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+              </>
+            )}
+
+            {/* ── Themed channels — from TMDB keyword catalog (F9 enrichment cache) ── */}
+            {(tmdbScanRunning || (f.themes?.length ?? 0) > 0) && (
+              <>
+                <Divider label="Themed" labelPosition="left" />
+                {tmdbScanRunning ? (
+                  <Text size="xs" c="dimmed">Scanning TMDB for themes…</Text>
+                ) : (() => {
+                  const themes = f.themes as ThemeFacet[];
+                  const items: AddItem[] = themes.map(t => ({
+                    id: cid.theme(t.name),
+                    spec: { kind: 'theme' as CandidateKind, name: t.name, titles: t.titles },
+                  }));
+                  return (
+                    <CollapsibleSection
+                      title="Themed channels"
+                      count={themes.length}
+                      selectedCount={countSel(items.map(i => i.id))}
+                      addItems={items}
+                      onAdd={addMany}
+                    >
+                      {themes.map((t, i) => (
+                        <CandRow
+                          key={items[i].id}
+                          id={items[i].id}
+                          count={t.count}
+                          label={t.name}
+                          checked={isSel(items[i].id)}
+                          onToggle={() => toggleSel(items[i].id, items[i].spec)}
+                        />
+                      ))}
+                    </CollapsibleSection>
+                  );
+                })()}
+              </>
+            )}
+
+            {/* ── Countries / Moods / Vibes — from Plex tag columns (F12) ── */}
+            {((f.countries?.length ?? 0) > 0 || (f.moods?.length ?? 0) > 0 || (f.styles?.length ?? 0) > 0) && (
+              <>
+                <Divider label="Countries &amp; Vibes" labelPosition="left" />
+                {(f.countries?.length ?? 0) > 0 && (
+                  <EntitySection
+                    title="Countries"
+                    kind="country"
+                    items={f.countries!}
+                    makeId={cid.country}
+                    makeName={(v) => `${v} Cinema`}
+                    isSel={isSel}
+                    onToggle={toggleSel}
+                    onAddMany={addMany}
+                  />
+                )}
+                {(f.moods?.length ?? 0) > 0 && (
+                  <EntitySection
+                    title="Moods / Vibes"
+                    kind="mood"
+                    items={f.moods!}
+                    makeId={cid.mood}
+                    makeName={(v) => v}
+                    isSel={isSel}
+                    onToggle={toggleSel}
+                    onAddMany={addMany}
+                  />
+                )}
+                {(f.styles?.length ?? 0) > 0 && (
+                  <EntitySection
+                    title="Styles"
+                    kind="style"
+                    items={f.styles!}
+                    makeId={cid.style}
+                    makeName={(v) => v}
+                    isSel={isSel}
+                    onToggle={toggleSel}
+                    onAddMany={addMany}
+                  />
+                )}
+              </>
+            )}
           </Stack>
         )}
-      </Box>
+      </AccordionSection>
 
-      {/* Entities (~50s) */}
-      {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
-        <Box>
-          <Text fw={700} size="sm" mb={6}>Studios, directors &amp; actors</Text>
-          <Stack gap="sm">
-            {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-            {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-            {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-          </Stack>
-        </Box>
-      )}
+      {/* ── SECTION 2: TV + Movies ────────────────────────────────────────────── */}
+      <AccordionSection
+        index={2} openSection={openSection} onToggle={toggleSection} onNext={openNext}
+        title="TV + Movies"
+        selCount={countSel([
+          ...(f.tv_movie_genres ?? []).map(x => cid.tvmix(x.genre)),
+          ...franchises.map(fr => cid.franchise(fr.name)),
+        ])}
+        isLast
+      >
+        <Stack gap="sm">
+          {(f.tv_movie_genres?.length ?? 0) > 0 ? (() => {
+            const items: AddItem[] = (f.tv_movie_genres as TvMovieGenreFacet[]).map(x => ({
+              id: cid.tvmix(x.genre),
+              spec: { kind: 'tv_movie_mix' as CandidateKind, genre: x.genre, name: x.genre },
+            }));
+            return (
+              <CollapsibleSection title="Mixed-genre channels" count={f.tv_movie_genres!.length}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
+                {(f.tv_movie_genres as TvMovieGenreFacet[]).map((x, i) => (
+                  <CandRow key={items[i].id} id={items[i].id}
+                    count={x.tv_count + x.movie_count}
+                    label={`${x.genre} — ${x.tv_count} episodes + ${x.movie_count} films`}
+                    checked={isSel(items[i].id)}
+                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
+                ))}
+              </CollapsibleSection>
+            );
+          })() : (
+            <Text size="sm" c="dimmed">No genres appear in both your movie and TV libraries above the threshold.</Text>
+          )}
+          {/* ── Franchises ─────────────────────────────────────────────────── */}
+          {tmdbScanRunning ? (
+            <Card withBorder p="sm">
+              <Stack gap={4}>
+                <Group gap="sm">
+                  <Loader size="xs" color="orange" />
+                  <Text size="sm" c="dimmed">
+                    Scanning TMDB… {tmdbScanScanned} / {tmdbScanTotal || '?'}
+                  </Text>
+                </Group>
+                {tmdbScanTotal > 0 && (
+                  <Box
+                    style={{
+                      height: 6, borderRadius: 3, background: 'var(--mantine-color-dark-4)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <Box
+                      style={{
+                        height: '100%',
+                        width: `${Math.round((tmdbScanScanned / tmdbScanTotal) * 100)}%`,
+                        background: 'var(--mantine-color-orange-5)',
+                        transition: 'width 0.4s ease',
+                      }}
+                    />
+                  </Box>
+                )}
+              </Stack>
+            </Card>
+          ) : franchises.length > 0 ? (() => {
+            const franchiseAddItems: AddItem[] = franchises.map(fr => ({
+              id: cid.franchise(fr.name),
+              spec: { kind: 'franchise' as CandidateKind, name: fr.name, titles: fr.members.map(m => m.title) },
+            }));
+            return (
+              <CollapsibleSection
+                title="Franchises"
+                count={franchises.length}
+                selectedCount={countSel(franchiseAddItems.map(i => i.id))}
+                addItems={franchiseAddItems}
+                onAdd={(items) => {
+                  // When bulk-adding franchises, also clear any member overrides so all are checked.
+                  const nextOverrides = { ...franchiseMemberOverrides };
+                  items.forEach(({ spec }) => { if (spec.name) delete nextOverrides[spec.name]; });
+                  setFranchiseMemberOverrides(nextOverrides);
+                  addMany(items);
+                }}
+              >
+                <Stack gap="xs" mt="xs">
+                  {franchises.map((fr) => (
+                    <FranchiseCard
+                      key={fr.name}
+                      franchise={fr}
+                      isSelected={isSel(cid.franchise(fr.name))}
+                      checkedTitles={franchiseCheckedTitles(fr)}
+                      onToggle={() => toggleFranchise(fr)}
+                      onToggleMember={(title) => toggleFranchiseMember(fr, title)}
+                    />
+                  ))}
+                </Stack>
+              </CollapsibleSection>
+            );
+          })() : franchisesFetched && !tmdbScanRunning && franchises.length === 0 ? (
+            <Text size="sm" c="dimmed">
+              No franchises found. Add a TMDB API key in Settings to enable TMDB franchise detection.
+            </Text>
+          ) : null}
+        </Stack>
+      </AccordionSection>
 
-      {/* Build bar */}
+      {/* Build bar — reflects selections across all three sections */}
       <Card withBorder p="md">
         <Group justify="space-between">
           <Box>
@@ -814,7 +1593,25 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             {curateCount > 0 && <Text size="xs" c="grape.4">+ {curateCount} pool{curateCount !== 1 ? 's' : ''} for AI to split by tone</Text>}
           </Box>
           <Group gap="xs">
-            {selectedCount > 0 && <Button variant="subtle" size="xs" color="gray" onClick={() => patch({ selected: {}, curate: {} })}>Clear</Button>}
+            <Button variant="subtle" size="xs" color="gray" onClick={() => {
+              // Reset all picks and toggles to defaults, then wipe the saved state file.
+              const minItems = f?.min_items ?? 5;
+              const defaultGenres: Record<string, boolean> = {};
+              const defaultDecades: Record<string, boolean> = {};
+              (f?.genres?.canonical ?? []).forEach(g => { defaultGenres[g.tag] = g.count >= minItems; });
+              (f?.decades ?? []).forEach(d => { defaultDecades[d.label] = true; });
+              patch({ selected: {}, curate: {}, activeGenres: defaultGenres, activeDecades: defaultDecades });
+              setAiExtras(false);
+              setCommEnabled(false);
+              setCommListId(null);
+              setCommPad('5');
+              setAutoUpdate(false);
+              api.deletePlannerState().catch(() => {});
+              // Suppress the save that would fire for this clear-all render, then re-enable
+              // so subsequent picks are saved normally.
+              restoredRef.current = false;
+              setTimeout(() => { restoredRef.current = true; }, 0);
+            }}>Clear all</Button>
             <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0 && !aiExtras} loading={building} onClick={build}>
               {exactSpecs.length === 0 ? 'Continue to AI' : `Build ${exactSpecs.length} Channel${exactSpecs.length !== 1 ? 's' : ''}`}
             </Button>
@@ -1084,13 +1881,38 @@ function DeployStep({ setup }: { setup: SetupState }) {
   const [showArt, setShowArt] = useState(false);
   const [showSync, setShowSync] = useState(false);
 
+  // Preview gate: fetch the diff summary before the deploy button is shown.
+  const [preview, setPreview] = useState<DeployPreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewConfirmed, setPreviewConfirmed] = useState(false);
+  // Collapsed state for long preview bucket lists.
+  const [previewExpanded, setPreviewExpanded] = useState<Record<string, boolean>>({});
+
   const [config, setConfig] = useState<Record<string, string>>({});
   useEffect(() => { api.getConfig().then(setConfig).catch(() => {}); }, []);
 
+  const isEditMode = setup.mode === 'edit';
   const protectedNums = setup.protectedNums;
   const effectiveProtected = new Set(protectedNums);
   const activeDeployNums = new Set(channelSels.filter(s => s.include).map(s => s.deployNumber));
   const conflictNums = new Set([...effectiveProtected].filter(n => activeDeployNums.has(n)));
+
+  async function loadPreview() {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreview(null);
+    setPreviewConfirmed(false);
+    setPreviewExpanded({});
+    try {
+      const result = await api.deployPreview(isEditMode ? 'edit' : 'nuke');
+      setPreview(result);
+    } catch (e: any) {
+      setPreviewError(e?.message ?? 'Failed to load preview');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
 
   async function runProbe() {
     setProbeLines([]); setProbeDone(false); setChannelSels([]); setProbing(true);
@@ -1104,22 +1926,84 @@ function DeployStep({ setup }: { setup: SetupState }) {
     if (ok) setChannelSels(parseProbeChannels(collected));
   }
 
-  useEffect(() => { runProbe(); /* auto-probe on entry */ // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!isEditMode) {
+      // Nuke mode: probe to validate the draft before showing the deploy button.
+      runProbe();
+    } else {
+      // Edit/surgical mode: no probe needed — surgical deploy handles all diff logic.
+      setProbeDone(true); setProbeOk(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load preview once the review gate is ready (after probe passes for nuke,
+  // immediately for edit mode).
+  useEffect(() => {
+    if (probeDone && probeOk) {
+      loadPreview();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probeDone, probeOk]);
 
   function updateChannelSel(idx: number, patch: Partial<ChannelSel>) {
     setChannelSels(prev => prev.map((s, i) => i === idx ? { ...s, ...patch } : s));
   }
 
+  // Render a preview bucket row: label + count badge + collapsible channel list.
+  function PreviewBucket({
+    label, channels, color, symbol,
+  }: {
+    label: string;
+    channels: DeployPreviewResult[keyof DeployPreviewResult];
+    color: string;
+    symbol: string;
+  }) {
+    const key = label;
+    const expanded = previewExpanded[key] ?? false;
+    const COLLAPSE_AT = 8;
+    const shown = expanded ? channels : channels.slice(0, COLLAPSE_AT);
+    return (
+      <Box>
+        <Group gap="xs" mb={2}>
+          <Text size="sm" fw={600} c={color}>{symbol} {channels.length} {label}</Text>
+        </Group>
+        {channels.length > 0 && (
+          <Box pl="md">
+            {shown.map((ch, i) => (
+              <Text key={i} size="xs" c="dimmed">
+                {ch.number !== null ? `#${ch.number} ` : ''}{ch.name}
+              </Text>
+            ))}
+            {channels.length > COLLAPSE_AT && (
+              <Button
+                size="compact-xs" variant="subtle" color="gray" mt={2}
+                onClick={() => setPreviewExpanded(e => ({ ...e, [key]: !expanded }))}
+              >
+                {expanded ? 'show less' : `show all ${channels.length}`}
+              </Button>
+            )}
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
   async function runCascade() {
-    // 1) Deploy
+    // 1) Deploy — Nuke uses deploy-selective (wipe+rebuild); Edit uses surgical diff.
     setPhase('deploying'); setDeployLines([]);
-    const body = {
-      selections: channelSels.map(s => ({ original_number: s.number, deploy_number: s.deployNumber, include: s.include })),
-      protected_numbers: protectedNums,
-      no_delete: false,
-    };
-    const dcode = await streamPipeline('/pipeline/deploy-selective', {}, (ev) => { if (ev.type === 'line') setDeployLines(l => [...l, ev.text]); }, body);
+    let dcode: number;
+    if (setup.mode === 'edit') {
+      // Surgical deploy: create new, delete removed, update changed, leave unchanged.
+      dcode = await streamPipeline('/pipeline/surgical-deploy', {}, (ev) => { if (ev.type === 'line') setDeployLines(l => [...l, ev.text]); });
+    } else {
+      const body = {
+        selections: channelSels.map(s => ({ original_number: s.number, deploy_number: s.deployNumber, include: s.include })),
+        protected_numbers: protectedNums,
+        no_delete: false,
+      };
+      dcode = await streamPipeline('/pipeline/deploy-selective', {}, (ev) => { if (ev.type === 'line') setDeployLines(l => [...l, ev.text]); }, body);
+    }
     const dok = dcode === 0; setDeployOk(dok);
     if (!dok) { setPhase('done'); return; }
 
@@ -1175,7 +2059,11 @@ function DeployStep({ setup }: { setup: SetupState }) {
           subtitle={deployOk ? 'Here’s how it went' : 'Check the output below'}
         >
           <Stack gap="sm" mb="md">
-            <StatusRow status={deployOk ? 'ok' : 'warn'} label={`${deployStats.created ?? '—'} channels deployed${deployStats.skipped ? `, ${deployStats.skipped} skipped` : ''}`} />
+            <StatusRow status={deployOk ? 'ok' : 'warn'} label={
+              deployStats.updated !== null
+                ? `${deployStats.created ?? 0} created · ${deployStats.updated} updated · ${deployStats.deleted ?? 0} deleted`
+                : `${deployStats.created ?? '—'} channels deployed${deployStats.skipped ? `, ${deployStats.skipped} skipped` : ''}`
+            } />
             {deployOk && (
               <StatusRow status={artStatus} label={
                 artStatus === 'skip' ? 'Channel art — skipped'
@@ -1241,7 +2129,92 @@ function DeployStep({ setup }: { setup: SetupState }) {
     );
   }
 
-  // ── Probe + review + deploy ──
+  // ── Edit mode (surgical diff) — no probe needed ──
+  if (isEditMode) {
+    return (
+      <Stack gap="lg">
+        <Card withBorder p="lg">
+          <Text fw={700} size="lg" mb="xs">Surgical deploy</Text>
+          <Text size="sm" c="dimmed" mb="md">
+            Compares your new lineup to what's currently deployed. New channels are created, removed channels are deleted,
+            changed channels are updated in place (preserving their Tunarr id and Plex DVR mapping), and unchanged channels are left alone.
+            Live channels are always updated in place — never deleted.
+          </Text>
+
+          {/* Preview gate */}
+          {!cascadeRunning && !previewConfirmed && (
+            <>
+              {previewLoading && (
+                <Group gap="xs" mb="md">
+                  <Loader size="xs" />
+                  <Text size="sm" c="dimmed">Calculating diff…</Text>
+                </Group>
+              )}
+              {previewError && (
+                <Alert color="red" variant="light" icon={<IconAlertCircle size={16} />} mb="md">
+                  Could not load preview: {previewError}
+                  <Button size="compact-xs" variant="subtle" ml="sm" onClick={loadPreview}>Retry</Button>
+                </Alert>
+              )}
+              {preview && !previewLoading && (
+                <Stack gap="xs" mb="md">
+                  <Text size="sm" fw={600}>What will happen:</Text>
+                  {preview.create.length > 0 && (
+                    <PreviewBucket label="new (create)" channels={preview.create} color="green" symbol="+" />
+                  )}
+                  {preview.update.length > 0 && (
+                    <PreviewBucket label="changed (update in place)" channels={preview.update} color="blue" symbol="~" />
+                  )}
+                  {preview.delete.length > 0 && (
+                    <PreviewBucket label="removed (delete)" channels={preview.delete} color="red" symbol="−" />
+                  )}
+                  {preview.unchanged.length > 0 && (
+                    <PreviewBucket label="unchanged (left alone)" channels={preview.unchanged} color="dimmed" symbol="=" />
+                  )}
+                  {preview.foreign.length > 0 && (
+                    <PreviewBucket label="not managed by Programmarr (untouched)" channels={preview.foreign} color="dimmed" symbol="·" />
+                  )}
+                  {preview.create.length === 0 && preview.update.length === 0 && preview.delete.length === 0 && (
+                    <Text size="sm" c="dimmed">Nothing to do — lineup is already deployed.</Text>
+                  )}
+                  <Group gap="sm" mt="xs">
+                    <Button color="orange" leftSection={<IconCheck size={15} />}
+                      onClick={() => setPreviewConfirmed(true)}>
+                      Confirm deploy
+                    </Button>
+                    <Button variant="subtle" color="gray" onClick={loadPreview}>Refresh</Button>
+                  </Group>
+                </Stack>
+              )}
+            </>
+          )}
+
+          {/* Cascade running or confirmed */}
+          {(cascadeRunning || previewConfirmed) && (
+            <Stack gap="xs" mb="md">
+              {cascadeRunning && (
+                <>
+                  <StatusRow status={phase === 'deploying' ? 'running' : 'ok'} label="Applying surgical diff to Tunarr" />
+                  {setup.fetchArt && <StatusRow status={phase === 'art' ? 'running' : phase === 'sync' ? 'ok' : 'pending'} label="Fetching channel art" />}
+                  <StatusRow status={phase === 'sync' ? 'running' : 'pending'} label="Syncing with Plex" />
+                  <TerminalOutput
+                    lines={phase === 'deploying' ? deployLines : phase === 'art' ? artLines : syncLines}
+                    done={false} success height={200} />
+                </>
+              )}
+              {previewConfirmed && !cascadeRunning && (
+                <Button color="orange" leftSection={<IconPlayerPlay size={15} />} onClick={runCascade}>
+                  Apply Changes
+                </Button>
+              )}
+            </Stack>
+          )}
+        </Card>
+      </Stack>
+    );
+  }
+
+  // ── Nuke mode — probe + review + deploy ──
   return (
     <Stack gap="lg">
       <Card withBorder p="lg">
@@ -1301,6 +2274,56 @@ function DeployStep({ setup }: { setup: SetupState }) {
             <Text size="sm" c="dimmed" mb="md">
               Deploying writes to Tunarr now.{setup.fetchArt ? ' Channel art and' : ' '} Plex sync run automatically right after.
             </Text>
+
+            {/* Preview gate */}
+            {!cascadeRunning && !previewConfirmed && (
+              <>
+                {previewLoading && (
+                  <Group gap="xs" mb="md">
+                    <Loader size="xs" />
+                    <Text size="sm" c="dimmed">Calculating diff…</Text>
+                  </Group>
+                )}
+                {previewError && (
+                  <Alert color="red" variant="light" icon={<IconAlertCircle size={16} />} mb="md">
+                    Could not load preview: {previewError}
+                    <Button size="compact-xs" variant="subtle" ml="sm" onClick={loadPreview}>Retry</Button>
+                  </Alert>
+                )}
+                {preview && !previewLoading && (
+                  <Stack gap="xs" mb="md">
+                    <Text size="sm" fw={600}>What will happen:</Text>
+                    {preview.create.length > 0 && (
+                      <PreviewBucket label="new (create)" channels={preview.create} color="green" symbol="+" />
+                    )}
+                    {preview.update.length > 0 && (
+                      <PreviewBucket label="changed (update in place)" channels={preview.update} color="blue" symbol="~" />
+                    )}
+                    {preview.delete.length > 0 && (
+                      <PreviewBucket label="removed (delete)" channels={preview.delete} color="red" symbol="−" />
+                    )}
+                    {preview.unchanged.length > 0 && (
+                      <PreviewBucket label="unchanged (left alone)" channels={preview.unchanged} color="dimmed" symbol="=" />
+                    )}
+                    {preview.foreign.length > 0 && (
+                      <PreviewBucket label="not managed by Programmarr (untouched)" channels={preview.foreign} color="dimmed" symbol="·" />
+                    )}
+                    {preview.create.length === 0 && preview.update.length === 0 && preview.delete.length === 0 && (
+                      <Text size="sm" c="dimmed">Nothing to do — lineup is already deployed.</Text>
+                    )}
+                    <Group gap="sm" mt="xs">
+                      <Button color="orange" leftSection={<IconCheck size={15} />}
+                        disabled={includedCount === 0 || conflictNums.size > 0}
+                        onClick={() => setPreviewConfirmed(true)}>
+                        Confirm deploy
+                      </Button>
+                      <Button variant="subtle" color="gray" onClick={() => { setPreviewConfirmed(false); loadPreview(); }}>Refresh</Button>
+                    </Group>
+                  </Stack>
+                )}
+              </>
+            )}
+
             {cascadeRunning && (
               <Stack gap="xs" mb="md">
                 <StatusRow status={phase === 'deploying' ? 'running' : 'ok'} label="Deploying to Tunarr" />
@@ -1311,7 +2334,7 @@ function DeployStep({ setup }: { setup: SetupState }) {
                   done={false} success height={200} />
               </Stack>
             )}
-            {!cascadeRunning && (
+            {previewConfirmed && !cascadeRunning && (
               <Button color="orange" leftSection={<IconPlayerPlay size={15} />} onClick={runCascade}
                 disabled={includedCount === 0 || conflictNums.size > 0}>
                 Deploy {includedCount} Channel{includedCount !== 1 ? 's' : ''}
@@ -1333,12 +2356,18 @@ const blankPlanner: PlannerState = {
 export default function Run() {
   const [step, setStep] = useState(0);
   const [setup, setSetup] = useState<SetupState>({
-    method: 'build', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
+    mode: 'edit', method: 'build', includeCollections: false, fetchArt: false, protectedNums: [], start: 1,
   });
   const [planner, setPlanner] = useState<PlannerState>(blankPlanner);
   const [aiExtras, setAiExtras] = useState(false);
 
   const { method, includeCollections } = setup;
+
+  // Called when the user clicks Nuke: only affects DEPLOY behavior (wipe Tunarr + number from 1).
+  // Picks are sticky — Nuke does NOT reset or delete planner_state.json.
+  function handleNuke() {
+    // intentionally empty: picks are preserved; deploy behavior is governed by setup.mode
+  }
 
   // Pools the user flagged for AI tonal-splitting (✨ on a broad/decade pick).
   const curatePools = Object.entries(planner.selected)
@@ -1371,7 +2400,7 @@ export default function Run() {
         {steps.map(s => (
           <Stepper.Step key={s.key} label={s.label} description={s.desc}>
             <Box mt="lg">
-              {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} />}
+              {s.key === 'setup' && <SetupStep setup={setup} onChange={patchSetup} onDone={next} onNuke={handleNuke} />}
               {s.key === 'export' && <ExportStep onDone={next} />}
               {s.key === 'planner' && <PlannerStep planner={planner} setPlanner={setPlanner} setup={setup} aiExtras={aiExtras} setAiExtras={setAiExtras} onDone={next} />}
               {s.key === 'discover' && <DiscoverStep discover curatePools={curatePools} onDone={next} />}

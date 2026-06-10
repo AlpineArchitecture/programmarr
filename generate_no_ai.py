@@ -3,15 +3,17 @@
 generate_no_ai.py — Generate a starter channels.json without any AI.
 
 Reads plex_library.csv and auto-generates:
-  - Decade movie channels (Movie block) from year metadata
-  - Genre movie channels (Movie block) from genre metadata
-  - TV Marathon channels (Marathon block) for shows with 50+ episodes
-  - Placeholder entries for franchise/themed channels for manual editing
+  - TV Marathon channels from shows with 50+ episodes
+  - Decade movie channels from year metadata
+  - Genre movie channels from genre metadata
+  - Placeholder entries for franchise/specialty channels for manual editing
 
-Block numbers come from the shared channel_blocks layout (see --start / --block-sizes).
+Channel numbers are assigned sequentially from --start, packed tight in the
+category order given by --order (or the canonical default order from
+channel_blocks.CANONICAL_ORDER).  Empty categories consume no numbers.
 
-Output is a valid channels.json ready for create.py, but franchise channels
-will have empty content lists that you fill in manually.
+Output is a valid channels.json ready for create.py, but franchise/specialty
+channels will have empty content lists that you fill in manually.
 
 Usage:
     python generate_no_ai.py                    # reads plex_library.csv
@@ -20,15 +22,18 @@ Usage:
     python generate_no_ai.py --genres "Comedy,Horror,Western"  # only these genres
     python generate_no_ai.py --decades 1980,1990               # only these decades
     python generate_no_ai.py --types marathons,movies          # skip placeholder blocks
+    python generate_no_ai.py --order marathon,movie,franchise  # category order
+    python generate_no_ai.py --start 1                         # first channel number
 
 Toggle flags (omit any flag to keep its default = "all"):
     --genres   comma-separated Plex genre tags for movie channels
     --decades  comma-separated decade start years (1970, 1980, …)
     --types    comma-separated content types: marathons, tv_blocks, movies,
                franchise, specialty
+    --order    comma-separated category keys controlling numbering order
+               (default: channel_blocks.CANONICAL_ORDER)
     --min-items minimum titles for a genre/decade channel (default 5)
-    --start    first channel number (default 10); blocks accumulate from here
-    --block-sizes  per-category sizes, e.g. 'marathon=10,movie=20' (default 10/10/20/20/10)
+    --start    first channel number (default 1)
 """
 
 import argparse
@@ -41,9 +46,9 @@ import channel_blocks
 
 DEFAULT_CSV = "plex_library.csv"
 DEFAULT_OUT = "channels.json"
+DEFAULT_START = channel_blocks.DEFAULT_START
 
-# Decade buckets: (label, start_year, end_year). Channel numbers within the
-# movie block (30–49) are now assigned dynamically, not fixed per decade.
+# Decade buckets: (label, start_year, end_year).
 DECADE_RANGES = [
     ("70s Movies",   1970, 1979),
     ("80s Movies",   1980, 1989),
@@ -53,8 +58,7 @@ DECADE_RANGES = [
     ("2020s Movies", 2020, 2029),
 ]
 
-# Canonical movie genres: (display name, Plex genre tag). Non-canonical genres
-# (anything the user toggles on via "More genres") are named "<tag> Movies".
+# Canonical movie genres: (display name, Plex genre tag).
 CANONICAL_GENRES = [
     ("Comedy",      "Comedy"),
     ("Action",      "Action"),
@@ -66,29 +70,10 @@ CANONICAL_GENRES = [
 ]
 TAG_TO_DISPLAY = {tag.lower(): disp for disp, tag in CANONICAL_GENRES}
 
-# Content-type blocks generate_no_ai can emit. Marathons + movies are real
-# (data-driven); tv_blocks/franchise/specialty are placeholder scaffolds.
+# Content-type blocks generate_no_ai can emit.
 ALL_TYPES = ["marathons", "tv_blocks", "movies", "franchise", "specialty"]
 
 DEFAULT_MIN_ITEMS = 5
-
-
-def parse_block_sizes(val):
-    """Parse a 'marathon=10,movie=20,...' CLI string into a size dict.
-
-    Partial maps are fine — channel_blocks.normalize_sizes fills the rest from
-    defaults. Malformed pairs are ignored (defaults apply).
-    """
-    sizes = {}
-    for pair in parse_list(val):
-        if "=" not in pair:
-            continue
-        key, _, num = pair.partition("=")
-        try:
-            sizes[key.strip()] = int(num)
-        except ValueError:
-            pass
-    return sizes
 
 
 def load_csv(path):
@@ -129,12 +114,12 @@ def main():
     parser = argparse.ArgumentParser(description="Generate starter channels.json without AI")
     parser.add_argument("--csv", default=DEFAULT_CSV, help="Input CSV from export.py")
     parser.add_argument("--out", default=DEFAULT_OUT, help="Output JSON path")
-    parser.add_argument("--start", type=int, default=10, metavar="N",
-                        help="Starting channel number — the first block begins here (default: 10)")
-    parser.add_argument("--block-sizes", default=None, metavar="K=N,K=N",
-                        help="Per-category block sizes, e.g. 'marathon=10,movie=20'. Omitted "
-                             "categories use defaults (10/10/20/20/10). Blocks are placed by "
-                             "accumulating sizes from --start.")
+    parser.add_argument("--start", type=int, default=DEFAULT_START, metavar="N",
+                        help="Starting channel number — the first category begins here (default: 1)")
+    parser.add_argument("--order", default=None, metavar="KEY,KEY",
+                        help="Comma-separated category keys controlling numbering order "
+                             "(e.g. 'marathon,movie,franchise'). Default: canonical order from "
+                             "channel_blocks.CANONICAL_ORDER.")
     parser.add_argument("--genres", default=None, metavar="TAG,TAG",
                         help="Comma-separated Plex genre tags to build movie channels for "
                              "(e.g. 'Comedy,Science Fiction,Western'). Default: all canonical genres.")
@@ -149,7 +134,7 @@ def main():
                         help=f"Minimum titles for a genre/decade movie channel (default: {DEFAULT_MIN_ITEMS}).")
     args = parser.parse_args()
 
-    layout = channel_blocks.resolve_layout(parse_block_sizes(args.block_sizes), args.start)
+    order = channel_blocks.resolve_order(parse_list(args.order) or None)
 
     # Resolve toggle selections (None = use defaults / all).
     sel_genres = parse_list(args.genres) if args.genres is not None else [tag for _, tag in CANONICAL_GENRES]
@@ -162,58 +147,50 @@ def main():
     shows = [r for r in rows if r["Type"] == "TV"]
 
     print(f"Loaded {len(movies)} movies, {len(shows)} TV shows from {args.csv}")
-    print("Channel blocks: " + " · ".join(
-        f"{channel_blocks.BLOCK_LABELS[k]} {layout[k]['start']}–{layout[k]['end']}"
-        for k in channel_blocks.CANONICAL_ORDER))
 
-    channels = []
+    # ── Build channels per category, collecting them before numbering ─────────
+    # Each category bucket holds channel dicts without numbers yet.
+    marathon_channels: list[dict] = []
+    tv_block_channels: list[dict] = []
+    movie_channels: list[dict] = []
+    franchise_channels: list[dict] = []
+    specialty_channels: list[dict] = []
 
-    # ── TV Marathons (10s): shows with 50+ episodes ────────────────────────────
+    # ── TV Marathons: shows with 50+ episodes ────────────────────────────────
     if "marathons" in sel_types:
         print("\nBuilding TV Marathon channels (50+ episodes)...")
-        ch_num = layout["marathon"]["start"]
         marathon_shows = sorted(
             [s for s in shows if parse_year(s.get("Episodes")) and int(s["Episodes"]) >= 50],
             key=lambda s: -int(s["Episodes"])
         )
-        for show in marathon_shows:
-            channels.append({
-                "number": ch_num,
-                "name": f"{show['Title']} 24/7",
+        for show_row in marathon_shows:
+            marathon_channels.append({
+                "name": f"{show_row['Title']} 24/7",
                 "shuffle": "ordered",
-                "content": [show["Title"]],
-                "_note": f"{show['Episodes']} episodes, {show['Seasons']} seasons",
+                "content": [show_row["Title"]],
+                "_note": f"{show_row['Episodes']} episodes, {show_row['Seasons']} seasons",
             })
-            print(f"  #{ch_num} {show['Title']} 24/7 ({show['Episodes']} eps)")
-            ch_num += 1
-            if ch_num > layout["marathon"]["end"]:
-                print("  (TV Marathon block full — remaining marathon candidates skipped)")
-                break
+            print(f"  {show_row['Title']} 24/7 ({show_row['Episodes']} eps)")
 
-    # ── Movie channels (30–49): decades then genres, numbered sequentially ──────
-    # Decade and genre channels share the movie block; numbers are assigned in
-    # order so an arbitrary set of toggles never collides or leaves fixed gaps.
-    if "movies" in sel_types:
-        next_num = layout["movie"]["start"]
-        block_end = layout["movie"]["end"]
-
-        def emit_movie_channel(name, titles):
-            nonlocal next_num
-            if next_num > block_end:
-                return False
-            if len(titles) < args.min_items:
-                print(f"  Skipping {name}: only {len(titles)} titles (min {args.min_items})")
-                return True
-            channels.append({
-                "number": next_num,
+    # ── TV Block placeholders ─────────────────────────────────────────────────
+    if "tv_blocks" in sel_types:
+        print("\nAdding TV block placeholder channels (edit content manually)...")
+        tv_placeholders = [
+            ("TGIF",                      "block", []),
+            ("Saturday Morning Cartoons",  "block", []),
+            ("Animated TV Block",          "block", []),
+        ]
+        for name, shuffle, content in tv_placeholders:
+            tv_block_channels.append({
                 "name": name,
-                "shuffle": "shuffle",
-                "content": sorted(titles),
+                "shuffle": shuffle,
+                "content": content,
+                "_note": "EDIT: add show titles manually from plex_library.csv",
             })
-            print(f"  #{next_num} {name}: {len(titles)} movies")
-            next_num += 1
-            return True
+            print(f"  {name} (placeholder)")
 
+    # ── Movie channels: decades then genres ──────────────────────────────────
+    if "movies" in sel_types:
         print("\nBuilding decade channels...")
         for name, yr_start, yr_end in DECADE_RANGES:
             if sel_decade_starts is not None and yr_start not in sel_decade_starts:
@@ -224,79 +201,93 @@ def main():
             ]
             if not titles:
                 continue
-            if not emit_movie_channel(name, titles):
-                print("  (movies block full — remaining decade channels skipped)")
-                break
+            if len(titles) < args.min_items:
+                print(f"  Skipping {name}: only {len(titles)} titles (min {args.min_items})")
+                continue
+            movie_channels.append({
+                "name": name,
+                "shuffle": "shuffle",
+                "content": sorted(titles),
+            })
+            print(f"  {name}: {len(titles)} movies")
 
         print("\nBuilding genre channels...")
         for genre_tag in sel_genres:
-            if next_num > block_end:
-                print("  (movies block full — remaining genre channels skipped)")
-                break
             genre_lower = genre_tag.lower()
             titles = [
                 r["Title"] for r in movies
                 if any(g.lower() == genre_lower for g in parse_genres(r.get("Genres", "")))
             ]
-            emit_movie_channel(genre_channel_name(genre_tag), titles)
+            if len(titles) < args.min_items:
+                print(f"  Skipping {genre_channel_name(genre_tag)}: only {len(titles)} titles (min {args.min_items})")
+                continue
+            movie_channels.append({
+                "name": genre_channel_name(genre_tag),
+                "shuffle": "shuffle",
+                "content": sorted(titles),
+            })
+            print(f"  {genre_channel_name(genre_tag)}: {len(titles)} movies")
 
     # ── Franchise placeholders ────────────────────────────────────────────────
     if "franchise" in sel_types:
         print("\nAdding franchise placeholder channels (edit content manually)...")
-        _base = layout["franchise"]["start"]
         placeholders = [
-            (_base + 0, "Marvel MCU",     "ordered", []),
-            (_base + 1, "Star Wars",      "ordered", []),
-            (_base + 2, "Indiana Jones",  "ordered", []),
-            (_base + 3, "James Bond",     "ordered", []),
-            (_base + 4, "The Matrix",     "ordered", []),
+            ("Marvel MCU",     "ordered", []),
+            ("Star Wars",      "ordered", []),
+            ("Indiana Jones",  "ordered", []),
+            ("James Bond",     "ordered", []),
+            ("The Matrix",     "ordered", []),
         ]
-        for num, name, shuffle, content in placeholders:
-            channels.append({
-                "number": num,
+        for name, shuffle, content in placeholders:
+            franchise_channels.append({
                 "name": name,
                 "shuffle": shuffle,
                 "content": content,
                 "_note": "EDIT: add titles manually from plex_library.csv",
             })
-            print(f"  #{num} {name} (placeholder)")
-
-    # ── TV Block placeholders ──────────────────────────────────────────────────
-    if "tv_blocks" in sel_types:
-        print("\nAdding TV block placeholder channels (edit content manually)...")
-        _base = layout["tv_block"]["start"]
-        tv_placeholders = [
-            (_base + 0, "TGIF",                      "block", []),
-            (_base + 1, "Saturday Morning Cartoons",  "block", []),
-            (_base + 2, "Animated TV Block",          "block", []),
-        ]
-        for num, name, shuffle, content in tv_placeholders:
-            channels.append({
-                "number": num,
-                "name": name,
-                "shuffle": shuffle,
-                "content": content,
-                "_note": "EDIT: add show titles manually from plex_library.csv",
-            })
-            print(f"  #{num} {name} (placeholder)")
+            print(f"  {name} (placeholder)")
 
     # ── Specialty placeholders ────────────────────────────────────────────────
     if "specialty" in sel_types:
         print("\nAdding specialty placeholder channels...")
-        _base = layout["specialty"]["start"]
-        specialty = [
-            (_base + 0, "Hackers 24/7",  "ordered", ["Hackers"]),
-            (_base + 1, "Holiday Cheer", "shuffle", []),
+        specialty_list = [
+            ("Hackers 24/7",  "ordered", ["Hackers"]),
+            ("Holiday Cheer", "shuffle", []),
         ]
-        for num, name, shuffle, content in specialty:
-            channels.append({
-                "number": num,
+        for name, shuffle, content in specialty_list:
+            specialty_channels.append({
                 "name": name,
                 "shuffle": shuffle,
                 "content": content,
                 "_note": "" if content else "EDIT: add titles manually",
             })
-            print(f"  #{num} {name}")
+            print(f"  {name}")
+
+    # ── Assign numbers using sequential tight packing ─────────────────────────
+    # Map generate_no_ai type buckets to channel_blocks category keys.
+    bucket_map = {
+        "marathon":  marathon_channels,
+        "tv_block":  tv_block_channels,
+        "movie":     movie_channels,
+        "franchise": franchise_channels,
+        "specialty": specialty_channels,
+    }
+    counts = {cat: len(bucket_map.get(cat, [])) for cat in channel_blocks.CANONICAL_ORDER}
+    numbers = channel_blocks.assign_numbers(order, counts, args.start)
+
+    print("\nCategory order and numbers:")
+    for cat in order:
+        if numbers.get(cat):
+            label = channel_blocks.BLOCK_LABELS.get(cat, cat)
+            nums = numbers[cat]
+            print(f"  {label}: {nums[0]}–{nums[-1]}")
+
+    channels: list[dict] = []
+    for cat in order:
+        cat_channels = bucket_map.get(cat, [])
+        cat_numbers = numbers.get(cat, [])
+        for num, ch in zip(cat_numbers, cat_channels):
+            channels.append({"number": num, **ch})
 
     # ── Write output ───────────────────────────────────────────────────────────
     channels.sort(key=lambda c: c["number"])

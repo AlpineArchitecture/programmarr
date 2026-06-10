@@ -20,19 +20,22 @@ for _p in (str(BACKEND), str(ROOT)):
         sys.path.insert(0, _p)
 
 # Exact header export.py writes (see export.py fieldnames). Multi-valued columns
-# (Genres / Director / Actors) are pipe-separated.
+# (Genres / Director / Actors / Country / Mood / Style) are pipe-separated.
 CSV_FIELDS = ["Title", "Year", "Type", "Rating", "Genres",
-              "Director", "Studio", "Actors", "Seasons", "Episodes"]
+              "Director", "Studio", "Actors", "Seasons", "Episodes",
+              "Country", "Mood", "Style"]
 
 
-def movie(title, year=2000, genres="", studio="", director="", actors="", rating="PG"):
+def movie(title, year=2000, genres="", studio="", director="", actors="", rating="PG",
+          country="", mood="", style=""):
     return {"Title": title, "Year": str(year), "Type": "Movie", "Rating": rating,
-            "Genres": genres, "Director": director, "Studio": studio, "Actors": actors}
+            "Genres": genres, "Director": director, "Studio": studio, "Actors": actors,
+            "Country": country, "Mood": mood, "Style": style}
 
 
-def show(title, genres="", seasons=1, episodes=10):
+def show(title, genres="", seasons=1, episodes=10, studio=""):
     return {"Title": title, "Type": "TV", "Genres": genres,
-            "Seasons": str(seasons), "Episodes": str(episodes)}
+            "Studio": studio, "Seasons": str(seasons), "Episodes": str(episodes)}
 
 
 @pytest.fixture

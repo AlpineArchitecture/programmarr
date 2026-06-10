@@ -35,6 +35,27 @@ export const api = {
 
   getCsvInfo: () => req<CsvInfo>('/pipeline/csv/info'),
   getFacets: (minItems = 5) => req<LibraryFacets>(`/pipeline/facets?min_items=${minItems}`),
+  getProgrammingBlocks: () => req<ProgrammingBlock[]>('/pipeline/programming-blocks'),
+  getFranchises: (refresh = false) =>
+    req<FranchiseCandidate[]>(`/pipeline/franchises${refresh ? '?refresh=1' : ''}`),
+  startTmdbScan: (refresh = false) =>
+    req<{ running: boolean; cached: boolean; reason?: string }>(
+      `/pipeline/tmdb-scan${refresh ? '?refresh=1' : ''}`,
+      { method: 'POST' },
+    ),
+  tmdbScanStatus: () =>
+    req<{ running: boolean; scanned: number; total: number; done: boolean }>(
+      '/pipeline/tmdb-scan/status',
+    ),
+  startTvmazeScan: (refresh = false) =>
+    req<{ running: boolean; cached: boolean; reason?: string }>(
+      `/pipeline/tvmaze-scan${refresh ? '?refresh=1' : ''}`,
+      { method: 'POST' },
+    ),
+  tvmazeScanStatus: () =>
+    req<{ running: boolean; scanned: number; total: number; done: boolean }>(
+      '/pipeline/tvmaze-scan/status',
+    ),
   getPrompt: (target?: string, prefs?: string, start?: number) => {
     const p = new URLSearchParams();
     if (target) p.set('target', target);
@@ -89,6 +110,27 @@ export const api = {
   applyChannel: (n: number) =>
     req<{ ok: boolean; number: number; program_count: number }>(
       `/channels/${n}/apply`, { method: 'POST' }),
+
+  // ── Planner state ──
+  getPlannerState: () => req<PlannerStateFile>('/pipeline/planner-state'),
+  savePlannerState: (state: PlannerStateFile) =>
+    req<{ ok: boolean }>('/pipeline/planner-state', {
+      method: 'PUT',
+      body: JSON.stringify(state),
+    }),
+  deletePlannerState: () =>
+    req<{ ok: boolean }>('/pipeline/planner-state', { method: 'DELETE' }),
+
+  // ── Deploy preview (diff without Tunarr writes) ──
+  deployPreview: (mode: 'edit' | 'nuke') =>
+    req<DeployPreviewResult>('/pipeline/deploy-preview', {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
+
+  // ── Surgical deploy (Add/Edit mode) ──
+  surgicalDeploy: () =>
+    fetch(`${BASE}/pipeline/surgical-deploy`, { method: 'POST' }),
 
   // ── Live channels (recipes) ──
   previewRecipe: (value: string, order?: string | null, exclude: string[] = []) =>
@@ -177,6 +219,10 @@ export interface BlendFacet { genres: string[]; displays: string[]; count: numbe
 export interface EntityFacet { value: string; count: number }
 export interface TvGenreFacet { genre: string; count: number }
 export interface MarathonFacet { title: string; episodes: number; seasons: number }
+/** Genres present in BOTH the movie and TV libraries above the TV_MOVIE_MIX_MIN floor. */
+export interface TvMovieGenreFacet { genre: string; tv_count: number; movie_count: number }
+/** A TMDB-keyword themed channel candidate (computed from the F9 enrichment cache). */
+export interface ThemeFacet { name: string; count: number; keyword_ids: number[]; titles: string[] }
 export interface LibraryFacets {
   exists: boolean;
   movies?: number;
@@ -192,11 +238,24 @@ export interface LibraryFacets {
   actors?: EntityFacet[];
   tv_genres?: TvGenreFacet[];
   marathons?: MarathonFacet[];
+  tv_movie_genres?: TvMovieGenreFacet[];
+  /** TV show counts by TVmaze network, above NETWORK_MIN floor. Empty while the TVmaze scan is running. */
+  networks?: EntityFacet[];
+  /** TMDB-keyword themed channel candidates. Empty until the TMDB enrichment scan completes. */
+  themes?: ThemeFacet[];
+  /** Movie counts by Plex Country tag, above COUNTRY_MIN floor. Empty when column absent from CSV (old export). */
+  countries?: EntityFacet[];
+  /** Movie counts by Plex Mood tag, above MOOD_MIN floor. Empty when column absent. */
+  moods?: EntityFacet[];
+  /** Movie counts by Plex Style tag, above STYLE_MIN floor. Empty when column absent. */
+  styles?: EntityFacet[];
 }
 
 // ── Planner v2 candidate composition ──
 export type CandidateKind =
-  | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon';
+  | 'genre' | 'genre_decade' | 'blend' | 'studio' | 'director' | 'actor' | 'tv_genre' | 'marathon'
+  | 'tv_movie_mix' | 'network' | 'programming_block' | 'franchise' | 'theme'
+  | 'country' | 'mood' | 'style';
 export interface CandidateSpec {
   kind: CandidateKind;
   name?: string;
@@ -204,7 +263,28 @@ export interface CandidateSpec {
   genres?: string[];
   decade_start?: number;
   value?: string;
+  /** programming_block: the resolved member titles present in the library. */
+  titles?: string[];
   shuffle?: 'ordered' | 'shuffle' | 'block';
+}
+
+/** A single member of a franchise (present in the library). */
+export interface FranchiseMember { title: string; year: number | null; type: string }
+/** A franchise candidate from TMDB belongs_to_collection or Wikidata P179/P8345. */
+export interface FranchiseCandidate {
+  name: string;
+  source: 'tmdb' | 'wikidata';
+  members: FranchiseMember[];
+}
+
+/** A single programming block from the catalog, enriched with library-present members. */
+export interface ProgrammingBlock {
+  name: string;
+  era: string;
+  network: string;
+  shows: string[];
+  present_shows: string[];
+  present_count: number;
 }
 export interface ComposeResult {
   ok: boolean;
@@ -227,6 +307,31 @@ export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show
 export interface PlexCollection { id: string; name: string; count: number; section: string; summary: string; has_poster: boolean }
 export interface CollectionSelection { name: string; channel_number: number; include: boolean }
 export interface LogEntry { name: string; size: number; modified: number }
+
+/** Persisted Planner intent saved to data/planner_state.json after each Build. */
+export interface PlannerStateFile {
+  activeGenres: Record<string, boolean>;
+  activeDecades: Record<string, boolean>;
+  selected: Record<string, CandidateSpec>;
+  curate: Record<string, boolean>;
+  // batch toggles
+  aiExtras: boolean;
+  commEnabled: boolean;
+  commListId: string | null;
+  commPad: string;
+  autoUpdate: boolean;
+}
+
+/** A single channel entry in a deploy-preview bucket. */
+export interface DeployPreviewChannel { number: number | null; name: string }
+/** Result of POST /pipeline/deploy-preview — five named diff buckets. */
+export interface DeployPreviewResult {
+  create: DeployPreviewChannel[];
+  update: DeployPreviewChannel[];
+  delete: DeployPreviewChannel[];
+  unchanged: DeployPreviewChannel[];
+  foreign: DeployPreviewChannel[];
+}
 
 // ── SSE streaming ──────────────────────────────────────────────────────────────
 

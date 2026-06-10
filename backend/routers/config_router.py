@@ -18,9 +18,9 @@ class ConfigModel(BaseModel):
     tmdb_api_key: str = ""
     auth_username: str = ""
     auth_password: str = ""
-    # Per-category channel-block sizes ({"marathon": 10, "movie": 20, ...}). Empty
-    # ⇒ defaults from channel_blocks.DEFAULT_SIZES. Stored as-is; normalized at read.
-    channel_blocks: dict = {}
+    # Ordered list of category keys controlling channel numbering order.
+    # Empty ⇒ canonical default from channel_blocks.CANONICAL_ORDER at use time.
+    channel_order: list = []
 
 
 def _path() -> Path:
@@ -54,11 +54,11 @@ def save_config(config: ConfigModel):
     for field in ("auth_password", "plex_token", "tmdb_api_key"):
         if data.get(field) == MASK:
             data[field] = existing.get(field, "")
-    # channel_blocks is a dict, not a clearable string field: only overwrite it when the
-    # caller actually sends sizes. An empty {} (e.g. an Onboarding save that doesn't manage
-    # block sizes) must NOT wipe a previously-saved layout — so handle it before the
-    # blank-field pruning below.
-    blocks = data.pop("channel_blocks", None) or {}
+    # channel_order is a list, not a clearable string field: only overwrite it when the
+    # caller actually sends a non-empty list. An empty [] (e.g. an Onboarding save that
+    # skips the order step) must NOT wipe a previously-saved order — so handle it before
+    # the blank-field pruning below.
+    order = data.pop("channel_order", None) or []
     # Merge onto existing so keys the UI form doesn't manage are preserved — e.g.
     # the live-channel keys (recipes_enabled, recipe_interval_hours) and the advanced
     # config keys (tunarr_channel_group, tunarr_stream_mode), which are edited directly
@@ -69,8 +69,9 @@ def save_config(config: ConfigModel):
             merged[k] = v
         else:
             merged.pop(k, None)
-    if blocks:
-        merged["channel_blocks"] = blocks
+    if order:
+        merged["channel_order"] = order
+    # Preserve old channel_blocks key silently (don't crash; just ignore it).
     with open(_path(), "w") as f:
         json.dump(merged, f, indent=4)
     return {"ok": True}
