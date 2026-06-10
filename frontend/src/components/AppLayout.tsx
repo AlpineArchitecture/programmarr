@@ -13,6 +13,7 @@ import {
   IconSun,
 } from '@tabler/icons-react';
 import { Link, useLocation } from 'react-router-dom';
+import UpdateBanner from './UpdateBanner';
 
 const NAV = [
   { label: 'Dashboard', icon: IconLayoutDashboard, path: '/dashboard' },
@@ -87,7 +88,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </Box>
       </AppShell.Navbar>
 
-      <AppShell.Main>{children}</AppShell.Main>
+      <AppShell.Main>
+        <UpdateBanner />
+        {children}
+      </AppShell.Main>
     </AppShell>
   );
 }
