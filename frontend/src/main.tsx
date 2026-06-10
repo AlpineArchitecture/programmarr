@@ -4,6 +4,7 @@ import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 import '@mantine/dropzone/styles.css';
 import '@mantine/code-highlight/styles.css';
+import './theme.css';
 import App from './App';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

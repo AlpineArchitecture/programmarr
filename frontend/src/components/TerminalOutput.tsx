@@ -19,7 +19,7 @@ export default function TerminalOutput({ lines, done, success, height = 320 }: P
     <Box
       style={{
         backgroundColor: '#0d0e0f',
-        border: '1px solid var(--mantine-color-dark-4)',
+        border: '1px solid var(--border-subtle)',
         borderRadius: 'var(--mantine-radius-sm)',
         overflow: 'hidden',
       }}
@@ -28,7 +28,7 @@ export default function TerminalOutput({ lines, done, success, height = 320 }: P
       <Box
         style={{
           backgroundColor: 'var(--mantine-color-dark-6)',
-          borderBottom: '1px solid var(--mantine-color-dark-4)',
+          borderBottom: '1px solid var(--border-subtle)',
           padding: '6px 12px',
           display: 'flex',
           gap: 6,

@@ -53,7 +53,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
         <Box
           p="md"
           pt={0}
-          style={{ borderTop: '1px solid var(--mantine-color-dark-4)' }}
+          style={{ borderTop: '1px solid var(--border-subtle)' }}
         >
           {content === null ? (
             <Loader size="xs" mt="sm" />

@@ -18,7 +18,7 @@ export const theme = createTheme({
           borderRight: '1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-5))',
         },
         main: {
-          backgroundColor: 'light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8))',
+          backgroundColor: 'var(--app-bg)',
         },
       },
     },

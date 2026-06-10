@@ -78,13 +78,13 @@ function CategoryOrderEditor({ order, onChange }: CategoryOrderEditorProps) {
                     style={{
                       ...drag.draggableProps.style,
                       background: snapshot.isDragging
-                        ? 'var(--mantine-color-dark-6)'
+                        ? 'var(--surface-sunken)'
                         : undefined,
                       borderRadius: 'var(--mantine-radius-sm)',
                       border: '1px solid',
                       borderColor: snapshot.isDragging
                         ? 'var(--mantine-color-orange-7)'
-                        : 'var(--mantine-color-dark-4)',
+                        : 'var(--border-subtle)',
                     }}
                   >
                     <Box

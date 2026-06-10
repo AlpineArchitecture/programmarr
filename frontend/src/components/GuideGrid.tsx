@@ -116,15 +116,15 @@ export function GuideGrid({
   });
 
   return (
-    <Box style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--mantine-color-dark-4)', borderRadius: 8 }}>
+    <Box style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border-subtle)', borderRadius: 8 }}>
       {/* Header row: empty rail + time axis */}
       <Box style={{ display: 'flex', flexShrink: 0 }}>
         {/* Rail header */}
         <Box style={{
           width: RAIL_WIDTH, minWidth: RAIL_WIDTH, height: HEADER_HEIGHT,
-          borderRight: '1px solid var(--mantine-color-dark-4)',
-          borderBottom: '1px solid var(--mantine-color-dark-4)',
-          background: 'var(--mantine-color-dark-7)',
+          borderRight: '1px solid var(--border-subtle)',
+          borderBottom: '1px solid var(--border-subtle)',
+          background: 'var(--surface-panel)',
           flexShrink: 0,
         }} />
         {/* Time labels — mirrors the scrollable content area */}
@@ -132,7 +132,7 @@ export function GuideGrid({
           ref={scrollRef}
           style={{ flex: 1, overflowX: 'auto', overflowY: 'hidden' }}
         >
-          <Box style={{ position: 'relative', width: contentWidth, height: HEADER_HEIGHT, background: 'var(--mantine-color-dark-7)', borderBottom: '1px solid var(--mantine-color-dark-4)' }}>
+          <Box style={{ position: 'relative', width: contentWidth, height: HEADER_HEIGHT, background: 'var(--surface-panel)', borderBottom: '1px solid var(--border-subtle)' }}>
             {timeLabels.map(({ label, left }) => (
               <Text
                 key={left}
@@ -160,7 +160,7 @@ export function GuideGrid({
                   top: 0,
                   bottom: 0,
                   width: 1,
-                  background: 'var(--mantine-color-dark-4)',
+                  background: 'var(--border-subtle)',
                 }}
               />
             ))}
@@ -179,7 +179,7 @@ export function GuideGrid({
             const body = railRef.current?.parentElement?.querySelector('[data-grid-scroll]') as HTMLDivElement | null;
             if (body) body.scrollTop += e.deltaY;
           }}
-          style={{ width: RAIL_WIDTH, minWidth: RAIL_WIDTH, overflowY: 'hidden', flexShrink: 0, borderRight: '1px solid var(--mantine-color-dark-4)' }}
+          style={{ width: RAIL_WIDTH, minWidth: RAIL_WIDTH, overflowY: 'hidden', flexShrink: 0, borderRight: '1px solid var(--border-subtle)' }}
         >
           {guide.channels.map((ch) => (
             <Box
@@ -192,11 +192,11 @@ export function GuideGrid({
                 gap: 8,
                 padding: '0 10px',
                 cursor: 'pointer',
-                borderBottom: '1px solid var(--mantine-color-dark-5)',
-                background: 'var(--mantine-color-dark-7)',
+                borderBottom: '1px solid var(--border-subtle)',
+                background: 'var(--surface-panel)',
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--mantine-color-dark-6)'; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--mantine-color-dark-7)'; }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-sunken)'; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--surface-panel)'; }}
             >
               {ch.icon && (
                 <Box
@@ -232,7 +232,7 @@ export function GuideGrid({
                   top: 0,
                   bottom: 0,
                   width: 1,
-                  background: 'var(--mantine-color-dark-5)',
+                  background: 'var(--border-subtle)',
                   pointerEvents: 'none',
                 }}
               />
@@ -264,7 +264,7 @@ export function GuideGrid({
                     left: 0,
                     right: 0,
                     height: ROW_HEIGHT,
-                    borderBottom: '1px solid var(--mantine-color-dark-5)',
+                    borderBottom: '1px solid var(--border-subtle)',
                   }}
                 >
                   {blocks.map(({ prog, left, width, color }) => (

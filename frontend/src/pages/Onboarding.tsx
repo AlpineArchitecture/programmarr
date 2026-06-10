@@ -126,7 +126,7 @@ export default function Onboarding({ onComplete }: Props) {
   }
 
   return (
-    <Center style={{ minHeight: '100vh', backgroundColor: 'var(--mantine-color-dark-8)' }}>
+    <Center style={{ minHeight: '100vh', backgroundColor: 'var(--app-bg)' }}>
       <Box style={{ width: '100%', maxWidth: 520 }} p="xl">
         {/* Logo */}
         <Stack align="center" mb="xl" gap="xs">

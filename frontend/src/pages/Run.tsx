@@ -128,7 +128,7 @@ function MethodCard({ icon, title, desc, active, onClick }: {
       style={{
         cursor: 'pointer',
         borderColor: active ? 'var(--mantine-color-orange-5)' : undefined,
-        backgroundColor: active ? 'var(--mantine-color-dark-6)' : undefined,
+        backgroundColor: active ? 'var(--surface-sunken)' : undefined,
       }}
     >
       <Group gap="sm" wrap="nowrap">
@@ -153,8 +153,8 @@ function ModeCard({ icon, title, desc, active, onClick }: {
         withBorder p="lg"
         style={{
           cursor: 'pointer',
-          borderColor: active ? 'var(--mantine-color-orange-5)' : 'var(--mantine-color-dark-4)',
-          backgroundColor: active ? 'var(--mantine-color-dark-6)' : undefined,
+          borderColor: active ? 'var(--mantine-color-orange-5)' : 'var(--border-subtle)',
+          backgroundColor: active ? 'var(--surface-sunken)' : undefined,
           transition: 'border-color .12s, background-color .12s',
         }}
       >
@@ -337,11 +337,11 @@ function SetupStep({ setup, onChange, onDone, onNuke }: {
                 <Group gap="sm"><Loader size="xs" color="orange" /><Text size="sm" c="dimmed">Checking Tunarr…</Text></Group>
               ) : (
                 <>
-                  <ScrollArea h={160} style={{ borderRadius: 4, border: '1px solid var(--mantine-color-dark-5)' }}>
+                  <ScrollArea h={160} style={{ borderRadius: 4, border: '1px solid var(--border-subtle)' }}>
                     <Stack gap={0}>
                       {tunarrChannels.map(c => (
                         <Group key={c.number} gap="xs" px="sm" py={5}
-                          style={{ borderBottom: '1px solid var(--mantine-color-dark-6)', opacity: checkedNums.has(c.number) ? 1 : 0.4 }}>
+                          style={{ borderBottom: '1px solid var(--border-subtle)', opacity: checkedNums.has(c.number) ? 1 : 0.4 }}>
                           <Checkbox size="xs" checked={checkedNums.has(c.number)}
                             onChange={(e) => toggleChannel(c.number, e.currentTarget.checked)} style={{ flexShrink: 0 }} />
                           <Text size="xs" c="dimmed" w={36} style={{ flexShrink: 0 }}>#{c.number}</Text>
@@ -486,7 +486,7 @@ function ExportStep({ onDone }: { onDone: () => void }) {
       </Group>
 
       {done && success && summary && (
-        <Card withBorder p="sm" bg="dark.8">
+        <Card withBorder p="sm" style={{ background: 'var(--surface-panel)' }}>
           <Group justify="space-between" wrap="nowrap" gap="sm">
             <Group gap="sm" wrap="nowrap">
               <ThemeIcon color="green" variant="light" size="sm" radius="xl" style={{ flexShrink: 0 }}><IconCheck size={12} /></ThemeIcon>
@@ -513,7 +513,7 @@ function CandRow({ id, label, count, checked, onToggle, curatable, curate, onCur
 }) {
   return (
     <Group key={id} gap="xs" wrap="nowrap" py={3} px={6}
-      style={{ borderRadius: 4, cursor: 'pointer', backgroundColor: curate ? 'var(--mantine-color-grape-9)' : checked ? 'var(--mantine-color-dark-6)' : undefined }}
+      style={{ borderRadius: 4, cursor: 'pointer', backgroundColor: curate ? 'light-dark(var(--mantine-color-grape-1), var(--mantine-color-grape-9))' : checked ? 'var(--surface-sunken)' : undefined }}
       onClick={onToggle}>
       <Checkbox size="xs" checked={checked} readOnly style={{ flexShrink: 0 }} />
       <Text size="xs" style={{ flex: 1, minWidth: 0 }} lineClamp={1}>
@@ -1528,7 +1528,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 {tmdbScanTotal > 0 && (
                   <Box
                     style={{
-                      height: 6, borderRadius: 3, background: 'var(--mantine-color-dark-4)',
+                      height: 6, borderRadius: 3, background: 'var(--border-subtle)',
                       overflow: 'hidden',
                     }}
                   >
@@ -1685,7 +1685,7 @@ function DiscoverStep({ discover, curatePools, onDone }: { discover: boolean; cu
               <Text size="sm" fw={600}>Copy the prompt</Text>
               <Button size="xs" variant="light" color="grape" leftSection={<IconCopy size={13} />} onClick={copyPrompt} disabled={!prompt}>Copy</Button>
             </Group>
-            <ScrollArea h={160} mt="xs" style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--mantine-color-dark-4)' }}>
+            <ScrollArea h={160} mt="xs" style={{ backgroundColor: '#0d0e0f', borderRadius: 4, border: '1px solid var(--border-subtle)' }}>
               <Box p="sm"><Text size="xs" style={{ fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap', color: '#d4d4d4' }}>{prompt || 'Building prompt…'}</Text></Box>
             </ScrollArea>
           </Step>
@@ -1724,7 +1724,7 @@ function DiscoverStep({ discover, curatePools, onDone }: { discover: boolean; cu
                   styles={{ input: { fontFamily: 'ui-monospace, monospace', fontSize: 12 } }} />
                 <Text size="xs" c="dimmed" ta="center">— or —</Text>
                 <Dropzone onDrop={handleFileDrop} accept={{ 'application/json': ['.json'], 'text/plain': ['.jsonl', '.txt'] }}
-                  maxFiles={1} loading={validating} styles={{ root: { borderColor: 'var(--mantine-color-dark-4)' } }}>
+                  maxFiles={1} loading={validating} styles={{ root: { borderColor: 'var(--border-subtle)' } }}>
                   <Group justify="center" gap="sm" py="sm"><IconUpload size={18} color="var(--mantine-color-dimmed)" /><Text size="sm" c="dimmed">Drop the saved .json / .jsonl file here</Text></Group>
                 </Dropzone>
                 {result && !result.ok && <Alert color="red" icon={<IconX size={16} />} variant="light">Invalid — {result.error}</Alert>}
@@ -1824,13 +1824,13 @@ function CollectionsStep({ start, onDone }: { start: number; onDone: () => void 
         </Group>
       </Group>
 
-      <Stack gap={0} style={{ border: '1px solid var(--mantine-color-dark-4)', borderRadius: 8, overflow: 'hidden' }}>
+      <Stack gap={0} style={{ border: '1px solid var(--border-subtle)', borderRadius: 8, overflow: 'hidden' }}>
         {collections.map((col, idx) => {
           const sel = selections[idx];
           if (!sel) return null;
           return (
             <Group key={col.id} gap="sm" wrap="nowrap" px="md" py={6}
-              style={{ borderBottom: idx < collections.length - 1 ? '1px solid var(--mantine-color-dark-6)' : undefined, opacity: sel.include ? 1 : 0.4 }}>
+              style={{ borderBottom: idx < collections.length - 1 ? '1px solid var(--border-subtle)' : undefined, opacity: sel.include ? 1 : 0.4 }}>
               <Checkbox checked={sel.include} onChange={(e) => updateSel(idx, { include: e.currentTarget.checked })} style={{ flexShrink: 0 }} />
               <Image src={`/api/pipeline/collections/${col.id}/poster`} w={28} h={42} radius="sm" fit="cover" style={{ flexShrink: 0 }}
                 fallbackSrc="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='42'%3E%3Crect width='28' height='42' fill='%23333'/%3E%3C/svg%3E" />
@@ -2240,13 +2240,13 @@ function DeployStep({ setup }: { setup: SetupState }) {
                 <Button size="xs" variant="subtle" py={2} onClick={() => setChannelSels(s => s.map(x => ({ ...x, include: false })))}>None</Button>
               </Group>
             </Group>
-            <ScrollArea.Autosize mah={320} style={{ border: '1px solid var(--mantine-color-dark-5)', borderRadius: 4 }}>
+            <ScrollArea.Autosize mah={320} style={{ border: '1px solid var(--border-subtle)', borderRadius: 4 }}>
               <Stack gap={0}>
                 {channelSels.map((sel, idx) => {
                   const hasConflict = sel.include && effectiveProtected.has(sel.deployNumber);
                   return (
                     <Group key={sel.number} gap="xs" wrap="nowrap" py={5} px={6}
-                      style={{ borderBottom: '1px solid var(--mantine-color-dark-6)', opacity: sel.include ? 1 : 0.4, backgroundColor: hasConflict ? 'var(--mantine-color-red-9)' : undefined }}>
+                      style={{ borderBottom: '1px solid var(--border-subtle)', opacity: sel.include ? 1 : 0.4, backgroundColor: hasConflict ? 'var(--mantine-color-red-9)' : undefined }}>
                       <Checkbox size="xs" checked={sel.include} onChange={(e) => updateChannelSel(idx, { include: e.currentTarget.checked })} style={{ flexShrink: 0 }} />
                       <NumberInput value={sel.deployNumber}
                         onChange={(v) => { const n = typeof v === 'number' ? v : parseInt(String(v)); if (!isNaN(n)) updateChannelSel(idx, { deployNumber: n }); }}

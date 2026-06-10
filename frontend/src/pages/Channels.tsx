@@ -74,7 +74,7 @@ function FranchiseBuilder({
   const includedCount = matches ? matches.filter((m) => !excluded.has(m.title)).length : 0;
 
   return (
-    <Card withBorder p="sm" bg="dark.6">
+    <Card withBorder p="sm" style={{ background: 'var(--surface-sunken)' }}>
       <Stack gap="xs">
         <Text size="sm" fw={600}>Franchise auto-match</Text>
         <Text size="xs" c="dimmed">

@@ -1,0 +1,25 @@
+/* Semantic surface/border tokens, resolved per color scheme.
+ *
+ * Mantine sets data-mantine-color-scheme="light|dark" on <html>, so we define
+ * each token twice. The dark values mirror exactly what the call sites used
+ * before these tokens existed, so dark mode is visually unchanged; the light
+ * values give a clean, warm light theme instead of leaked dark-mode colors.
+ *
+ * --app-bg       page background (warm off-white in light)
+ * --surface-panel  rails, headers, raised panels (white in light)
+ * --surface-sunken hover / active / sunken rows
+ * --border-subtle  hairline borders & dividers
+ */
+[data-mantine-color-scheme='light'] {
+  --app-bg: #f3f1ee;
+  --surface-panel: var(--mantine-color-white);
+  --surface-sunken: #ece9e4;
+  --border-subtle: var(--mantine-color-gray-3);
+}
+
+[data-mantine-color-scheme='dark'] {
+  --app-bg: var(--mantine-color-dark-8);
+  --surface-panel: var(--mantine-color-dark-7);
+  --surface-sunken: var(--mantine-color-dark-6);
+  --border-subtle: var(--mantine-color-dark-4);
+}
