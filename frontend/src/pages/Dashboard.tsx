@@ -4,7 +4,7 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconBolt, IconBroadcast, IconCircleCheck, IconCircleX,
+  IconBolt, IconBroadcast, IconCircleCheck, IconCircleX, IconExternalLink,
   IconPlayerPause, IconPlayerPlay, IconRefresh, IconRepeat, IconSettings,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
@@ -30,6 +30,21 @@ function ConnectionCard({ label, status }: { label: string; status: ConnStatus |
           )}
         </Box>
         <Badge color={ok ? 'green' : 'red'} variant="dot">{ok ? 'Online' : 'Offline'}</Badge>
+        {status?.url && (
+          <Tooltip label="Open in new tab">
+            <ActionIcon
+              component="a"
+              href={status.url}
+              target="_blank"
+              rel="noreferrer"
+              variant="subtle"
+              color="gray"
+              size="sm"
+            >
+              <IconExternalLink size={14} />
+            </ActionIcon>
+          </Tooltip>
+        )}
       </Group>
     </Card>
   );
