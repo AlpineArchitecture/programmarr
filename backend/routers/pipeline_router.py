@@ -54,6 +54,16 @@ _tvmaze_scan_state: dict = {
     "sig": None,
 }
 
+# ── Wikidata franchise scan state ─────────────────────────────────────────────
+# Mirrors the TMDB scan pattern.  Keyed by library signature.
+# Wikidata is the lowest-certainty source; failures degrade to TMDB-only.
+_wikidata_scan_lock = threading.Lock()
+_wikidata_scan_state: dict = {
+    "running": False,
+    "done": False,
+    "sig": None,
+}
+
 
 def _load_config() -> dict:
     try:
@@ -813,6 +823,373 @@ def tvmaze_scan_status():
 # ── End TVmaze helpers ─────────────────────────────────────────────────────────
 
 
+# ── Wikidata franchise helpers ────────────────────────────────────────────────
+# Wikidata is the second franchise source, merged with TMDB.  It is the
+# lowest-certainty source — all matching is conservative and every failure
+# path degrades to TMDB-only results with no exception propagation.
+#
+# SPARQL approach:
+#   1. Build a label→title map from all library titles (movies + TV shows).
+#   2. Query Wikidata for items that carry wdt:P179 ("part of the series") or
+#      wdt:P8345 ("media franchise"), filtering to films (wd:Q11424) and TV
+#      series (wd:Q5398426).  The query is VALUES-driven so only labels that
+#      exist in the library are sent — no full-dump scan.
+#   3. Group results by (series/franchise entity, series label).
+#   4. Accept a group ONLY when ≥ FRANCHISE_MIN distinct library titles match
+#      AND each matched title maps unambiguously (1-to-1) to that series.
+#      A title that matches multiple series is rejected for all of them.
+#   5. Shape each accepted group as a franchise dict compatible with the TMDB
+#      format: {"name", "source": "wikidata", "members": [{title, year, type}]}.
+#
+# Limitations acknowledged:
+#   - Label matching is case-insensitive exact; variant titles (subtitles, "The"
+#     placement) will miss.  This is intentional — precision over recall.
+#   - Year matching is used when available to reduce false positives on common
+#     short titles (e.g. "It").
+#   - The SPARQL query has a hard 20-second timeout and is wrapped in try/except;
+#     any failure returns an empty list immediately.
+
+_WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
+_WIKIDATA_USER_AGENT = (
+    "Programmarr/1.0 (https://github.com/alpinearchitecture/programmarr; "
+    "franchise enrichment; contact via GitHub issues)"
+)
+# Wikidata SPARQL batch size: send at most this many VALUES per query to avoid
+# hitting the query-complexity limit or 30s query timeout.
+_WIKIDATA_BATCH_SIZE = 50
+
+
+def _wikidata_sparql(query: str, timeout: int = 20) -> dict:
+    """Execute a Wikidata SPARQL query and return the parsed JSON response.
+
+    Raises on any network or HTTP error — callers must catch.
+    Wikidata requires a descriptive User-Agent; we set one.
+    """
+    params = urllib.parse.urlencode({"query": query, "format": "json"})
+    url = f"{_WIKIDATA_SPARQL_URL}?{params}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/sparql-results+json",
+            "User-Agent": _WIKIDATA_USER_AGENT,
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _wikidata_franchise_batch(
+    labels: list[str],
+    label_to_rows: dict[str, list[dict]],
+) -> dict[str, dict]:
+    """Query Wikidata for franchise/series membership for a batch of title labels.
+
+    Returns: series_name → {"name": str, "member_titles": set[str]}
+    where member_titles are library titles (canonical case from label_to_rows)
+    that Wikidata grouped into the same series/franchise.
+
+    Conservative matching rules applied here:
+      - Only films (wd:Q11424) and TV series (wd:Q5398426) are considered.
+      - A library title is accepted for a series only when it maps 1-to-1
+        (same label appearing in multiple series is rejected for all).
+      - Year cross-check: when the Wikidata item has a year and the library
+        row has a year, they must match within ±1 to guard against title
+        collisions on common short names.
+    """
+    if not labels:
+        return {}
+
+    # Build a VALUES clause with quoted, escaped labels.
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    values_list = " ".join(f'"{_esc(lbl)}"@en' for lbl in labels)
+    query = f"""
+SELECT ?item ?itemLabel ?seriesLabel ?seriesYear ?itemYear WHERE {{
+  VALUES ?titleLabel {{ {values_list} }}
+  ?item rdfs:label ?titleLabel .
+  ?item wikibase:sitelinks/schema:about ?_ .
+  {{
+    ?item wdt:P31 wd:Q11424 .
+  }} UNION {{
+    ?item wdt:P31 wd:Q5398426 .
+  }}
+  {{
+    ?item wdt:P179 ?series .
+  }} UNION {{
+    ?item wdt:P8345 ?series .
+  }}
+  ?series rdfs:label ?seriesLabel .
+  FILTER(LANG(?seriesLabel) = "en")
+  OPTIONAL {{ ?series wdt:P571 ?seriesYear . }}
+  OPTIONAL {{ ?item  wdt:P577 ?itemDate  . }}
+  BIND(SUBSTR(STR(?itemDate), 1, 4) AS ?itemYear)
+  SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en" . }}
+}}
+LIMIT 500
+"""
+    try:
+        data = _wikidata_sparql(query, timeout=20)
+    except Exception:
+        return {}
+
+    bindings = data.get("results", {}).get("bindings", [])
+
+    # label_lower → set of series labels it appeared in
+    # used to detect ambiguous titles (one label → multiple series → reject)
+    label_to_series: dict[str, set[str]] = {}
+    series_to_members: dict[str, dict] = {}  # series_label → {name, members: {label: year_ok}}
+
+    for b in bindings:
+        item_label_raw = b.get("itemLabel", {}).get("value", "")
+        series_label = b.get("seriesLabel", {}).get("value", "").strip()
+        item_year_str = b.get("itemYear", {}).get("value", "")
+        if not item_label_raw or not series_label:
+            continue
+
+        item_label_lower = item_label_raw.lower()
+        # Only process labels that appear in our library set
+        if item_label_lower not in {lbl.lower() for lbl in labels}:
+            continue
+
+        # Year cross-check: if both Wikidata and library have a year, they must
+        # be within ±1 (handles films released near year-end on different sides).
+        wd_year = None
+        try:
+            wd_year = int(item_year_str[:4]) if len(item_year_str) >= 4 else None
+        except (ValueError, TypeError):
+            pass
+
+        lib_rows = label_to_rows.get(item_label_lower, [])
+        if wd_year is not None and lib_rows:
+            lib_year = None
+            for row in lib_rows:
+                y = _safe_int(row.get("Year"))
+                if y is not None:
+                    lib_year = y
+                    break
+            if lib_year is not None and abs(wd_year - lib_year) > 1:
+                continue  # year mismatch — reject this pairing
+
+        if item_label_lower not in label_to_series:
+            label_to_series[item_label_lower] = set()
+        label_to_series[item_label_lower].add(series_label)
+
+        if series_label not in series_to_members:
+            series_to_members[series_label] = {"name": series_label, "members": {}}
+        series_to_members[series_label]["members"][item_label_lower] = item_label_raw
+
+    # Reject any label that maps to multiple series (ambiguous).
+    ambiguous = {lbl for lbl, series_set in label_to_series.items() if len(series_set) > 1}
+    for series_info in series_to_members.values():
+        for amb in ambiguous:
+            series_info["members"].pop(amb, None)
+
+    return series_to_members
+
+
+def _run_wikidata_franchise_scan(
+    data_dir: Path,
+    movies: list[dict],
+    shows: list[dict],
+    sig: str,
+) -> None:
+    """Background thread: query Wikidata for franchise memberships.
+
+    Writes data_dir/wikidata_cache.json when done (or on any error — writes
+    empty/partial result so the cache key is set and we don't re-scan on every
+    request).  Always defensive: never raises.
+    """
+    global _wikidata_scan_state
+
+    with _wikidata_scan_lock:
+        _wikidata_scan_state.update({"running": True, "done": False, "sig": sig})
+
+    franchises: list[dict] = []
+    try:
+        # Build label → list of library rows map (lower-cased key).
+        # Includes both movies and TV shows — Wikidata franchises span both.
+        label_to_rows: dict[str, list[dict]] = {}
+        for row in movies + shows:
+            t = row.get("Title", "").strip()
+            if t:
+                key = t.lower()
+                if key not in label_to_rows:
+                    label_to_rows[key] = []
+                label_to_rows[key].append(row)
+
+        all_labels = list(label_to_rows.keys())  # unique lower-cased titles
+
+        # Process in batches to avoid SPARQL complexity limits.
+        # Use canonical (original-case) labels from the first matching row.
+        canonical_label: dict[str, str] = {
+            lbl: label_to_rows[lbl][0].get("Title", lbl) for lbl in all_labels
+        }
+
+        merged_series: dict[str, dict] = {}  # series_label → {name, members: {lbl: raw_label}}
+        # Track globally which labels appear in multiple series across all batches,
+        # so cross-batch ambiguity is also rejected.
+        global_label_to_series: dict[str, set[str]] = {}
+
+        for i in range(0, len(all_labels), _WIKIDATA_BATCH_SIZE):
+            batch = all_labels[i: i + _WIKIDATA_BATCH_SIZE]
+            batch_canonical = [canonical_label[lbl] for lbl in batch]
+            batch_result = _wikidata_franchise_batch(batch_canonical, label_to_rows)
+            for series_label, series_info in batch_result.items():
+                if series_label not in merged_series:
+                    merged_series[series_label] = {
+                        "name": series_info["name"],
+                        "members": {},
+                    }
+                for lbl, raw in series_info["members"].items():
+                    merged_series[series_label]["members"][lbl] = raw
+                    if lbl not in global_label_to_series:
+                        global_label_to_series[lbl] = set()
+                    global_label_to_series[lbl].add(series_label)
+
+        # Global ambiguity pass: a label found in 2+ series → reject from all.
+        globally_ambiguous = {
+            lbl for lbl, series_set in global_label_to_series.items() if len(series_set) > 1
+        }
+        for series_info in merged_series.values():
+            for amb in globally_ambiguous:
+                series_info["members"].pop(amb, None)
+
+        # Build franchise list: series with >= FRANCHISE_MIN library members.
+        for series_label, series_info in merged_series.items():
+            member_map = series_info["members"]
+            if len(member_map) < FRANCHISE_MIN:
+                continue
+            members: list[dict] = []
+            for lbl, raw_title in member_map.items():
+                # Use canonical library title (prefer original case from library).
+                lib_title = canonical_label.get(lbl, raw_title)
+                # Find year from library row.
+                year = None
+                for row in label_to_rows.get(lbl, []):
+                    y = _safe_int(row.get("Year"))
+                    if y is not None:
+                        year = y
+                        break
+                # Determine type from library.
+                row_type = "Movie"
+                for row in label_to_rows.get(lbl, []):
+                    if row.get("Type") == "TV":
+                        row_type = "TV"
+                        break
+                members.append({"title": lib_title, "year": year, "type": row_type})
+
+            members.sort(key=lambda m: (m["year"] or 9999, m["title"]))
+            franchises.append({
+                "name": series_info["name"],
+                "source": "wikidata",
+                "members": members,
+            })
+
+        franchises.sort(key=lambda fr: -len(fr["members"]))
+    except Exception as exc:
+        # Any unexpected failure → log and return empty; never crash.
+        print(f"[wikidata] franchise scan error: {exc}", flush=True)
+        franchises = []
+
+    cache = {"sig": sig, "franchises": franchises}
+    try:
+        cache_path = data_dir / "wikidata_cache.json"
+        cache_path.write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+    with _wikidata_scan_lock:
+        _wikidata_scan_state.update({"running": False, "done": True})
+
+
+def _load_wikidata_cache(data_dir: Path, sig: str) -> list[dict] | None:
+    """Return the Wikidata franchise list if the cache exists and matches sig; else None."""
+    try:
+        p = data_dir / "wikidata_cache.json"
+        if not p.exists():
+            return None
+        cached = json.loads(p.read_text(encoding="utf-8"))
+        if cached.get("sig") != sig:
+            return None
+        return cached.get("franchises", [])
+    except Exception:
+        return None
+
+
+def _start_wikidata_scan_impl(
+    data_dir: Path,
+    movies: list[dict],
+    shows: list[dict],
+    sig: str,
+    refresh: bool = False,
+) -> None:
+    """Kick off a background Wikidata franchise scan if needed.
+
+    Called from _start_tmdb_scan_impl (after TMDB finishes) and from
+    get_franchises when no cache exists.  No-ops when already running,
+    cache valid, or library is empty.  Never raises.
+    """
+    try:
+        with _wikidata_scan_lock:
+            already_running = _wikidata_scan_state["running"]
+            scan_sig = _wikidata_scan_state.get("sig")
+
+        if already_running and scan_sig == sig and not refresh:
+            return
+        if not refresh and _load_wikidata_cache(data_dir, sig) is not None:
+            with _wikidata_scan_lock:
+                _wikidata_scan_state.update({"running": False, "done": True, "sig": sig})
+            return
+        if not movies and not shows:
+            return
+
+        with _wikidata_scan_lock:
+            _wikidata_scan_state.update({"running": True, "done": False, "sig": sig})
+
+        t = threading.Thread(
+            target=_run_wikidata_franchise_scan,
+            args=(data_dir, movies, shows, sig),
+            daemon=True,
+            name="wikidata-franchise-scan",
+        )
+        t.start()
+    except Exception:
+        pass  # defensive — never let a scan-start failure propagate
+
+
+def _merge_franchises(tmdb: list[dict], wikidata: list[dict]) -> list[dict]:
+    """Merge TMDB and Wikidata franchise lists, de-duplicating by normalized name.
+
+    TMDB is authoritative: if a name normalizes to the same key as a TMDB franchise,
+    the TMDB entry wins (members from Wikidata are NOT merged in — TMDB's collection
+    data is more precise).  Wikidata-only entries are appended after TMDB entries.
+    Final sort: by member count descending.
+    """
+    seen: set[str] = set()
+    result: list[dict] = []
+
+    for fr in tmdb:
+        norm = _normalize_name(fr["name"])
+        if norm not in seen:
+            seen.add(norm)
+            result.append(fr)
+
+    for fr in wikidata:
+        norm = _normalize_name(fr["name"])
+        if norm not in seen:
+            seen.add(norm)
+            result.append(fr)
+
+    result.sort(key=lambda fr: -len(fr["members"]))
+    return result
+
+
+# ── End Wikidata helpers ───────────────────────────────────────────────────────
+
+
 def _load_themed_keywords() -> list[dict]:
     """Load the curated themed-keyword catalog from SCRIPTS_DIR/themed_keywords.json.
 
@@ -907,19 +1284,38 @@ def _start_tmdb_scan_impl(refresh: bool = False) -> dict:
 
     Separated from the FastAPI route so it can be called directly in tests without
     FastAPI's Query(...) wrapping the default parameter value.
+
+    Also kicks off the Wikidata franchise scan in parallel (it runs independently of
+    the TMDB key requirement, so keyless users still get Wikidata franchises).
     """
     import csv as _csv
-
-    cfg = _load_config()
-    tmdb_key = cfg.get("tmdb_api_key", "").strip()
-    if not tmdb_key:
-        return {"running": False, "cached": False, "reason": "no_tmdb_key"}
 
     csv_path = DATA_DIR / "plex_library.csv"
     if not csv_path.exists():
         return {"running": False, "cached": False, "reason": "no_csv"}
 
     sig = _library_signature()
+
+    # Load all library rows once; TMDB needs movies, Wikidata needs both.
+    movies: list[dict] = []
+    shows: list[dict] = []
+    with open(csv_path, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            if row.get("Type") == "Movie":
+                movies.append(row)
+            elif row.get("Type") == "TV":
+                shows.append(row)
+
+    data_dir = DATA_DIR  # capture for threads (DATA_DIR may be monkeypatched in tests)
+
+    # ── Wikidata: always kick off regardless of TMDB key ──────────────────────
+    _start_wikidata_scan_impl(data_dir, movies, shows, sig, refresh=refresh)
+
+    # ── TMDB: requires an API key ─────────────────────────────────────────────
+    cfg = _load_config()
+    tmdb_key = cfg.get("tmdb_api_key", "").strip()
+    if not tmdb_key:
+        return {"running": False, "cached": False, "reason": "no_tmdb_key"}
 
     with _tmdb_scan_lock:
         already_running = _tmdb_scan_state["running"]
@@ -929,25 +1325,17 @@ def _start_tmdb_scan_impl(refresh: bool = False) -> dict:
         return {"running": True, "cached": False}
 
     # Check cache validity.
-    if not refresh and _load_enrichment_cache(DATA_DIR, sig) is not None:
+    if not refresh and _load_enrichment_cache(data_dir, sig) is not None:
         with _tmdb_scan_lock:
             _tmdb_scan_state.update({"running": False, "done": True, "sig": sig})
         return {"running": False, "cached": True}
 
-    # Load movies to scan.
-    movies: list[dict] = []
-    with open(csv_path, encoding="utf-8") as f:
-        for row in _csv.DictReader(f):
-            if row.get("Type") == "Movie":
-                movies.append(row)
-
-    # Reset state and kick off the background scan.
+    # Reset state and kick off the background TMDB scan.
     with _tmdb_scan_lock:
         _tmdb_scan_state.update({
             "running": True, "scanned": 0, "total": len(movies), "done": False, "sig": sig,
         })
 
-    data_dir = DATA_DIR  # capture for the thread (DATA_DIR may be monkeypatched in tests)
     t = threading.Thread(
         target=_run_tmdb_enrichment_scan,
         args=(data_dir, movies, tmdb_key, sig),
@@ -991,22 +1379,19 @@ def tmdb_scan_status():
 
 @router.get("/pipeline/franchises")
 def get_franchises(refresh: bool = False):
-    """Return franchise candidates derived from the TMDB enrichment cache.
+    """Return franchise candidates from TMDB (F9) and Wikidata (F13), merged.
 
-    Each entry: {"name", "source": "tmdb", "members": [{"title","year","type"}]}
-    where members are library movies belonging to the same TMDB collection.
+    Each entry: {"name", "source": "tmdb"|"wikidata", "members": [{"title","year","type"}]}
 
-    This endpoint is FAST — it reads the enrichment cache written by the background
-    scan started via POST /pipeline/tmdb-scan.  Returns [] while the scan is running
-    or if no tmdb_api_key is configured (Wikidata source will be added in F13).
+    TMDB entries derive from belongs_to_collection via the enrichment scan
+    (requires tmdb_api_key).  Wikidata entries come from P179/P8345 SPARQL queries
+    (no key required) — keyless users still see Wikidata franchises.
 
-    Pass ?refresh=1 to trigger a fresh rescan (delegates to start_tmdb_scan).
+    This endpoint is FAST — both sources read from their respective caches.
+    Returns [] only when BOTH caches are absent (scans not yet done).
+
+    Pass ?refresh=1 to trigger a fresh rescan of both sources.
     """
-    import csv as _csv
-
-    cfg = _load_config()
-    tmdb_key = cfg.get("tmdb_api_key", "").strip()
-
     csv_path = DATA_DIR / "plex_library.csv"
     if not csv_path.exists():
         return []
@@ -1014,17 +1399,41 @@ def get_franchises(refresh: bool = False):
     sig = _library_signature()
 
     if refresh:
-        # Delegate to the scan impl (fire and forget); don't block here.
+        # Delegate to the combined scan impl (fire and forget); don't block here.
         _start_tmdb_scan_impl(refresh=True)
 
-    if not tmdb_key:
-        return []
+    # ── TMDB franchises (requires API key + enrichment cache) ─────────────────
+    cfg = _load_config()
+    tmdb_key = cfg.get("tmdb_api_key", "").strip()
+    tmdb_franchises: list[dict] = []
+    if tmdb_key:
+        enrichment = _load_enrichment_cache(DATA_DIR, sig)
+        if enrichment is not None:
+            tmdb_franchises = _franchises_from_enrichment(enrichment)
 
-    enrichment = _load_enrichment_cache(DATA_DIR, sig)
-    if enrichment is None:
-        return []
+    # ── Wikidata franchises (no key required) ─────────────────────────────────
+    # On first call without a Wikidata cache, kick off the scan lazily.
+    # (Normally started by POST /pipeline/tmdb-scan on Planner mount, but this
+    # covers the keyless path where tmdb-scan returns early without starting it.)
+    wikidata_franchises = _load_wikidata_cache(DATA_DIR, sig)
+    if wikidata_franchises is None:
+        # No cache yet — try to start a scan if not already running.
+        import csv as _csv
+        movies: list[dict] = []
+        shows: list[dict] = []
+        try:
+            with open(csv_path, encoding="utf-8") as f:
+                for row in _csv.DictReader(f):
+                    if row.get("Type") == "Movie":
+                        movies.append(row)
+                    elif row.get("Type") == "TV":
+                        shows.append(row)
+        except Exception:
+            pass
+        _start_wikidata_scan_impl(DATA_DIR, movies, shows, sig)
+        wikidata_franchises = []
 
-    return _franchises_from_enrichment(enrichment)
+    return _merge_franchises(tmdb_franchises, wikidata_franchises)
 
 
 ANCHOR = "## Channel Numbering Scheme"

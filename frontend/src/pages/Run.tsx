@@ -709,6 +709,7 @@ function FranchiseCard({ franchise, isSelected, checkedTitles, onToggle, onToggl
             <Text size="xs" c="dimmed">
               {isSelected ? `${checkedTitles.length} of ` : ''}{franchise.members.length} title{franchise.members.length !== 1 ? 's' : ''}
               {franchise.source === 'tmdb' && <Text span c="blue.4"> · TMDB</Text>}
+              {franchise.source === 'wikidata' && <Text span c="teal.4"> · Wikidata</Text>}
             </Text>
           </Box>
         </Group>
@@ -848,8 +849,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
         setTmdbScanRunning(true);
         startPolling();
       } else {
-        // No TMDB key or no CSV — franchises simply won't be available.
-        setFranchisesFetched(true);
+        // No TMDB key or no CSV.  TMDB won't scan, but Wikidata may still have
+        // franchises from its own cache (started by the backend on this request).
+        // Always call loadFranchises so Wikidata results are shown.
+        loadFranchises();
       }
     }).catch(() => {
       if (!cancelled) setFranchisesFetched(true);
@@ -1575,7 +1578,9 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               </CollapsibleSection>
             );
           })() : franchisesFetched && !tmdbScanRunning && franchises.length === 0 ? (
-            <Text size="sm" c="dimmed">No franchises found — add a TMDB API key in Settings to enable franchise detection.</Text>
+            <Text size="sm" c="dimmed">
+              No franchises found. Add a TMDB API key in Settings to enable TMDB franchise detection.
+            </Text>
           ) : null}
         </Stack>
       </AccordionSection>

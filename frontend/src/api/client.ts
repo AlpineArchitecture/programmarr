@@ -270,10 +270,10 @@ export interface CandidateSpec {
 
 /** A single member of a franchise (present in the library). */
 export interface FranchiseMember { title: string; year: number | null; type: string }
-/** A franchise candidate from Plex collections or TMDB belongs_to_collection. */
+/** A franchise candidate from TMDB belongs_to_collection or Wikidata P179/P8345. */
 export interface FranchiseCandidate {
   name: string;
-  source: 'plex' | 'tmdb';
+  source: 'tmdb' | 'wikidata';
   members: FranchiseMember[];
 }
 
