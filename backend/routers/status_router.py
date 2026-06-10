@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -7,6 +8,41 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter
+
+GITHUB_LATEST_RELEASE = (
+    "https://api.github.com/repos/AlpineArchitecture/programmarr/releases/latest"
+)
+
+
+def _parse_semver(s: str) -> tuple[int, int, int]:
+    """'v0.10.1' -> (0, 10, 1). Tolerant: missing parts -> 0; a pre-release suffix
+    on a part ('1-beta') keeps only the leading digits. Raises ValueError on no digits."""
+    s = (s or "").strip().lstrip("vV")
+    if not s:
+        raise ValueError("empty version")
+    out = []
+    for part in s.split(".")[:3]:
+        digits = ""
+        for ch in part:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        out.append(int(digits) if digits else 0)
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out)  # type: ignore[return-value]
+
+
+def is_newer(latest: str, current: str) -> bool:
+    """True iff `latest` is a strictly higher semver than `current`. Never raises;
+    any unparseable input (or empty `current`) yields False so a failed check
+    degrades to 'no update' rather than crashing the UI."""
+    try:
+        return _parse_semver(latest) > _parse_semver(current)
+    except Exception:
+        return False
+
 
 router = APIRouter()
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent.parent))
