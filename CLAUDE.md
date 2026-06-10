@@ -70,8 +70,11 @@ Two loops: the **fast loop** for iterating, the **parity loop** (Docker) for the
 check before shipping. Always run the parity loop before a release.
 
 **Fast loop — hot reload:**
-```powershell
-.\dev.ps1          # opens Vite (:5173) + uvicorn --reload (:7979)
+```bash
+# Linux/WSL:
+./dev.sh           # Vite (:5173) + uvicorn --reload (:7979) in one terminal; Ctrl+C stops both
+# Windows:
+.\dev.ps1          # opens two PowerShell windows (uses watchfiles; required on Windows)
 ```
 Open **http://localhost:5173** (not 7979). Vite serves the SPA with HMR and proxies `/api`
 → the reload backend. Both read/write the real `./data` files, so behavior matches Docker.
