@@ -38,6 +38,15 @@ export const api = {
   getProgrammingBlocks: () => req<ProgrammingBlock[]>('/pipeline/programming-blocks'),
   getFranchises: (refresh = false) =>
     req<FranchiseCandidate[]>(`/pipeline/franchises${refresh ? '?refresh=1' : ''}`),
+  startTmdbScan: (refresh = false) =>
+    req<{ running: boolean; cached: boolean; reason?: string }>(
+      `/pipeline/tmdb-scan${refresh ? '?refresh=1' : ''}`,
+      { method: 'POST' },
+    ),
+  tmdbScanStatus: () =>
+    req<{ running: boolean; scanned: number; total: number; done: boolean }>(
+      '/pipeline/tmdb-scan/status',
+    ),
   getPrompt: (target?: string, prefs?: string, start?: number) => {
     const p = new URLSearchParams();
     if (target) p.set('target', target);

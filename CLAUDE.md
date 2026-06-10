@@ -19,7 +19,7 @@ The web app's channel-creation experience is a single **Planner** (`Run.tsx`): p
 genres/decades "in play," then check exact curated candidates — per-show marathons,
 genre×decade cuts, named sub-genres, studio/director/actor channels, **TV network channels**
 (from the `Studio` CSV column for TV rows), **classic programming blocks** (matched from
-`programming_blocks.json`), and **franchise channels** (sourced from Plex collections +
+`programming_blocks.json`), and **franchise channels** (detected from TMDB +
 TMDB `belongs_to_collection`, on-demand + cached, with per-member checkboxes) — built
 deterministically via `/pipeline/compose`. An optional "✨ Bring in AI" layer adds
 *discovery* (themed channels filters miss) and *tonal curation* (split a broad pool by
@@ -314,10 +314,14 @@ AI" toggle is on; Collections only if opted in.
   - **Section 0 — TV:** Marathons + Genre-blocks + **Networks** (from TV `Studio` values above `NETWORK_MIN=3`, via `EntitySection`) + **Classic TV Blocks** (from `programming_blocks.json` matched against library, `BLOCK_MIN=3`; spec carries `titles` field with present shows).
   - **Section 1 — Movies:** genre×decade, sub-genres, broad genres, Studios/Directors/Actors.
   - **Section 2 — TV + Movies:** mixed-genre candidates from `tv_movie_genres` facet (genres
-    present in both libraries above `TV_MOVIE_MIX_MIN`) + **Franchises** (expandable cards
-    with per-member checkboxes; fetched lazily on first open via `GET /pipeline/franchises`;
-    sourced from Plex collection children + TMDB `belongs_to_collection`; cached to
-    `data/franchise_cache.json`; `?refresh=1` forces re-scan).
+    present in both libraries above `TV_MOVIE_MIX_MIN`) + **Franchises** (expandable cards with
+    per-member checkboxes; **detected from TMDB only** — Plex collections live in the separate
+    Collections feature, not here). A background TMDB enrichment scan (`POST /pipeline/tmdb-scan`,
+    `GET /pipeline/tmdb-scan/status`) runs each library movie through TMDB once with
+    `append_to_response=keywords` (bounded concurrency), caching `belongs_to_collection` **and**
+    `keywords` to `data/tmdb_enrichment.json` (keyed by library signature; shared with the themed
+    channels). The Planner kicks the scan on mount and shows a progress bar; `GET /pipeline/franchises`
+    reads the cache.
   Each section header opens/closes it (collapsing the other). A "Done — continue" footer
   button collapses the current and opens the next. The genres/decades chips and toggle cards
   (AI/commercials/auto-update) sit above the sections; the build bar sits below.

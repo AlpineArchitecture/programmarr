@@ -758,38 +758,95 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
 
   const [programmingBlocks, setProgrammingBlocks] = useState<ProgrammingBlock[]>([]);
 
-  // Franchise state — fetched lazily when Section 2 (TV+Movies) first opens.
+  // Franchise state.
   const [franchises, setFranchises] = useState<FranchiseCandidate[]>([]);
-  const [franchisesLoading, setFranchisesLoading] = useState(false);
   const [franchisesFetched, setFranchisesFetched] = useState(false);
   // Per-franchise member override: franchise name → Set of checked titles (undefined = all checked).
   const [franchiseMemberOverrides, setFranchiseMemberOverrides] = useState<Record<string, Set<string>>>({});
 
-  useEffect(() => { api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([])); }, []);
+  // TMDB scan state — poll while the background scan is running.
+  const [tmdbScanRunning, setTmdbScanRunning] = useState(false);
+  const [tmdbScanScanned, setTmdbScanScanned] = useState(0);
+  const [tmdbScanTotal, setTmdbScanTotal] = useState(0);
+  const tmdbPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Lazy-fetch franchises when Section 2 (TV+Movies, index=2) first opens.
+  // Eager scan: kick off on Planner mount so the scan runs while the user works
+  // through the TV and Movies sections.  When done, load franchises immediately.
   useEffect(() => {
-    if (openSection !== 2 || franchisesFetched) return;
-    setFranchisesLoading(true);
-    setFranchisesFetched(true);
-    api.getFranchises().then((frs) => {
-      setFranchises(frs);
-      // Edit-mode restore: a saved franchise spec carries a subset of member titles.
-      // Reconcile that into the member-override map so the per-member checkboxes
-      // reflect the saved selection instead of defaulting to all-checked.
-      setFranchiseMemberOverrides(prev => {
-        const next = { ...prev };
-        for (const fr of frs) {
-          const sel = planner.selected[cid.franchise(fr.name)];
-          if (sel?.titles && sel.titles.length < fr.members.length) {
-            next[fr.name] = new Set(sel.titles);
+    let cancelled = false;
+
+    function stopPoll() {
+      if (tmdbPollRef.current !== null) {
+        clearInterval(tmdbPollRef.current);
+        tmdbPollRef.current = null;
+      }
+    }
+
+    function loadFranchises() {
+      if (franchisesFetched) return;
+      setFranchisesFetched(true);
+      api.getFranchises().then((frs) => {
+        if (cancelled) return;
+        setFranchises(frs);
+        // Edit-mode restore: a saved franchise spec carries a subset of member titles.
+        // Reconcile that into the member-override map so per-member checkboxes reflect
+        // the saved selection instead of defaulting to all-checked.
+        setFranchiseMemberOverrides(prev => {
+          const next = { ...prev };
+          for (const fr of frs) {
+            const sel = planner.selected[cid.franchise(fr.name)];
+            if (sel?.titles && sel.titles.length < fr.members.length) {
+              next[fr.name] = new Set(sel.titles);
+            }
           }
-        }
-        return next;
-      });
-    }).catch(() => setFranchises([])).finally(() => setFranchisesLoading(false));
+          return next;
+        });
+      }).catch(() => { if (!cancelled) setFranchises([]); });
+    }
+
+    function startPolling() {
+      stopPoll();
+      tmdbPollRef.current = setInterval(() => {
+        api.tmdbScanStatus().then((s) => {
+          if (cancelled) { stopPoll(); return; }
+          setTmdbScanScanned(s.scanned);
+          setTmdbScanTotal(s.total);
+          if (s.done || !s.running) {
+            setTmdbScanRunning(false);
+            stopPoll();
+            loadFranchises();
+          }
+        }).catch(() => {
+          stopPoll();
+          setTmdbScanRunning(false);
+        });
+      }, 1500);
+    }
+
+    api.startTmdbScan().then((res) => {
+      if (cancelled) return;
+      if (res.cached) {
+        // Cache already valid — fetch franchises immediately.
+        loadFranchises();
+      } else if (res.running) {
+        setTmdbScanRunning(true);
+        startPolling();
+      } else {
+        // No TMDB key or no CSV — franchises simply won't be available.
+        setFranchisesFetched(true);
+      }
+    }).catch(() => {
+      if (!cancelled) setFranchisesFetched(true);
+    });
+
+    return () => {
+      cancelled = true;
+      stopPoll();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openSection]);
+  }, []);
+
+  useEffect(() => { api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([])); }, []);
 
   // Guard: debounced save must not fire before the initial restore completes.
   const restoredRef = useRef(false);
@@ -1276,12 +1333,33 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             <Text size="sm" c="dimmed">No genres appear in both your movie and TV libraries above the threshold.</Text>
           )}
           {/* ── Franchises ─────────────────────────────────────────────────── */}
-          {franchisesLoading ? (
+          {tmdbScanRunning ? (
             <Card withBorder p="sm">
-              <Group gap="sm">
-                <Loader size="xs" color="orange" />
-                <Text size="sm" c="dimmed">Scanning franchises…</Text>
-              </Group>
+              <Stack gap={4}>
+                <Group gap="sm">
+                  <Loader size="xs" color="orange" />
+                  <Text size="sm" c="dimmed">
+                    Scanning TMDB… {tmdbScanScanned} / {tmdbScanTotal || '?'}
+                  </Text>
+                </Group>
+                {tmdbScanTotal > 0 && (
+                  <Box
+                    style={{
+                      height: 6, borderRadius: 3, background: 'var(--mantine-color-dark-4)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <Box
+                      style={{
+                        height: '100%',
+                        width: `${Math.round((tmdbScanScanned / tmdbScanTotal) * 100)}%`,
+                        background: 'var(--mantine-color-orange-5)',
+                        transition: 'width 0.4s ease',
+                      }}
+                    />
+                  </Box>
+                )}
+              </Stack>
             </Card>
           ) : franchises.length > 0 ? (() => {
             const franchiseAddItems: AddItem[] = franchises.map(fr => ({
@@ -1316,8 +1394,8 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 </Stack>
               </CollapsibleSection>
             );
-          })() : !franchisesLoading && franchisesFetched && franchises.length === 0 ? (
-            <Text size="sm" c="dimmed">No franchises found (run Export and check Plex collections).</Text>
+          })() : franchisesFetched && !tmdbScanRunning && franchises.length === 0 ? (
+            <Text size="sm" c="dimmed">No franchises found — add a TMDB API key in Settings to enable franchise detection.</Text>
           ) : null}
         </Stack>
       </AccordionSection>

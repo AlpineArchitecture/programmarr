@@ -1,8 +1,10 @@
 import asyncio
+import concurrent.futures
 import json
 import os
 import re
 import sys
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,6 +29,18 @@ router = APIRouter()
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent.parent))
 SCRIPTS_DIR = Path(os.environ.get("PROGRAMMARR_SCRIPTS", Path(__file__).parent.parent.parent))
 LOGS_DIR = DATA_DIR / "logs"
+
+# ── TMDB enrichment scan state ────────────────────────────────────────────────
+# Module-level, shared across all requests.  A threading.Lock guards all reads
+# and writes so concurrent HTTP calls never see a half-updated dict.
+_tmdb_scan_lock = threading.Lock()
+_tmdb_scan_state: dict = {
+    "running": False,
+    "scanned": 0,
+    "total": 0,
+    "done": False,
+    "sig": None,          # library signature the last scan was for
+}
 
 
 def _load_config() -> dict:
@@ -474,190 +488,278 @@ def _library_signature() -> str:
         return "missing"
 
 
-@router.get("/pipeline/franchises")
-def get_franchises(refresh: bool = False):
-    """Return franchise candidates from Plex collections + TMDB belongs_to_collection.
+def _tmdb_get(path: str, api_key: str, timeout: int = 10):
+    """Single TMDB API call. Raises on network / non-200 errors."""
+    sep = "&" if "?" in path else "?"
+    url = f"https://api.themoviedb.org/3{path}{sep}api_key={api_key}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
 
-    Each entry: {"name", "source", "members": [{"title","year","type"}]}
-    where members are filtered to titles present in plex_library.csv.
 
-    Results are cached to data/franchise_cache.json keyed by the library CSV
-    signature (mtime+size).  Pass ?refresh=1 to force a full re-scan.
+def _enrich_movie(movie_row: dict, tmdb_key: str) -> dict | None:
+    """Fetch TMDB details (collection + keywords) for one library movie.
 
-    TMDB source requires tmdb_api_key in config; skipped if absent.
-    Network/TMDB failures return whatever succeeded (Plex-only on TMDB failure).
+    Returns a dict:
+        {"title": str, "year": int|None,
+         "collection": {"id": int, "name": str} | None,
+         "keywords": [{"id": int, "name": str}]}
+
+    Returns None on any TMDB failure (caller skips the movie).
     """
-    import csv as _csv
-
-    cfg = _load_config()
-    plex_url = cfg.get("plex_url", "").rstrip("/")
-    plex_token = cfg.get("plex_token", "")
-    tmdb_key = cfg.get("tmdb_api_key", "").strip()
-
-    # Build library index.
-    csv_path = DATA_DIR / "plex_library.csv"
-    if not csv_path.exists():
-        return []
-    movies: list[dict] = []
-    shows: list[dict] = []
-    with open(csv_path, encoding="utf-8") as f:
-        for row in _csv.DictReader(f):
-            if row.get("Type") == "Movie":
-                movies.append(row)
-            elif row.get("Type") == "TV":
-                shows.append(row)
-
-    lib_index = _library_title_set(movies, shows)
-    sig = _library_signature()
-
-    # ── Cache check ───────────────────────────────────────────────────────────────
-    cache_path = DATA_DIR / "franchise_cache.json"
-    if not refresh and cache_path.exists():
-        try:
-            cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if cached.get("sig") == sig:
-                return cached.get("franchises", [])
-        except Exception:
-            pass
-
-    # ── Source 1: Plex collections ────────────────────────────────────────────────
-    plex_franchises: list[dict] = []
-    plex_names: set[str] = set()
-
-    if plex_url and plex_token:
-        try:
-            sections_data = _plex_get(plex_url, plex_token, "/library/sections")
-            sections = sections_data["MediaContainer"].get("Directory", [])
-        except Exception:
-            sections = []
-
-        seen_ids: set[str] = set()
-        for section in sections:
-            try:
-                col_data = _plex_get(plex_url, plex_token,
-                                     f"/library/sections/{section['key']}/collections")
-                for c in col_data.get("MediaContainer", {}).get("Metadata", []):
-                    rating_key = c.get("ratingKey", "")
-                    name = (c.get("title") or "").strip()
-                    if not name or rating_key in seen_ids:
-                        continue
-                    seen_ids.add(rating_key)
-                    # Fetch children of this collection.
-                    try:
-                        children_data = _plex_get(plex_url, plex_token,
-                                                  f"/library/metadata/{rating_key}/children")
-                        children = children_data.get("MediaContainer", {}).get("Metadata", [])
-                    except Exception:
-                        continue
-                    members: list[dict] = []
-                    for child in children:
-                        title = (child.get("title") or "").strip()
-                        if not title:
-                            continue
-                        # Only keep members present in the library.
-                        row = lib_index.get(title.lower())
-                        if not row:
-                            continue
-                        media_type = row.get("Type", "")
-                        year_val = _safe_int(row.get("Year")) or _safe_int(child.get("year"))
-                        members.append({
-                            "title": row["Title"],
-                            "year": year_val,
-                            "type": media_type,
-                        })
-                    if not members:
-                        continue
-                    # Sort by year asc.
-                    members.sort(key=lambda m: (m["year"] or 9999, m["title"]))
-                    plex_franchises.append({"name": name, "source": "plex", "members": members})
-                    plex_names.add(_normalize_name(name))
-            except Exception:
-                continue
-
-    # ── Source 2: TMDB belongs_to_collection (only if tmdb_api_key set) ──────────
-    tmdb_franchises: list[dict] = []
-
-    if tmdb_key:
-        def _tmdb_get(path: str, timeout: int = 10):
-            sep = "&" if "?" in path else "?"
-            url = f"https://api.themoviedb.org/3{path}{sep}api_key={tmdb_key}"
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read())
-
-        # Group library movies by TMDB collection id.
-        collection_buckets: dict[int, dict] = {}  # collection_id → {name, members}
-
-        for movie_row in movies:
-            title = movie_row.get("Title", "")
-            year = _safe_int(movie_row.get("Year"))
-            if not title:
-                continue
-            try:
-                params = urllib.parse.urlencode({"query": title})
-                if year:
-                    params += f"&year={year}"
-                results = _tmdb_get(f"/search/movie?{params}", timeout=8)
-                hits = results.get("results", [])
-                if not hits:
-                    continue
-                movie_id = hits[0]["id"]
-                detail = _tmdb_get(f"/movie/{movie_id}", timeout=8)
-                coll = detail.get("belongs_to_collection")
-                if not coll:
-                    continue
-                coll_id = coll["id"]
-                coll_name = (coll.get("name") or "").strip()
-                if not coll_name:
-                    continue
-                if coll_id not in collection_buckets:
-                    collection_buckets[coll_id] = {"name": coll_name, "members": []}
-                collection_buckets[coll_id]["members"].append({
-                    "title": movie_row["Title"],
-                    "year": year,
-                    "type": "Movie",
-                })
-            except Exception:
-                continue
-
-        # De-dupe against Plex by normalized name; keep only buckets with >= FRANCHISE_MIN members.
-        for coll_id, coll_info in collection_buckets.items():
-            members = coll_info["members"]
-            if len(members) < FRANCHISE_MIN:
-                continue
-            norm = _normalize_name(coll_info["name"])
-            if norm in plex_names:
-                continue  # already covered by Plex collection
-            members.sort(key=lambda m: (m["year"] or 9999, m["title"]))
-            tmdb_franchises.append({
-                "name": coll_info["name"],
-                "source": "tmdb",
-                "members": members,
-            })
-
-    # ── Merge + de-dupe + sort ────────────────────────────────────────────────────
-    all_franchises: list[dict] = plex_franchises + tmdb_franchises
-    # Final de-dupe pass (in case names collide after normalization).
-    seen_norm: set[str] = set()
-    deduped: list[dict] = []
-    for fr in all_franchises:
-        norm = _normalize_name(fr["name"])
-        if norm not in seen_norm:
-            seen_norm.add(norm)
-            deduped.append(fr)
-    # Sort by member count desc.
-    deduped.sort(key=lambda fr: -len(fr["members"]))
-
-    # ── Write cache ───────────────────────────────────────────────────────────────
+    title = movie_row.get("Title", "")
+    year = _safe_int(movie_row.get("Year"))
+    if not title:
+        return None
     try:
-        cache_path.write_text(
-            json.dumps({"sig": sig, "franchises": deduped}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        params = urllib.parse.urlencode({"query": title})
+        if year:
+            params += f"&year={year}"
+        search = _tmdb_get(f"/search/movie?{params}", tmdb_key, timeout=8)
+        hits = search.get("results", [])
+        if not hits:
+            return {"title": title, "year": year, "collection": None, "keywords": []}
+        movie_id = hits[0]["id"]
+        detail = _tmdb_get(
+            f"/movie/{movie_id}?append_to_response=keywords", tmdb_key, timeout=8
+        )
+        coll_raw = detail.get("belongs_to_collection")
+        collection = (
+            {"id": coll_raw["id"], "name": (coll_raw.get("name") or "").strip()}
+            if coll_raw
+            else None
+        )
+        kw_list = detail.get("keywords", {}).get("keywords", [])
+        keywords = [{"id": kw["id"], "name": kw["name"]} for kw in kw_list if kw.get("id")]
+        return {"title": title, "year": year, "collection": collection, "keywords": keywords}
+    except Exception:
+        return None
+
+
+def _run_tmdb_enrichment_scan(data_dir: Path, movies: list[dict], tmdb_key: str, sig: str) -> None:
+    """Background thread: enrich all library movies via TMDB with bounded concurrency.
+
+    Writes data_dir/tmdb_enrichment.json when done (or partially on progress).
+    Updates the module-level _tmdb_scan_state throughout.
+    """
+    global _tmdb_scan_state
+
+    total = len(movies)
+    with _tmdb_scan_lock:
+        _tmdb_scan_state.update({"running": True, "scanned": 0, "total": total, "done": False, "sig": sig})
+
+    enrichment: dict[str, dict] = {}  # title → enrichment record
+
+    def _enrich_one(movie_row: dict) -> dict | None:
+        return _enrich_movie(movie_row, tmdb_key)
+
+    scanned = 0
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+            futures = {pool.submit(_enrich_one, row): row for row in movies}
+            for future in concurrent.futures.as_completed(futures):
+                scanned += 1
+                result = future.result()
+                if result and result.get("title"):
+                    enrichment[result["title"]] = result
+                with _tmdb_scan_lock:
+                    _tmdb_scan_state["scanned"] = scanned
+    except Exception:
+        pass
+
+    # Write the enrichment cache.
+    cache = {"sig": sig, "enrichment": enrichment}
+    try:
+        enrichment_path = data_dir / "tmdb_enrichment.json"
+        enrichment_path.write_text(
+            json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
         )
     except Exception:
         pass
 
-    return deduped
+    with _tmdb_scan_lock:
+        _tmdb_scan_state.update({"running": False, "done": True, "scanned": scanned})
+
+
+def _load_enrichment_cache(data_dir: Path, sig: str) -> dict[str, dict] | None:
+    """Return the enrichment dict if the cache exists and matches sig; else None."""
+    try:
+        p = data_dir / "tmdb_enrichment.json"
+        if not p.exists():
+            return None
+        cached = json.loads(p.read_text(encoding="utf-8"))
+        if cached.get("sig") != sig:
+            return None
+        return cached.get("enrichment", {})
+    except Exception:
+        return None
+
+
+def _franchises_from_enrichment(enrichment: dict[str, dict]) -> list[dict]:
+    """Derive franchise candidates from the TMDB enrichment cache.
+
+    Groups library movies by TMDB belongs_to_collection, filters to
+    FRANCHISE_MIN members, de-dupes by normalized name, sorts by member count desc.
+    """
+    collection_buckets: dict[int, dict] = {}  # collection_id → {name, members}
+
+    for title, record in enrichment.items():
+        coll = record.get("collection")
+        if not coll:
+            continue
+        coll_id = coll.get("id")
+        coll_name = (coll.get("name") or "").strip()
+        if not coll_id or not coll_name:
+            continue
+        year = record.get("year")
+        if coll_id not in collection_buckets:
+            collection_buckets[coll_id] = {"name": coll_name, "members": []}
+        collection_buckets[coll_id]["members"].append({
+            "title": title,
+            "year": year,
+            "type": "Movie",
+        })
+
+    franchises: list[dict] = []
+    seen_norm: set[str] = set()
+    for coll_info in collection_buckets.values():
+        members = coll_info["members"]
+        if len(members) < FRANCHISE_MIN:
+            continue
+        norm = _normalize_name(coll_info["name"])
+        if norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        members.sort(key=lambda m: (m["year"] or 9999, m["title"]))
+        franchises.append({"name": coll_info["name"], "source": "tmdb", "members": members})
+
+    franchises.sort(key=lambda fr: -len(fr["members"]))
+    return franchises
+
+
+def _start_tmdb_scan_impl(refresh: bool = False) -> dict:
+    """Business logic for starting the TMDB enrichment scan.
+
+    Separated from the FastAPI route so it can be called directly in tests without
+    FastAPI's Query(...) wrapping the default parameter value.
+    """
+    import csv as _csv
+
+    cfg = _load_config()
+    tmdb_key = cfg.get("tmdb_api_key", "").strip()
+    if not tmdb_key:
+        return {"running": False, "cached": False, "reason": "no_tmdb_key"}
+
+    csv_path = DATA_DIR / "plex_library.csv"
+    if not csv_path.exists():
+        return {"running": False, "cached": False, "reason": "no_csv"}
+
+    sig = _library_signature()
+
+    with _tmdb_scan_lock:
+        already_running = _tmdb_scan_state["running"]
+        scan_sig = _tmdb_scan_state.get("sig")
+
+    if already_running and scan_sig == sig and not refresh:
+        return {"running": True, "cached": False}
+
+    # Check cache validity.
+    if not refresh and _load_enrichment_cache(DATA_DIR, sig) is not None:
+        with _tmdb_scan_lock:
+            _tmdb_scan_state.update({"running": False, "done": True, "sig": sig})
+        return {"running": False, "cached": True}
+
+    # Load movies to scan.
+    movies: list[dict] = []
+    with open(csv_path, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            if row.get("Type") == "Movie":
+                movies.append(row)
+
+    # Reset state and kick off the background scan.
+    with _tmdb_scan_lock:
+        _tmdb_scan_state.update({
+            "running": True, "scanned": 0, "total": len(movies), "done": False, "sig": sig,
+        })
+
+    data_dir = DATA_DIR  # capture for the thread (DATA_DIR may be monkeypatched in tests)
+    t = threading.Thread(
+        target=_run_tmdb_enrichment_scan,
+        args=(data_dir, movies, tmdb_key, sig),
+        daemon=True,
+        name="tmdb-enrichment-scan",
+    )
+    t.start()
+
+    return {"running": True, "cached": False}
+
+
+@router.post("/pipeline/tmdb-scan")
+def start_tmdb_scan(refresh: bool = Query(False)):
+    """Start the TMDB enrichment scan in the background if not already cached/running.
+
+    Returns immediately with {"running": bool, "cached": bool}.
+    Pass ?refresh=1 to force a rescan even if the cache is valid.
+
+    The scan fetches TMDB movie details (belongs_to_collection + keywords) for every
+    movie in plex_library.csv using bounded concurrency (12 workers).  Progress is
+    readable via GET /pipeline/tmdb-scan/status.  The result is cached to
+    data/tmdb_enrichment.json keyed by the library signature.
+    """
+    return _start_tmdb_scan_impl(refresh=bool(refresh))
+
+
+@router.get("/pipeline/tmdb-scan/status")
+def tmdb_scan_status():
+    """Return the current TMDB enrichment scan progress.
+
+    Response: {"running": bool, "scanned": int, "total": int, "done": bool}
+    """
+    with _tmdb_scan_lock:
+        return {
+            "running": _tmdb_scan_state["running"],
+            "scanned": _tmdb_scan_state["scanned"],
+            "total": _tmdb_scan_state["total"],
+            "done": _tmdb_scan_state["done"],
+        }
+
+
+@router.get("/pipeline/franchises")
+def get_franchises(refresh: bool = False):
+    """Return franchise candidates derived from the TMDB enrichment cache.
+
+    Each entry: {"name", "source": "tmdb", "members": [{"title","year","type"}]}
+    where members are library movies belonging to the same TMDB collection.
+
+    This endpoint is FAST — it reads the enrichment cache written by the background
+    scan started via POST /pipeline/tmdb-scan.  Returns [] while the scan is running
+    or if no tmdb_api_key is configured (Wikidata source will be added in F13).
+
+    Pass ?refresh=1 to trigger a fresh rescan (delegates to start_tmdb_scan).
+    """
+    import csv as _csv
+
+    cfg = _load_config()
+    tmdb_key = cfg.get("tmdb_api_key", "").strip()
+
+    csv_path = DATA_DIR / "plex_library.csv"
+    if not csv_path.exists():
+        return []
+
+    sig = _library_signature()
+
+    if refresh:
+        # Delegate to the scan impl (fire and forget); don't block here.
+        _start_tmdb_scan_impl(refresh=True)
+
+    if not tmdb_key:
+        return []
+
+    enrichment = _load_enrichment_cache(DATA_DIR, sig)
+    if enrichment is None:
+        return []
+
+    return _franchises_from_enrichment(enrichment)
 
 
 ANCHOR = "## Channel Numbering Scheme"
