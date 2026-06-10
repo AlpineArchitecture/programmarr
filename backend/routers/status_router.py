@@ -13,6 +13,10 @@ GITHUB_LATEST_RELEASE = (
     "https://api.github.com/repos/AlpineArchitecture/programmarr/releases/latest"
 )
 
+# Notifier cache: one GitHub hit per _UPDATE_TTL seconds, regardless of UI loads.
+_UPDATE_TTL = 6 * 3600
+_update_cache: dict = {"at": 0.0, "data": None}
+
 
 def _parse_semver(s: str) -> tuple[int, int, int]:
     """'v0.10.1' -> (0, 10, 1). Tolerant: missing parts -> 0; a pre-release suffix
@@ -82,6 +86,56 @@ def get_status():
         pr = {**probe(f"{plex}/?X-Plex-Token={token}"), "url": plex}
 
     return {"tunarr": tr, "plex": pr}
+
+
+def _fetch_latest_release() -> dict | None:
+    """Hit the GitHub Releases API for the newest published release. Returns
+    {latest, name, url} or None on any failure. GitHub requires a User-Agent."""
+    try:
+        req = urllib.request.Request(
+            GITHUB_LATEST_RELEASE,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "programmarr"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            rel = json.loads(r.read())
+        return {
+            "latest": (rel.get("tag_name") or "").lstrip("vV"),
+            "name": rel.get("name") or rel.get("tag_name") or "",
+            "url": rel.get("html_url") or "",
+        }
+    except Exception:
+        return None
+
+
+@router.get("/update-check")
+def update_check(current: str = ""):
+    """Is a newer release available? `current` is the running app version (the
+    frontend passes its baked-in package.json version). Off when the user has
+    disabled update checks. Result cached server-side for _UPDATE_TTL."""
+    cfg = load_config()
+    if not cfg.get("update_check_enabled", True):
+        return {"enabled": False}
+
+    now = time.time()
+    if now - _update_cache["at"] > _UPDATE_TTL:
+        # Bound to one fetch per TTL even on failure: keep any prior (stale) data,
+        # accept a 6h gap on outage rather than hammering GitHub from a home lab.
+        fetched = _fetch_latest_release()
+        if fetched is not None:
+            _update_cache["data"] = fetched
+        _update_cache["at"] = now
+
+    data = _update_cache["data"]
+    if not data:
+        return {"enabled": True, "update_available": False, "current": current, "latest": None}
+    return {
+        "enabled": True,
+        "update_available": is_newer(data["latest"], current) if current else False,
+        "current": current,
+        "latest": data["latest"],
+        "name": data["name"],
+        "url": data["url"],
+    }
 
 
 @router.get("/tunarr/channels")

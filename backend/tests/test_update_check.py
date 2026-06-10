@@ -44,3 +44,66 @@ def test_is_newer_no_current_is_false():
 def test_is_newer_junk_is_false():
     assert sr.is_newer("not-a-version", "0.5.0") is False
     assert sr.is_newer("", "0.5.0") is False
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _reset_update_cache():
+    """Each test starts with an empty notifier cache."""
+    sr._update_cache["at"] = 0.0
+    sr._update_cache["data"] = None
+    yield
+
+
+def test_update_check_disabled_returns_enabled_false(monkeypatch):
+    monkeypatch.setattr(sr, "load_config", lambda: {"update_check_enabled": False})
+    # Even if a fetch would succeed, disabled short-circuits before any network call.
+    monkeypatch.setattr(sr, "_fetch_latest_release", lambda: (_ for _ in ()).throw(AssertionError("must not fetch")))
+    out = sr.update_check(current="0.5.0")
+    assert out == {"enabled": False}
+
+
+def test_update_check_reports_available(monkeypatch):
+    monkeypatch.setattr(sr, "load_config", lambda: {})  # absent key => enabled by default
+    monkeypatch.setattr(sr, "_fetch_latest_release", lambda: {
+        "latest": "0.6.0", "name": "v0.6.0", "url": "https://example/releases/v0.6.0",
+    })
+    out = sr.update_check(current="0.5.0")
+    assert out["enabled"] is True
+    assert out["update_available"] is True
+    assert out["latest"] == "0.6.0"
+    assert out["url"] == "https://example/releases/v0.6.0"
+
+
+def test_update_check_up_to_date(monkeypatch):
+    monkeypatch.setattr(sr, "load_config", lambda: {})
+    monkeypatch.setattr(sr, "_fetch_latest_release", lambda: {
+        "latest": "0.5.0", "name": "v0.5.0", "url": "x",
+    })
+    out = sr.update_check(current="0.5.0")
+    assert out["update_available"] is False
+
+
+def test_update_check_caches_within_ttl(monkeypatch):
+    monkeypatch.setattr(sr, "load_config", lambda: {})
+    calls = {"n": 0}
+
+    def fake_fetch():
+        calls["n"] += 1
+        return {"latest": "0.6.0", "name": "v0.6.0", "url": "x"}
+
+    monkeypatch.setattr(sr, "_fetch_latest_release", fake_fetch)
+    sr.update_check(current="0.5.0")
+    sr.update_check(current="0.5.0")
+    assert calls["n"] == 1, "second call within TTL must use the cache, not refetch"
+
+
+def test_update_check_fetch_failure_is_safe(monkeypatch):
+    monkeypatch.setattr(sr, "load_config", lambda: {})
+    monkeypatch.setattr(sr, "_fetch_latest_release", lambda: None)  # network down
+    out = sr.update_check(current="0.5.0")
+    assert out["enabled"] is True
+    assert out["update_available"] is False
+    assert out["latest"] is None
