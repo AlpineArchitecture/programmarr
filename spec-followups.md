@@ -103,7 +103,13 @@ spawn subprocesses. No-op on Docker/Linux.
 
 ---
 
-# Round 2 — revision batch (F4–F13)
+# Round 2 — revision batch (F4–F13)  ✅ ALL DONE (awaiting human review)
+
+> All ten steps built, self-reviewed (pytest + build + diff), and committed on
+> `feature/planner-overhaul` (commits ddcff4a → 3f773de). 219 tests pass; frontend builds clean.
+> Architect caught + fixed during review: F7 early-return save guard; F10 stale-closure that
+> would clobber sticky picks; F13 SPARQL double-bind that would have made every Wikidata batch
+> fail. Pending: human review on dev.ps1 loop, then `/release`.
 
 Same workflow as the original 6-step build: each step is a stacked commit on
 `feature/planner-overhaul`, `pytest` + `cd frontend && npm run build` green, CLAUDE.md kept in
