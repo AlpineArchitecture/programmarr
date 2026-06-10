@@ -60,7 +60,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
           ) : (
             <Code
               block
-              style={{ fontSize: 11, maxHeight: 400, overflow: 'auto', backgroundColor: '#0d0e0f' }}
+              style={{ fontSize: 11, maxHeight: 400, overflow: 'auto', backgroundColor: '#0d0e0f', color: '#d4d4d4' }}
             >
               {content}
             </Code>

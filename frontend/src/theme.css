@@ -11,10 +11,10 @@
  * --border-subtle  hairline borders & dividers
  */
 [data-mantine-color-scheme='light'] {
-  --app-bg: #f3f1ee;
-  --surface-panel: var(--mantine-color-white);
-  --surface-sunken: #ece9e4;
-  --border-subtle: var(--mantine-color-gray-3);
+  --app-bg: #e7e3db;
+  --surface-panel: #f3f0ea;
+  --surface-sunken: #dcd7ce;
+  --border-subtle: #d6d0c5;
 }
 
 [data-mantine-color-scheme='dark'] {
