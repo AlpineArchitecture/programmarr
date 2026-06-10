@@ -112,6 +112,7 @@ export default function Settings() {
   const [values, setValues] = useState({
     tunarr_url: '', plex_url: '', plex_token: '',
     tmdb_api_key: '', auth_username: '', auth_password: '',
+    update_check_enabled: true,
   });
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -131,6 +132,7 @@ export default function Settings() {
         tmdb_api_key:  cfg.tmdb_api_key  || '',
         auth_username: cfg.auth_username || '',
         auth_password: cfg.auth_password || '',
+        update_check_enabled: cfg.update_check_enabled !== false,
       });
       const stored: string[] = cfg.channel_order || [];
       setChannelOrder(resolveOrder(stored));
@@ -249,6 +251,24 @@ export default function Settings() {
             After saving, you'll need to reload the page and enter these credentials.
           </Alert>
         )}
+      </Card>
+
+      {/* Updates */}
+      <Card p="lg">
+        <Text fw={700} mb={4}>Updates</Text>
+        <Text size="xs" c="dimmed" mb="md">
+          Check GitHub for new Programmarr releases and show a banner when one is available.
+          Turning this off stops the app from contacting GitHub. New images only ever publish
+          on a release — your container never auto-updates unless you add Watchtower yourself.
+        </Text>
+        <Switch
+          checked={values.update_check_enabled}
+          onChange={(e) =>
+            setValues((v) => ({ ...v, update_check_enabled: e.currentTarget.checked }))
+          }
+          color="orange"
+          label="Check for updates"
+        />
       </Card>
 
       {/* Channel ordering */}
