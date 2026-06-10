@@ -734,7 +734,7 @@ function FranchiseCard({ franchise, isSelected, checkedTitles, onToggle, onToggl
 
 function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone }: {
   planner: PlannerState;
-  setPlanner: (p: PlannerState) => void;
+  setPlanner: (p: PlannerState | ((prev: PlannerState) => PlannerState)) => void;
   setup: SetupState;
   aiExtras: boolean;
   setAiExtras: (v: boolean) => void;
@@ -769,6 +769,12 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [tmdbScanScanned, setTmdbScanScanned] = useState(0);
   const [tmdbScanTotal, setTmdbScanTotal] = useState(0);
   const tmdbPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // TVmaze scan state — poll while the network scan is running.
+  const [tvmazeScanRunning, setTvmazeScanRunning] = useState(false);
+  const [tvmazeScanScanned, setTvmazeScanScanned] = useState(0);
+  const [tvmazeScanTotal, setTvmazeScanTotal] = useState(0);
+  const tvmazePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Eager scan: kick off on Planner mount so the scan runs while the user works
   // through the TV and Movies sections.  When done, load franchises immediately.
@@ -842,6 +848,67 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     return () => {
       cancelled = true;
       stopPoll();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // TVmaze scan: kick off on Planner mount alongside the TMDB scan.
+  // When done (or already cached), facets will include real network data.
+  // When the facets are reloaded after scan completion, the networks list populates.
+  useEffect(() => {
+    let cancelled = false;
+
+    function stopTvmazePoll() {
+      if (tvmazePollRef.current !== null) {
+        clearInterval(tvmazePollRef.current);
+        tvmazePollRef.current = null;
+      }
+    }
+
+    function startTvmazePoll() {
+      stopTvmazePoll();
+      tvmazePollRef.current = setInterval(() => {
+        api.tvmazeScanStatus().then((s) => {
+          if (cancelled) { stopTvmazePoll(); return; }
+          setTvmazeScanScanned(s.scanned);
+          setTvmazeScanTotal(s.total);
+          if (s.done || !s.running) {
+            setTvmazeScanRunning(false);
+            stopTvmazePoll();
+            // Reload facets so the networks list is populated from the fresh cache.
+            api.getFacets().then((freshFacets) => {
+              if (!cancelled && freshFacets.exists) {
+                // Functional update: merge fresh facets into the LATEST planner state,
+                // not the stale closure snapshot — otherwise picks made while the scan
+                // ran would be reverted (clobbering the sticky picks from F7).
+                setPlanner(prev => ({ ...prev, facets: freshFacets }));
+              }
+            }).catch(() => { /* non-fatal */ });
+          }
+        }).catch(() => {
+          stopTvmazePoll();
+          setTvmazeScanRunning(false);
+        });
+      }, 1500);
+    }
+
+    api.startTvmazeScan().then((res) => {
+      if (cancelled) return;
+      if (res.cached) {
+        // Cache already valid — networks will be in the facets on next load.
+        setTvmazeScanRunning(false);
+      } else if (res.running) {
+        setTvmazeScanRunning(true);
+        startTvmazePoll();
+      }
+      // else: no CSV yet — nothing to scan.
+    }).catch(() => {
+      if (!cancelled) setTvmazeScanRunning(false);
+    });
+
+    return () => {
+      cancelled = true;
+      stopTvmazePoll();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1179,18 +1246,37 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               </CollapsibleSection>
             );
           })()}
-          {(f.networks?.length ?? 0) > 0 && (
-            <EntitySection
-              title="Networks"
-              kind="network"
-              items={f.networks!}
-              makeId={cid.network}
-              makeName={(v) => v}
-              isSel={isSel}
-              onToggle={toggleSel}
-              onAddMany={addMany}
-            />
+          {tvmazeScanRunning && (
+            <Text size="xs" c="dimmed" fs="italic">
+              Scanning networks… {tvmazeScanScanned} / {tvmazeScanTotal}
+            </Text>
           )}
+          {!tvmazeScanRunning && (f.networks?.length ?? 0) > 0 && (() => {
+            const netItems: AddItem[] = f.networks!.map(n => ({
+              id: cid.network(n.value),
+              spec: { kind: 'network' as CandidateKind, value: n.value, name: n.value },
+            }));
+            return (
+              <CollapsibleSection
+                title="Networks"
+                count={f.networks!.length}
+                selectedCount={countSel(netItems.map(i => i.id))}
+                addItems={netItems}
+                onAdd={addMany}
+              >
+                {f.networks!.map((n, i) => (
+                  <CandRow
+                    key={netItems[i].id}
+                    id={netItems[i].id}
+                    count={n.count}
+                    label={n.value}
+                    checked={isSel(netItems[i].id)}
+                    onToggle={() => toggleSel(netItems[i].id, netItems[i].spec)}
+                  />
+                ))}
+              </CollapsibleSection>
+            );
+          })()}
           {programmingBlocks.length > 0 && (() => {
             const items: AddItem[] = programmingBlocks.map(b => ({
               id: cid.progblock(b.name),
@@ -1222,7 +1308,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             );
           })()}
           {(f.marathons?.length ?? 0) === 0 && (f.tv_genres?.length ?? 0) === 0 &&
-           (f.networks?.length ?? 0) === 0 && programmingBlocks.length === 0 && (
+           (f.networks?.length ?? 0) === 0 && programmingBlocks.length === 0 && !tvmazeScanRunning && (
             <Text size="sm" c="dimmed">No TV channels available — run Export to scan your library.</Text>
           )}
         </Stack>

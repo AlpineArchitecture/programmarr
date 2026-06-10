@@ -42,6 +42,18 @@ _tmdb_scan_state: dict = {
     "sig": None,          # library signature the last scan was for
 }
 
+# ── TVmaze network scan state ─────────────────────────────────────────────────
+# Mirrors the TMDB scan pattern.  Keyed by library signature so stale caches
+# are never reused after a new export.
+_tvmaze_scan_lock = threading.Lock()
+_tvmaze_scan_state: dict = {
+    "running": False,
+    "scanned": 0,
+    "total": 0,
+    "done": False,
+    "sig": None,
+}
+
 
 def _load_config() -> dict:
     try:
@@ -290,9 +302,9 @@ def library_facets(min_items: int = 5):
     director_counts: dict[str, int] = {}
     actor_counts: dict[str, int] = {}
     tv_genre_counts: dict[str, int] = {}
-    network_counts: dict[str, int] = {}  # TV Studio values → show counts
     movie_recs: list[tuple[list[str], int | None]] = []  # (genres, decade_start) for matrix/blends
     show_recs: list[dict] = []  # per-show marathon candidates
+    tv_show_titles: list[str] = []  # TV show titles for TVmaze network lookup
     movies = tv = marathon = 0
 
     with open(p, encoding="utf-8") as f:
@@ -317,14 +329,26 @@ def library_facets(min_items: int = 5):
                 tv += 1
                 for g in _multi(row.get("Genres")):
                     tv_genre_counts[g] = tv_genre_counts.get(g, 0) + 1
-                for s in _multi(row.get("Studio")):
-                    network_counts[s] = network_counts.get(s, 0) + 1
                 eps = _safe_int(row.get("Episodes")) or 0
                 if eps >= 50:
                     marathon += 1
                 title = row.get("Title", "")
+                if title:
+                    tv_show_titles.append(title)
                 if title and eps >= 2:
                     show_recs.append({"title": title, "episodes": eps, "seasons": _safe_int(row.get("Seasons")) or 0})
+
+    # Networks facet: derive from TVmaze cache (keyed by library signature).
+    # If the cache is absent/stale (scan not done yet), return empty — the frontend
+    # kicks the scan on Planner mount and shows a progress hint while it runs.
+    sig = _library_signature()
+    tvmaze_networks = _load_tvmaze_cache(DATA_DIR, sig)
+    network_counts: dict[str, int] = {}
+    if tvmaze_networks is not None:
+        for title in tv_show_titles:
+            net = tvmaze_networks.get(title)
+            if net:
+                network_counts[net] = network_counts.get(net, 0) + 1
 
     # Genre chips the UI offers: canonical (always) + 'more' above min_items.
     canonical_tags = {tag.lower() for _, tag in CANONICAL_GENRES}
@@ -593,6 +617,174 @@ def _load_enrichment_cache(data_dir: Path, sig: str) -> dict[str, dict] | None:
         return cached.get("enrichment", {})
     except Exception:
         return None
+
+
+# ── TVmaze per-show network helpers ──────────────────────────────────────────
+
+def _tvmaze_get(path: str, timeout: int = 8):
+    """Single TVmaze API call. Free, no API key required. Raises on network / non-200 errors."""
+    url = f"https://api.tvmaze.com{path}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Programmarr/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _lookup_show_network(title: str) -> str | None:
+    """Look up a single TV show's network name from TVmaze.
+
+    Returns the network name string (from network.name or webChannel.name),
+    or None on any failure or if the show is not found.
+    """
+    try:
+        encoded = urllib.parse.quote(title, safe="")
+        data = _tvmaze_get(f"/singlesearch/shows?q={encoded}")
+        # Prefer cable/broadcast network; fall back to streaming (webChannel).
+        network = data.get("network") or {}
+        web = data.get("webChannel") or {}
+        name = (network.get("name") or web.get("name") or "").strip()
+        return name if name else None
+    except Exception:
+        return None
+
+
+def _run_tvmaze_scan(data_dir: Path, shows: list[dict], sig: str) -> None:
+    """Background thread: look up every TV show's network from TVmaze with bounded concurrency.
+
+    Writes data_dir/tvmaze_cache.json when done.
+    Updates the module-level _tvmaze_scan_state throughout.
+    """
+    global _tvmaze_scan_state
+
+    total = len(shows)
+    with _tvmaze_scan_lock:
+        _tvmaze_scan_state.update({"running": True, "scanned": 0, "total": total, "done": False, "sig": sig})
+
+    networks: dict[str, str | None] = {}  # title → network name or null
+
+    scanned = 0
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+            futures = {pool.submit(_lookup_show_network, row.get("Title", "")): row for row in shows}
+            for future in concurrent.futures.as_completed(futures):
+                row = futures[future]
+                title = row.get("Title", "")
+                scanned += 1
+                try:
+                    result = future.result()
+                except Exception:
+                    result = None
+                if title:
+                    networks[title] = result
+                with _tvmaze_scan_lock:
+                    _tvmaze_scan_state["scanned"] = scanned
+    except Exception:
+        pass
+
+    cache = {"sig": sig, "networks": networks}
+    try:
+        cache_path = data_dir / "tvmaze_cache.json"
+        cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    with _tvmaze_scan_lock:
+        _tvmaze_scan_state.update({"running": False, "done": True, "scanned": scanned})
+
+
+def _load_tvmaze_cache(data_dir: Path, sig: str) -> dict[str, str | None] | None:
+    """Return the networks dict if the cache exists and matches sig; else None."""
+    try:
+        p = data_dir / "tvmaze_cache.json"
+        if not p.exists():
+            return None
+        cached = json.loads(p.read_text(encoding="utf-8"))
+        if cached.get("sig") != sig:
+            return None
+        return cached.get("networks", {})
+    except Exception:
+        return None
+
+
+def _start_tvmaze_scan_impl(refresh: bool = False) -> dict:
+    """Business logic for starting the TVmaze network scan.
+
+    Mirrors _start_tmdb_scan_impl.  Returns immediately with {"running", "cached"}.
+    """
+    import csv as _csv
+
+    csv_path = DATA_DIR / "plex_library.csv"
+    if not csv_path.exists():
+        return {"running": False, "cached": False, "reason": "no_csv"}
+
+    sig = _library_signature()
+
+    with _tvmaze_scan_lock:
+        already_running = _tvmaze_scan_state["running"]
+        scan_sig = _tvmaze_scan_state.get("sig")
+
+    if already_running and scan_sig == sig and not refresh:
+        return {"running": True, "cached": False}
+
+    if not refresh and _load_tvmaze_cache(DATA_DIR, sig) is not None:
+        with _tvmaze_scan_lock:
+            _tvmaze_scan_state.update({"running": False, "done": True, "sig": sig})
+        return {"running": False, "cached": True}
+
+    # Load TV shows to scan.
+    shows: list[dict] = []
+    with open(csv_path, encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            if row.get("Type") == "TV":
+                shows.append(row)
+
+    with _tvmaze_scan_lock:
+        _tvmaze_scan_state.update({
+            "running": True, "scanned": 0, "total": len(shows), "done": False, "sig": sig,
+        })
+
+    data_dir = DATA_DIR  # capture for the thread
+    t = threading.Thread(
+        target=_run_tvmaze_scan,
+        args=(data_dir, shows, sig),
+        daemon=True,
+        name="tvmaze-network-scan",
+    )
+    t.start()
+
+    return {"running": True, "cached": False}
+
+
+@router.post("/pipeline/tvmaze-scan")
+def start_tvmaze_scan(refresh: bool = Query(False)):
+    """Start the TVmaze network scan in the background if not already cached/running.
+
+    Returns immediately with {"running": bool, "cached": bool}.
+    Pass ?refresh=1 to force a rescan even if the cache is valid.
+
+    The scan fetches each TV show's network from TVmaze (free, no API key) using
+    bounded concurrency (12 workers).  Progress is readable via
+    GET /pipeline/tvmaze-scan/status.  The result is cached to data/tvmaze_cache.json
+    keyed by the library signature.
+    """
+    return _start_tvmaze_scan_impl(refresh=bool(refresh))
+
+
+@router.get("/pipeline/tvmaze-scan/status")
+def tvmaze_scan_status():
+    """Return the current TVmaze network scan progress.
+
+    Response: {"running": bool, "scanned": int, "total": int, "done": bool}
+    """
+    with _tvmaze_scan_lock:
+        return {
+            "running": _tvmaze_scan_state["running"],
+            "scanned": _tvmaze_scan_state["scanned"],
+            "total": _tvmaze_scan_state["total"],
+            "done": _tvmaze_scan_state["done"],
+        }
+
+
+# ── End TVmaze helpers ─────────────────────────────────────────────────────────
 
 
 def _franchises_from_enrichment(enrichment: dict[str, dict]) -> list[dict]:
@@ -1150,9 +1342,19 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         show_titles = [s["Title"] for s in shows if has_genre(s, spec.genre)]
         titles = movie_titles + show_titles
     elif spec.kind == "network" and spec.value:
-        # All TV shows whose Studio matches the network value (case-insensitive).
+        # Resolve TV shows whose TVmaze network matches the value (case-insensitive).
+        # Load the TVmaze cache once; fall back to Studio column if cache is absent.
+        sig = _library_signature()
+        tvmaze = _load_tvmaze_cache(DATA_DIR, sig)
         v = spec.value.lower()
-        titles = [s["Title"] for s in shows if any(n.lower() == v for n in _multi(s.get("Studio")))]
+        if tvmaze is not None:
+            titles = [
+                s["Title"] for s in shows
+                if (tvmaze.get(s.get("Title", "")) or "").lower() == v
+            ]
+        else:
+            # Cache not available yet — fall back to Studio column as a best-effort.
+            titles = [s["Title"] for s in shows if any(n.lower() == v for n in _multi(s.get("Studio")))]
     elif spec.kind == "programming_block" and spec.titles:
         # Intersect the block's pre-resolved member titles against the library TV show titles.
         show_title_set = {s["Title"].lower(): s["Title"] for s in shows}

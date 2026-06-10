@@ -47,6 +47,15 @@ export const api = {
     req<{ running: boolean; scanned: number; total: number; done: boolean }>(
       '/pipeline/tmdb-scan/status',
     ),
+  startTvmazeScan: (refresh = false) =>
+    req<{ running: boolean; cached: boolean; reason?: string }>(
+      `/pipeline/tvmaze-scan${refresh ? '?refresh=1' : ''}`,
+      { method: 'POST' },
+    ),
+  tvmazeScanStatus: () =>
+    req<{ running: boolean; scanned: number; total: number; done: boolean }>(
+      '/pipeline/tvmaze-scan/status',
+    ),
   getPrompt: (target?: string, prefs?: string, start?: number) => {
     const p = new URLSearchParams();
     if (target) p.set('target', target);
@@ -228,7 +237,7 @@ export interface LibraryFacets {
   tv_genres?: TvGenreFacet[];
   marathons?: MarathonFacet[];
   tv_movie_genres?: TvMovieGenreFacet[];
-  /** TV show counts by network (Studio value for Type==TV rows), above NETWORK_MIN floor. */
+  /** TV show counts by TVmaze network, above NETWORK_MIN floor. Empty while the TVmaze scan is running. */
   networks?: EntityFacet[];
 }
 

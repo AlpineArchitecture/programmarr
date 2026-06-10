@@ -204,30 +204,48 @@ def test_tv_movie_mix_no_match_is_skipped(pr, seed):
 
 
 # ── network ────────────────────────────────────────────────────────────────────
+# NOTE: compose kind=network now resolves shows from the TVmaze cache when present,
+# falling back to the Studio column when the cache is absent.  Comprehensive tests
+# covering TVmaze-source behavior live in test_networks.py.
 
-def test_network_resolves_tv_shows_by_studio(pr, seed):
-    """kind=network resolves TV show titles whose Studio matches value (case-insensitive)."""
+def _write_tvmaze_cache(pr, networks_map: dict):
+    """Write a valid tvmaze_cache.json for the current library signature."""
+    sig = pr._library_signature()
+    cache = {"sig": sig, "networks": networks_map}
+    (pr._test_data_dir / "tvmaze_cache.json").write_text(
+        json.dumps(cache), encoding="utf-8"
+    )
+
+
+def test_network_resolves_tv_shows_via_tvmaze_cache(pr, seed):
+    """kind=network resolves TV show titles via TVmaze cache (case-insensitive value)."""
     seed([
-        show("The Sopranos", studio="HBO"),
-        show("The Wire", studio="HBO"),
-        show("Breaking Bad", studio="AMC"),
+        show("The Sopranos", studio="Irrelevant"),
+        show("The Wire", studio="Irrelevant"),
+        show("Breaking Bad", studio="Irrelevant"),
         movie("HBO Film", studio="HBO"),  # movie rows must NOT appear in network channel
     ])
+    _write_tvmaze_cache(pr, {
+        "The Sopranos": "HBO",
+        "The Wire": "HBO",
+        "Breaking Bad": "AMC",
+    })
     out = _compose(pr, [{"kind": "network", "value": "HBO"}])
     assert out["count"] == 1
-    # Must contain exactly the 2 HBO shows, not the movie.
+    # Must contain exactly the 2 HBO shows, not the AMC show or the movie.
     draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
     content = set(draft["channels"][0]["content"])
     assert content == {"The Sopranos", "The Wire"}
 
 
 def test_network_case_insensitive(pr, seed):
-    """Network value matching is case-insensitive."""
+    """Network value matching is case-insensitive (TVmaze cache path)."""
     seed([
-        show("Show A", studio="hbo"),
-        show("Show B", studio="HBO"),
-        show("Show C", studio="Hbo"),
+        show("Show A"),
+        show("Show B"),
+        show("Show C"),
     ])
+    _write_tvmaze_cache(pr, {"Show A": "hbo", "Show B": "HBO", "Show C": "Hbo"})
     out = _compose(pr, [{"kind": "network", "value": "HBO"}])
     assert out["count"] == 1
     assert out["channels"][0]["items"] == 3
@@ -236,17 +254,19 @@ def test_network_case_insensitive(pr, seed):
 def test_network_auto_name(pr, seed):
     """_auto_name for network returns the network value."""
     seed([
-        show("Show X", studio="Netflix"),
-        show("Show Y", studio="Netflix"),
-        show("Show Z", studio="Netflix"),
+        show("Show X"),
+        show("Show Y"),
+        show("Show Z"),
     ])
+    _write_tvmaze_cache(pr, {"Show X": "Netflix", "Show Y": "Netflix", "Show Z": "Netflix"})
     out = _compose(pr, [{"kind": "network", "value": "Netflix"}])
     assert out["channels"][0]["name"] == "Netflix"
 
 
 def test_network_no_match_skipped(pr, seed):
-    """A network spec with no matching TV shows is skipped."""
-    seed([show("Some Show", studio="HBO")])
+    """A network spec with no matching TV shows is skipped (TVmaze cache has different network)."""
+    seed([show("Some Show")])
+    _write_tvmaze_cache(pr, {"Some Show": "HBO"})
     out = _compose(pr, [{"kind": "network", "value": "Netflix"}])
     assert out["count"] == 0
     assert out["skipped"][0]["reason"] == "no matching titles"
@@ -254,14 +274,24 @@ def test_network_no_match_skipped(pr, seed):
 
 def test_network_shuffle_default(pr, seed):
     """network kind uses 'shuffle' as its default shuffle mode."""
-    seed([
-        show("A", studio="HBO"),
-        show("B", studio="HBO"),
-        show("C", studio="HBO"),
-    ])
+    seed([show("A"), show("B"), show("C")])
+    _write_tvmaze_cache(pr, {"A": "HBO", "B": "HBO", "C": "HBO"})
     _compose(pr, [{"kind": "network", "value": "HBO"}])
     draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
     assert draft["channels"][0]["shuffle"] == "shuffle"
+
+
+def test_network_fallback_to_studio_when_no_cache(pr, seed):
+    """Without TVmaze cache, network kind falls back to the Studio column."""
+    seed([
+        show("Show A", studio="HBO"),
+        show("Show B", studio="HBO"),
+        show("Show C", studio="HBO"),
+    ])
+    # No cache written — Studio fallback must find the HBO shows.
+    out = _compose(pr, [{"kind": "network", "value": "HBO"}])
+    assert out["count"] == 1
+    assert out["channels"][0]["items"] == 3
 
 
 # ── programming_block ──────────────────────────────────────────────────────────

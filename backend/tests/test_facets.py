@@ -157,61 +157,53 @@ def test_tv_movie_genres_sorted_by_total_desc(pr, seed):
 
 
 # ── networks ───────────────────────────────────────────────────────────────────
+# NOTE: Networks now derive from the TVmaze cache (tvmaze_cache.json), NOT the
+# Studio column.  Comprehensive tests for all network behaviors live in
+# test_networks.py.  The tests here verify only the core facets contract that is
+# unaffected by the source change (returned shape, existence key, etc.).
 
-def test_networks_groups_tv_studio_values(pr, seed):
-    """Networks facet counts TV Studio values above NETWORK_MIN floor."""
+def test_networks_empty_when_no_tvmaze_cache(pr, seed):
+    """Networks facet returns [] when TVmaze cache is absent (scan not run yet)."""
     seed([
         show("Show A", studio="HBO"),
         show("Show B", studio="HBO"),
         show("Show C", studio="HBO"),
-        show("Show D", studio="Netflix"),
-        show("Show E", studio="Netflix"),
-        show("Show F", studio="Netflix"),
-        show("Show G", studio="Tiny"),  # only 1 — below NETWORK_MIN=3
     ])
+    # No tvmaze_cache.json → empty, regardless of Studio column.
     f = pr.library_facets()
-    by_value = {n["value"]: n["count"] for n in f["networks"]}
-    assert by_value.get("HBO") == 3
-    assert by_value.get("Netflix") == 3
-    assert "Tiny" not in by_value
+    assert f["networks"] == []
 
 
-def test_networks_excludes_movie_studios(pr, seed):
-    """Movie rows do NOT contribute to the networks facet — TV only."""
+def test_networks_from_tvmaze_cache_not_studio(pr, seed):
+    """Networks facet values come from TVmaze cache even when Studio says something else."""
+    import json
     seed([
-        movie("Film 1", studio="A24"),
-        movie("Film 2", studio="A24"),
-        movie("Film 3", studio="A24"),
-        movie("Film 4", studio="A24"),
-        show("Show 1", studio="HBO"),
-        show("Show 2", studio="HBO"),
-        show("Show 3", studio="HBO"),
+        show("Show A", studio="WrongLabel"),
+        show("Show B", studio="WrongLabel"),
+        show("Show C", studio="WrongLabel"),
     ])
+    sig = pr._library_signature()
+    cache = {"sig": sig, "networks": {"Show A": "HBO", "Show B": "HBO", "Show C": "HBO"}}
+    (pr._test_data_dir / "tvmaze_cache.json").write_text(
+        json.dumps(cache), encoding="utf-8"
+    )
     f = pr.library_facets()
     by_value = {n["value"]: n["count"] for n in f["networks"]}
-    assert "A24" not in by_value   # A24 is a movie studio, not a TV network
     assert by_value.get("HBO") == 3
+    assert "WrongLabel" not in by_value
 
 
 def test_networks_below_floor_omitted(pr, seed):
-    """Networks with fewer than NETWORK_MIN (3) TV shows are not returned."""
-    seed([
-        show("Show 1", studio="HBO"),
-        show("Show 2", studio="HBO"),  # 2 shows — below floor
-    ])
-    f = pr.library_facets()
-    assert len(f["networks"]) == 0
-
-
-def test_networks_sorted_by_count_desc(pr, seed):
-    """Networks facet is sorted by count descending."""
-    seed(
-        [show(f"HBO{i}", studio="HBO") for i in range(5)] +
-        [show(f"Net{i}", studio="Netflix") for i in range(3)]
+    """Networks with fewer than NETWORK_MIN (3) shows in the cache are not returned."""
+    import json
+    seed([show("Show 1"), show("Show 2")])
+    sig = pr._library_signature()
+    cache = {"sig": sig, "networks": {"Show 1": "HBO", "Show 2": "HBO"}}
+    (pr._test_data_dir / "tvmaze_cache.json").write_text(
+        json.dumps(cache), encoding="utf-8"
     )
     f = pr.library_facets()
-    values = [n["value"] for n in f["networks"]]
-    assert values.index("HBO") < values.index("Netflix")
+    assert len(f["networks"]) == 0
 
 
 # ── programming-blocks endpoint ────────────────────────────────────────────────
