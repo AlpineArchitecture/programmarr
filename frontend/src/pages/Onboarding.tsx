@@ -101,7 +101,8 @@ export default function Onboarding({ onComplete }: Props) {
     try {
       const config: Record<string, any> = {
         tunarr_url: tunarrUrl.trim(),
-        plex_servers: [{ name: 'My Library', url: plexUrl.trim(), token: plexToken.trim() }],
+        plex_url: plexUrl.trim(),
+        plex_token: plexToken.trim(),
         channel_order: channelOrder,
       };
       if (tmdbKey.trim()) config.tmdb_api_key = tmdbKey.trim();

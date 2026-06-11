@@ -150,6 +150,106 @@ def build_tunarr_title_sets(tunarr_url):
     return movie_titles, tv_titles
 
 
+# ── Tunarr-sourced row builders ────────────────────────────────────────────────
+# Used to supplement the primary Plex export with content from other Tunarr sources.
+# Tunarr has all sources already indexed; these builders produce equivalent CSV rows
+# from Tunarr program data. Country/Mood/Style are Plex-specific and left empty here.
+
+def _tunarr_tags(obj, key):
+    return "|".join(t.get("name", "") for t in obj.get(key, []) if t.get("name"))
+
+
+def tunarr_movie_to_row(prog, source_name):
+    return {
+        "Title":   prog.get("title", ""),
+        "Year":    prog.get("year", ""),
+        "Type":    "Movie",
+        "Rating":  prog.get("rating", ""),
+        "Genres":  _tunarr_tags(prog, "genres"),
+        "Director": _tunarr_tags(prog, "directors"),
+        "Studio":  _tunarr_tags(prog, "studios"),
+        "Actors":  "|".join(a.get("name", "") for a in prog.get("actors", [])[:LEAD_CAST] if a.get("name")),
+        "Seasons": "", "Episodes": "",
+        "Country": "", "Mood": "", "Style": "",
+        "Source":  source_name,
+    }
+
+
+def tunarr_show_to_row(show_title, episodes, source_name):
+    first = episodes[0] if episodes else {}
+    show  = first.get("show", {})
+    seasons = len({ep.get("season", {}).get("index") for ep in episodes if ep.get("season", {}).get("index") is not None})
+    # Prefer show-level metadata if present; fall back to first episode's own fields.
+    meta = show if show.get("genres") or show.get("studios") else first
+    return {
+        "Title":   show_title,
+        "Year":    show.get("year", ""),
+        "Type":    "TV",
+        "Rating":  first.get("rating", ""),
+        "Genres":  _tunarr_tags(meta, "genres"),
+        "Director": "",
+        "Studio":  _tunarr_tags(meta, "studios"),
+        "Actors":  "|".join(a.get("name", "") for a in meta.get("actors", [])[:LEAD_CAST] if a.get("name")),
+        "Seasons": str(seasons) if seasons else "",
+        "Episodes": str(len(episodes)),
+        "Country": "", "Mood": "", "Style": "",
+        "Source":  source_name,
+    }
+
+
+def build_extra_rows_from_tunarr(tunarr_url, seen_movie_titles, seen_show_titles):
+    """Fetch content from all Tunarr Plex sources, skipping titles already in the primary export."""
+    print("  Fetching additional content from other Tunarr sources...")
+    sources = tunarr_get(tunarr_url, "/api/media-sources") or []
+    plex_sources = [s for s in sources if s.get("type") == "plex"]
+    if not plex_sources:
+        return [], []
+
+    extra_movie_rows = []
+    extra_show_rows  = []
+
+    for source in plex_sources:
+        source_name = source.get("name", "Plex")
+        libs = source.get("libraries", [])
+        movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
+        show_libs  = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
+
+        for lib in movie_libs:
+            programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+            for p in programs:
+                prog = p.get("program", {})
+                title = prog.get("title", "")
+                if not title or title.lower().strip() in seen_movie_titles:
+                    continue
+                seen_movie_titles.add(title.lower().strip())
+                extra_movie_rows.append(tunarr_movie_to_row(prog, source_name))
+
+        for lib in show_libs:
+            programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+            shows: dict = {}
+            for p in programs:
+                prog = p.get("program", {})
+                show = prog.get("show", {})
+                show_title = show.get("title", "")
+                if not show_title or show_title.lower().strip() in seen_show_titles:
+                    continue
+                key = show_title.lower().strip()
+                shows.setdefault(key, {"title": show_title, "episodes": [], "source": source_name})
+                shows[key]["episodes"].append(prog)
+            for key, s in shows.items():
+                seen_show_titles.add(key)
+                extra_show_rows.append(tunarr_show_to_row(s["title"], s["episodes"], s["source"]))
+
+    new_movies = len(extra_movie_rows)
+    new_shows  = len(extra_show_rows)
+    if new_movies or new_shows:
+        print(f"  Found {new_movies} additional movies, {new_shows} additional TV shows from Tunarr")
+    else:
+        print("  No additional content (primary Plex covers everything in Tunarr)")
+
+    return extra_movie_rows, extra_show_rows
+
+
 # ── Row builders ───────────────────────────────────────────────────────────────
 
 # Top-N billed cast kept per title — enough for actor channels without the noise
@@ -284,6 +384,13 @@ def main():
         print("ERROR: No content fetched from any Plex server")
         sys.exit(1)
 
+    # ── Supplement from other Tunarr sources ───────────────────────────────────
+    # Pull content that Tunarr knows about but isn't in the primary Plex export.
+    # De-duped against seen_movie_titles / seen_show_titles already collected above.
+    extra_movie_rows, extra_show_rows = build_extra_rows_from_tunarr(
+        tunarr_url, seen_movie_titles, seen_show_titles
+    )
+
     # ── Cross-reference with Tunarr ────────────────────────────────────────────
     tunarr_movies = None
     tunarr_shows = None
@@ -317,6 +424,10 @@ def main():
         row = show_to_row(item)
         row["Source"] = item.get("_source_name", "")
         rows.append(row)
+
+    # Append content from other Tunarr sources (already crossref'd — they came from Tunarr).
+    rows.extend(extra_movie_rows)
+    rows.extend(extra_show_rows)
 
     # ── Write CSV ──────────────────────────────────────────────────────────────
     fieldnames = ["Title", "Year", "Type", "Rating", "Genres", "Director", "Studio", "Actors", "Seasons", "Episodes",

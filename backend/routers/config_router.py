@@ -97,6 +97,17 @@ def save_config(config: ConfigModel):
         # Keep legacy scalar fields in sync with the primary server for CLI compat.
         merged["plex_url"]   = plex_servers[0].get("url", "")
         merged["plex_token"] = plex_servers[0].get("token", "")
+    elif merged.get("plex_servers"):
+        # Legacy-format save (plex_url/plex_token fields) — sync plex_servers[0] to match
+        # so both representations stay consistent.
+        url   = merged.get("plex_url", "")
+        token = merged.get("plex_token", "")
+        primary = dict(merged["plex_servers"][0])
+        if url:
+            primary["url"] = url
+        if token:
+            primary["token"] = token
+        merged["plex_servers"] = [primary] + merged["plex_servers"][1:]
     merged["update_check_enabled"] = update_check
     # Preserve old channel_blocks key silently (don't crash; just ignore it).
     with open(_path(), "w") as f:
