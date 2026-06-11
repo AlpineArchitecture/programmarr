@@ -159,7 +159,20 @@ and the code — don't restate them here.
 - **`generate_from_collections.py`** — one channel per Plex collection via `{"collection":"Name"}`. Manages the collection block (default ch 80+): keeps everything below `--base`, regenerates from `--base` up. Re-run any time Kometa changes collections.
 - **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**. `build_library_index` indexes **all** enabled movie and shows libraries (not just the first — a Plex server can expose several, e.g. `TV Shows` + `Cartoons`), and indexes a show that appears in more than one library **once**, preferring the copy with the most playable (non-`missing`) episodes so a dead duplicate can't shadow the real one or inflate the live-diff into churn.
 - **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels.
-- **`fetch_images.py`** — for solo-title channels, finds the best TMDB clearlogo and sets the Tunarr channel `icon.path` so Plex shows a real logo in the guide. Multi-title channels are skipped. Dry-run by default; `--apply` to commit. Requires `tmdb_api_key`.
+- **`fetch_images.py`** — sets every channel's Tunarr icon. Verified TMDB logos for
+  solo-title/marathon/franchise/network/studio channels (the result's name must match the
+  query after normalization — never `results[0]`); generated badge art for every other kind
+  and any TMDB miss. Badges upload via Tunarr `POST /api/upload/image`. Channels pinned from
+  the Channels editor (`"icon": {"pinned": true}` in channels.json) are skipped; the script
+  never writes channels.json. `tmdb_api_key` is optional — without it everything badges.
+  Dry-run by default; `--apply` to commit.
+- **`icon_engine.py`** — shared, **pure, importable** icon policy + verified TMDB searches +
+  Tunarr upload/icon helpers (no `config.json`/argv/`sys.exit`). Imported by `fetch_images.py`
+  and in-process by `channels_router.py`. **Must stay in the Dockerfile `COPY` line.**
+- **`badge_renderer.py`** — shared, **pure** Pillow badge rendering from committed
+  `badge_assets/` (Tabler glyphs MIT, Anton font OFL; regenerate via
+  `scripts/make_badge_assets.py`). Badges carry the channel name because Plex hides text
+  labels once an icon is set. **Module + `badge_assets/` must stay in the Dockerfile `COPY` lines.**
 - **`sync_plex.py`** — reconciles Tunarr's XMLTV channel list into Plex's DVR mapping (read-then-update; **never deletes** the DVR). Falls back to printing the XMLTV URL + manual steps.
 
 ## Channel Numbering Scheme

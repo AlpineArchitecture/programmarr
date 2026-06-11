@@ -1,45 +1,40 @@
 #!/usr/bin/env python3
 """
-fetch_images.py — Fetch TMDB logos for Tunarr channels and set them in Tunarr.
+fetch_images.py — set every channel's Tunarr icon.
 
-Solo-title channels (one content item) are searched by that title.
-Multi-title channels (network, franchise, entity, genre blocks, etc.) are searched
-by channel name using kind-aware strategies loaded from planner_state.json.
+Verified TMDB logos where a lookup is trustworthy, generated badge art
+everywhere else (see icon_engine.icon_attempts for the policy):
 
-Requires "tmdb_api_key" in config.json. Get a free key at https://www.themoviedb.org/settings/api
+  * solo-title channels and marathon/franchise/network/studio kinds try a
+    VERIFIED TMDB search — the result's name must equal the query after
+    normalization. Never results[0] on faith.
+  * every other kind (genre, decade, mood, theme, ...) and any TMDB miss
+    gets a badge (badge_renderer) uploaded via Tunarr POST /api/upload/image.
+  * channels pinned from the Channels editor ("icon": {"pinned": true} in
+    channels.json) are skipped. This script NEVER writes channels.json.
+
+"tmdb_api_key" in config.json is OPTIONAL — without it everything badges.
 
 Usage:
-    python fetch_images.py              # dry run — shows what logo would be used
-    python fetch_images.py --apply      # actually update Tunarr channel icons
-    python fetch_images.py --channel 10 # dry run for one channel only
-    python fetch_images.py --channel 10 --apply
-    python fetch_images.py --clear      # remove all custom icons (reset to tunarr default)
+    python fetch_images.py              # dry run — shows what would be set
+    python fetch_images.py --apply      # actually update Tunarr
+    python fetch_images.py --channel 10 [--apply]
+    python fetch_images.py --clear      # remove all custom icons
 """
 
 import argparse
 import json
-import os
-import re
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
+import uuid
+
+import badge_renderer
+import icon_engine
 
 CONFIG_FILE = "config.json"
 DEFAULT_CHANNELS_FILE = "channels.json"
 PLANNER_STATE_FILE = "planner_state.json"
-TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
 
-_FRANCHISE_SUFFIXES = re.compile(
-    r"\s+(Collection|Series|Franchise|Universe|Saga|Trilogy|Tetralogy|Anthology|Films?|Movies?|Pictures?)\s*$",
-    re.IGNORECASE,
-)
-_ENTITY_SUFFIXES = re.compile(r"\s+(Movies|Films?|Pictures?)\s*$", re.IGNORECASE)
-_DIRECTOR_PREFIX = re.compile(r"^Directed\s+by\s+", re.IGNORECASE)
-
-
-# ── Config ─────────────────────────────────────────────────────────────────────
 
 def load_config():
     try:
@@ -48,363 +43,94 @@ def load_config():
     except FileNotFoundError:
         print(f"ERROR: {CONFIG_FILE} not found.")
         sys.exit(1)
-
-    if not cfg.get("tmdb_api_key"):
-        print("ERROR: 'tmdb_api_key' not found in config.json.")
-        print("  Get a free key at https://www.themoviedb.org/settings/api")
-        print("  Then add: \"tmdb_api_key\": \"your-key-here\" to config.json")
+    if not cfg.get("tunarr_url"):
+        print("ERROR: 'tunarr_url' not found in config.json.")
         sys.exit(1)
-
     return cfg
 
 
-def load_planner_kind_hints(channels_json_path):
-    """Load channel-name -> kind mapping from planner_state.json. Returns {} on failure."""
-    candidates = [
-        os.path.join(os.path.dirname(channels_json_path) or ".", PLANNER_STATE_FILE),
-        os.path.join("data", PLANNER_STATE_FILE),
-    ]
-    for path in candidates:
-        try:
-            with open(path, encoding="utf-8") as f:
-                ps = json.load(f)
-            return {
-                v["name"].strip().lower(): v["kind"]
-                for v in ps.get("selected", {}).values()
-                if v.get("name") and v.get("kind")
-            }
-        except (FileNotFoundError, KeyError, json.JSONDecodeError):
-            continue
-    return {}
-
-
-# ── HTTP helpers ───────────────────────────────────────────────────────────────
-
-def http_get(url, timeout=15):
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Programmarr/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        print(f"  ! HTTP {e.code}: {url}")
-        return None
-    except Exception as e:
-        print(f"  ! Error fetching {url}: {e}")
-        return None
-
-
-def tunarr_get(tunarr_url, path):
-    return http_get(tunarr_url + path, timeout=30)
-
-
-def tunarr_put(tunarr_url, path, body):
-    url = tunarr_url + path
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data,
-                                 headers={"Accept": "application/json", "Content-Type": "application/json"},
-                                 method="PUT")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode(errors="replace")
-        print(f"  ! HTTP {e.code} [PUT {path}]: {raw[:200]}")
-        return None
-    except Exception as e:
-        print(f"  ! Error [PUT {path}]: {e}")
-        return None
-
-
-# ── TMDB lookup ────────────────────────────────────────────────────────────────
-
-def tmdb_search_tv(title, api_key):
-    q = urllib.parse.urlencode({"query": title, "api_key": api_key})
-    data = http_get(f"https://api.themoviedb.org/3/search/tv?{q}")
-    if not data or not data.get("results"):
-        return None
-    return data["results"][0]["id"]
-
-
-def tmdb_search_movie(title, api_key):
-    q = urllib.parse.urlencode({"query": title, "api_key": api_key})
-    data = http_get(f"https://api.themoviedb.org/3/search/movie?{q}")
-    if not data or not data.get("results"):
-        return None
-    return data["results"][0]["id"]
-
-
-def tmdb_search_company(name, api_key):
-    q = urllib.parse.urlencode({"query": name, "api_key": api_key})
-    data = http_get(f"https://api.themoviedb.org/3/search/company?{q}")
-    if not data or not data.get("results"):
-        return None
-    return data["results"][0]["id"]
-
-
-def tmdb_company_best_logo(company_id, api_key):
-    """Returns logo URL for a TMDB company/network id, or None."""
-    q = urllib.parse.urlencode({"api_key": api_key})
-    images = http_get(f"https://api.themoviedb.org/3/company/{company_id}/images?{q}")
-    if not images:
-        return None
-    path = tmdb_best_logo(images)
-    return TMDB_IMAGE_BASE + path if path else None
-
-
-def tmdb_best_logo(images, prefer_lang="en"):
-    """Pick the best logo from a TMDB images response. Returns file_path or None."""
-    logos = images.get("logos", [])
-    if not logos:
-        return None
-
-    # Prefer English logos, then null/no-language, then anything
-    for lang in (prefer_lang, None, ""):
-        candidates = [l for l in logos if l.get("iso_639_1") == lang]
-        if candidates:
-            best = max(candidates, key=lambda l: l.get("vote_average", 0))
-            return best["file_path"]
-
-    # Fallback: highest vote regardless of language
-    best = max(logos, key=lambda l: l.get("vote_average", 0))
-    return best["file_path"]
-
-
-def fetch_logo_url(title, api_key):
-    """
-    Try TV search, then movie search. Returns (logo_url, media_type) or (None, None).
-    """
-    # Try TV first
-    tv_id = tmdb_search_tv(title, api_key)
-    if tv_id:
-        q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
-        images = http_get(f"https://api.themoviedb.org/3/tv/{tv_id}/images?{q}")
-        if images:
-            path = tmdb_best_logo(images)
-            if path:
-                return TMDB_IMAGE_BASE + path, "TV"
-
-    time.sleep(0.25)  # be polite to TMDB rate limits
-
-    # Try movie
-    movie_id = tmdb_search_movie(title, api_key)
-    if movie_id:
-        q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
-        images = http_get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?{q}")
-        if images:
-            path = tmdb_best_logo(images)
-            if path:
-                return TMDB_IMAGE_BASE + path, "Movie"
-
-    return None, None
-
-
-def clean_channel_name(name):
-    """Strip suffixes/prefixes that obscure the searchable entity name."""
-    name = _DIRECTOR_PREFIX.sub("", name).strip()
-    name = _FRANCHISE_SUFFIXES.sub("", name).strip()
-    name = _ENTITY_SUFFIXES.sub("", name).strip()
-    return name
-
-
-def fetch_logo_for_multi(ch_def, kind, api_key):
-    """
-    Fetch a TMDB logo for a multi-title channel using kind-aware search strategies.
-    Returns (logo_url, label) or (None, None).
-    """
-    name = ch_def["name"]
-    cleaned = clean_channel_name(name)
-    content_strings = [c for c in ch_def.get("content", []) if isinstance(c, str)]
-
-    def try_tv(title):
-        tid = tmdb_search_tv(title, api_key)
-        if not tid:
-            return None, None
-        q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
-        images = http_get(f"https://api.themoviedb.org/3/tv/{tid}/images?{q}")
-        path = tmdb_best_logo(images) if images else None
-        return (TMDB_IMAGE_BASE + path, "TV") if path else (None, None)
-
-    def try_movie(title):
-        mid = tmdb_search_movie(title, api_key)
-        if not mid:
-            return None, None
-        q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
-        images = http_get(f"https://api.themoviedb.org/3/movie/{mid}/images?{q}")
-        path = tmdb_best_logo(images) if images else None
-        return (TMDB_IMAGE_BASE + path, "Movie") if path else (None, None)
-
-    def try_company(title):
-        cid = tmdb_search_company(title, api_key)
-        if not cid:
-            return None, None
-        url = tmdb_company_best_logo(cid, api_key)
-        return (url, "Company") if url else (None, None)
-
-    if kind == "network":
-        strategies = [
-            (try_company, name),
-            (try_tv, name),
-            (try_movie, name),
-        ]
-    elif kind == "franchise":
-        strategies = [
-            (try_tv, cleaned),
-            (try_movie, cleaned),
-        ]
-        if content_strings:
-            strategies += [
-                (try_tv, content_strings[0]),
-                (try_movie, content_strings[0]),
-            ]
-    elif kind in ("director", "actor"):
-        strategies = [
-            (try_tv, cleaned),
-            (try_movie, cleaned),
-            (try_company, cleaned),
-        ]
-    else:
-        strategies = [
-            (try_tv, name),
-            (try_movie, name),
-            (try_company, name),
-        ]
-        if cleaned != name:
-            strategies += [
-                (try_tv, cleaned),
-                (try_movie, cleaned),
-            ]
-
-    for fn, arg in strategies:
-        url, label = fn(arg)
-        if url:
-            return url, label
-        time.sleep(0.25)
-
-    return None, None
-
-
-# ── Tunarr channel helpers ─────────────────────────────────────────────────────
-
 def get_tunarr_channels(tunarr_url):
-    """Returns dict of number -> full channel object."""
-    channels = tunarr_get(tunarr_url, "/api/channels") or []
+    """number -> full channel object for every Tunarr channel."""
+    channels = icon_engine.http_get(f"{tunarr_url}/api/channels", timeout=30) or []
     by_number = {}
     for ch in channels:
-        full = tunarr_get(tunarr_url, f"/api/channels/{ch['id']}")
+        full = icon_engine.get_full_channel(tunarr_url, ch["id"])
         if full:
             by_number[ch["number"]] = full
     return by_number
 
 
-def update_channel_icon(tunarr_url, channel, icon_url, apply):
-    """Set icon.path on a Tunarr channel. Returns True on success."""
-    updated = dict(channel)
-    updated["icon"] = dict(channel.get("icon", {}))
-    updated["icon"]["path"] = icon_url
-    updated["icon"]["useDefaultIconFallback"] = False
+def run_clear(tunarr_url, apply):
+    print("Fetching Tunarr channels...")
+    cleared = 0
+    for number, tch in sorted(get_tunarr_channels(tunarr_url).items()):
+        if not tch.get("icon", {}).get("path"):
+            continue
+        label = f"#{number} {tch['name']}"
+        if apply:
+            ok = icon_engine.clear_tunarr_channel_icon(tunarr_url, tch)
+            print(f"  {'Cleared' if ok else 'FAIL  '} {label}")
+            cleared += 1 if ok else 0
+        else:
+            print(f"  [DRY RUN] Would clear {label}")
+            cleared += 1
+    print(f"\nDone: {cleared} icons {'cleared' if apply else 'would be cleared'}")
 
-    if not apply:
-        return True
-
-    result = tunarr_put(tunarr_url, f"/api/channels/{channel['id']}", updated)
-    return result is not None
-
-
-def clear_channel_icon(tunarr_url, channel, apply):
-    """Reset icon.path to empty/default on a Tunarr channel."""
-    updated = dict(channel)
-    updated["icon"] = dict(channel.get("icon", {}))
-    updated["icon"]["path"] = ""
-    updated["icon"]["useDefaultIconFallback"] = True
-
-    if not apply:
-        return True
-
-    result = tunarr_put(tunarr_url, f"/api/channels/{channel['id']}", updated)
-    return result is not None
-
-
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch TMDB logos for Tunarr channels")
+    parser = argparse.ArgumentParser(
+        description="Set Tunarr channel icons: verified TMDB logos + generated badges")
     parser.add_argument("--json", default=DEFAULT_CHANNELS_FILE, help="channels.json file")
-    parser.add_argument("--apply", action="store_true", help="Actually update Tunarr (default is dry run)")
+    parser.add_argument("--apply", action="store_true",
+                        help="Actually update Tunarr (default is dry run)")
     parser.add_argument("--channel", type=int, help="Process only this channel number")
-    parser.add_argument("--clear", action="store_true", help="Remove all custom icons, reset to Tunarr default")
+    parser.add_argument("--clear", action="store_true",
+                        help="Remove all custom icons, reset to Tunarr default")
     args = parser.parse_args()
 
     cfg = load_config()
     tunarr_url = cfg["tunarr_url"].rstrip("/")
-    tmdb_key = cfg["tmdb_api_key"]
+    tmdb_key = cfg.get("tmdb_api_key", "")
+
+    if not args.apply:
+        print("DRY RUN — pass --apply to update Tunarr\n")
+    if args.clear:
+        run_clear(tunarr_url, args.apply)
+        return
+    if not tmdb_key:
+        print("NOTE: no tmdb_api_key in config.json — every channel gets a "
+              "generated badge (no TMDB logo lookups).\n")
 
     try:
         with open(args.json, encoding="utf-8") as f:
-            data = json.load(f)
+            channels_def = json.load(f).get("channels", [])
     except FileNotFoundError:
         print(f"ERROR: {args.json} not found.")
         sys.exit(1)
 
-    channels_def = data.get("channels", [])
-
-    if not args.apply:
-        print("DRY RUN — pass --apply to update Tunarr\n")
-
-    # ── Clear mode ─────────────────────────────────────────────────────────────
-    if args.clear:
-        print("Fetching Tunarr channels...")
-        tunarr_chs = get_tunarr_channels(tunarr_url)
-        cleared = 0
-        for number, tch in sorted(tunarr_chs.items()):
-            if tch.get("icon", {}).get("path"):
-                label = f"#{number} {tch['name']}"
-                if args.apply:
-                    ok = clear_channel_icon(tunarr_url, tch, apply=True)
-                    print(f"  {'Cleared' if ok else 'FAIL  '} {label}")
-                    if ok:
-                        cleared += 1
-                else:
-                    print(f"  [DRY RUN] Would clear {label}")
-                    cleared += 1
-        print(f"\nDone: {cleared} icons {'cleared' if args.apply else 'would be cleared'}")
-        return
-
-    # ── Build channel lists ────────────────────────────────────────────────────
-
-    solo = [ch for ch in channels_def
-            if len(ch.get("content", [])) == 1
-            and isinstance(ch["content"][0], str)]
-
-    multi = [ch for ch in channels_def
-             if not (len(ch.get("content", [])) == 1 and isinstance(ch["content"][0], str))]
-
     if args.channel:
-        solo = [ch for ch in solo if ch["number"] == args.channel]
-        multi = [ch for ch in multi if ch["number"] == args.channel]
-        if not solo and not multi:
-            ch_match = next((c for c in channels_def if c["number"] == args.channel), None)
-            if ch_match:
-                print(f"Channel #{args.channel} not found in processable channels.")
-            else:
-                print(f"Channel #{args.channel} not found in {args.json}")
+        channels_def = [c for c in channels_def if c.get("number") == args.channel]
+        if not channels_def:
+            print(f"Channel #{args.channel} not found in {args.json}")
             sys.exit(1)
 
-    print(f"Found {len(solo)} solo-title channel(s) and {len(multi)} multi-title channel(s)\n")
-
+    hints = icon_engine.load_spec_hints(PLANNER_STATE_FILE)
+    print(f"Processing {len(channels_def)} channel(s)\n")
     print("Fetching Tunarr channels...")
     tunarr_chs = get_tunarr_channels(tunarr_url)
     print()
 
-    stats = {"set": 0, "no_logo": 0, "no_channel": 0, "failed": 0}
+    stats = {"tmdb": 0, "badge": 0, "pinned": 0, "no_channel": 0, "failed": 0}
+    verb = "Set" if args.apply else "[DRY RUN] Would set"
 
-    # ── Solo-title channels ────────────────────────────────────────────────────
+    for ch_def in channels_def:
+        number = ch_def.get("number")
+        name = (ch_def.get("name") or "").strip()
 
-    for ch_def in solo:
-        number = ch_def["number"]
-        name = ch_def["name"]
-        title = ch_def["content"][0]
+        if (ch_def.get("icon") or {}).get("pinned"):
+            print(f"  PIN  #{number} {name} — user-pinned icon, skipping")
+            stats["pinned"] += 1
+            continue
 
         tch = tunarr_chs.get(number)
         if not tch:
@@ -412,69 +138,53 @@ def main():
             stats["no_channel"] += 1
             continue
 
-        print(f"  #{number} {name}  [{title}]", end="", flush=True)
+        spec = hints.get(name.lower(), {})
+        kind = spec.get("kind")
 
-        logo_url, media_type = fetch_logo_url(title, tmdb_key)
-        time.sleep(0.25)
+        logo_url = None
+        if tmdb_key:
+            attempts = icon_engine.icon_attempts(ch_def, kind)
+            if attempts:
+                logo_url = icon_engine.resolve_tmdb_logo(attempts, tmdb_key)
+                time.sleep(0.25)  # be polite to TMDB rate limits
 
-        if not logo_url:
-            print(f"  -- no logo found on TMDB")
-            stats["no_logo"] += 1
+        if logo_url:
+            ok = icon_engine.set_tunarr_channel_icon(tunarr_url, tch, logo_url) \
+                if args.apply else True
+            if ok:
+                print(f"  #{number} {name} — {verb} TMDB logo")
+                print(f"    {logo_url}")
+            else:
+                print(f"  #{number} {name} — FAILED to update Tunarr")
+            stats["tmdb" if ok else "failed"] += 1
             continue
 
-        ok = update_channel_icon(tunarr_url, tch, logo_url, apply=args.apply)
-        if ok:
-            verb = "Set" if args.apply else "[DRY RUN] Would set"
-            print(f"  -- {verb} {media_type} logo")
-            print(f"    {logo_url}")
-            stats["set"] += 1
-        else:
-            print(f"  -- FAILED to update Tunarr")
-            stats["failed"] += 1
-
-    # ── Multi-title channels ───────────────────────────────────────────────────
-
-    if multi:
-        if solo:
-            print()
-        kind_hints = load_planner_kind_hints(args.json)
-
-        for ch_def in multi:
-            number = ch_def["number"]
-            name = ch_def["name"]
-            kind = kind_hints.get(name.strip().lower())
-
-            tch = tunarr_chs.get(number)
-            if not tch:
-                print(f"  SKIP #{number} {name} — not found in Tunarr (not deployed yet?)")
-                stats["no_channel"] += 1
-                continue
-
-            kind_label = f" [{kind}]" if kind else ""
-            print(f"  #{number} {name}{kind_label}", end="", flush=True)
-
-            logo_url, media_type = fetch_logo_for_multi(ch_def, kind, tmdb_key)
-            time.sleep(0.25)
-
-            if not logo_url:
-                print(f"  -- no logo found on TMDB")
-                stats["no_logo"] += 1
-                continue
-
-            ok = update_channel_icon(tunarr_url, tch, logo_url, apply=args.apply)
-            if ok:
-                verb = "Set" if args.apply else "[DRY RUN] Would set"
-                print(f"  -- {verb} {media_type} logo")
-                print(f"    {logo_url}")
-                stats["set"] += 1
-            else:
-                print(f"  -- FAILED to update Tunarr")
+        # Badge path — the universal fallback.
+        label = f"badge ({kind or 'generic'})"
+        if args.apply:
+            png = badge_renderer.render_badge(name, kind=kind,
+                                              genre=icon_engine.spec_genre(spec))
+            try:
+                badge_url = icon_engine.upload_image_to_tunarr(
+                    tunarr_url, png,
+                    f"programmarr-ch{number}-{uuid.uuid4().hex[:8]}.png")
+                ok = icon_engine.set_tunarr_channel_icon(tunarr_url, tch, badge_url)
+            except Exception as e:
+                print(f"  #{number} {name} — FAILED badge upload: {e}")
                 stats["failed"] += 1
+                continue
+        else:
+            ok = True
+        if ok:
+            print(f"  #{number} {name} — {verb} {label}")
+        else:
+            print(f"  #{number} {name} — FAILED to update Tunarr")
+        stats["badge" if ok else "failed"] += 1
 
     print(f"\n{'Applied' if args.apply else 'Dry run'}: "
-          f"{stats['set']} logos {'set' if args.apply else 'found'}, "
-          f"{stats['no_logo']} not found on TMDB, "
-          f"{stats['no_channel']} channels not in Tunarr"
+          f"{stats['tmdb']} TMDB logos, {stats['badge']} badges, "
+          f"{stats['pinned']} pinned (skipped), "
+          f"{stats['no_channel']} not in Tunarr"
           + (f", {stats['failed']} failed" if stats["failed"] else ""))
 
 
