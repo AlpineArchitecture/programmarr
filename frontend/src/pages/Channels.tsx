@@ -186,6 +186,11 @@ function ChannelModal({
   const [commPad, setCommPad] = useState('5');
   const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
 
+  // Channel icon
+  const [iconBusy, setIconBusy] = useState<string | null>(null);
+  const [iconUrl, setIconUrl] = useState('');
+  const [customIconUrl, setCustomIconUrl] = useState('');
+
   // Filler lists live in Tunarr; fetch once so the picker can offer them.
   useEffect(() => {
     api.getFillerLists().then(setFillerLists).catch(() => setFillerLists([]));
@@ -202,6 +207,9 @@ function ChannelModal({
     setCommEnabled(!!comm?.filler_list_id);
     setCommListId(comm?.filler_list_id ?? null);
     setCommPad(String(comm?.pad_minutes ?? 5));
+
+    setIconUrl(channel.icon?.url ?? '');
+    setCustomIconUrl('');
 
     const mref = channel.content.find(isMatchRef);
     setMatchRef(mref ? { value: mref.value, order: mref.order || 'release_date', exclude: mref.exclude || [] } : null);
@@ -261,6 +269,26 @@ function ChannelModal({
       notifications.show({ title: 'Error', message: e.message, color: 'red' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function applyIcon(mode: 'badge' | 'tmdb' | 'custom' | 'clear') {
+    if (!channel) return;
+    setIconBusy(mode);
+    try {
+      const res = await api.setChannelIcon(
+        channel.number,
+        mode === 'custom' ? { mode, url: customIconUrl.trim() } : { mode },
+      );
+      setIconUrl(res.url);
+      notifications.show({
+        message: mode === 'clear' ? 'Icon reset to automatic' : 'Channel icon updated',
+        color: 'green',
+      });
+    } catch (e: any) {
+      notifications.show({ title: 'Icon update failed', message: e.message, color: 'red' });
+    } finally {
+      setIconBusy(null);
     }
   }
 
@@ -417,6 +445,43 @@ function ChannelModal({
               />
             </Group>
           )
+        )}
+
+        {channel && (
+          <>
+            <Divider label="Channel icon" labelPosition="left" />
+            {iconUrl && (
+              <img src={iconUrl} alt="channel icon"
+                   style={{ height: 48, width: 48, objectFit: 'contain', alignSelf: 'flex-start' }} />
+            )}
+            <Group gap="xs">
+              <Button size="xs" variant="light" loading={iconBusy === 'badge'}
+                      onClick={() => applyIcon('badge')}>
+                Use badge
+              </Button>
+              <Button size="xs" variant="light" loading={iconBusy === 'tmdb'}
+                      onClick={() => applyIcon('tmdb')}>
+                Re-fetch TMDB logo
+              </Button>
+              <Button size="xs" variant="subtle" color="gray" loading={iconBusy === 'clear'}
+                      onClick={() => applyIcon('clear')}>
+                Reset to automatic
+              </Button>
+            </Group>
+            <Group gap="xs">
+              <TextInput size="xs" placeholder="https://… custom icon URL"
+                         value={customIconUrl} style={{ flex: 1 }}
+                         onChange={(e) => setCustomIconUrl(e.currentTarget.value)} />
+              <Button size="xs" variant="light" disabled={!customIconUrl.trim()}
+                      loading={iconBusy === 'custom'} onClick={() => applyIcon('custom')}>
+                Set
+              </Button>
+            </Group>
+            <Text size="xs" c="dimmed">
+              Choosing an icon pins it — automatic art passes skip this channel. "Reset to
+              automatic" unpins it.
+            </Text>
+          </>
         )}
 
         <Divider />
