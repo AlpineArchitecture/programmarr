@@ -198,3 +198,66 @@ def load_spec_hints(path):
 def spec_genre(spec):
     """Best genre hint from a CandidateSpec dict (genre, else first of genres)."""
     return spec.get("genre") or (spec.get("genres") or [None])[0]
+
+
+# ── Tunarr helpers ────────────────────────────────────────────────────────────
+
+def _tunarr_put(tunarr_url, path, body):
+    url = tunarr_url + path
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url, data=data, method="PUT",
+        headers={"Accept": "application/json", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        print(f"  ! HTTP {e.code} [PUT {path}]: {raw[:200]}")
+        return None
+    except Exception as e:
+        print(f"  ! Error [PUT {path}]: {e}")
+        return None
+
+
+def get_full_channel(tunarr_url, channel_id):
+    """Full Tunarr channel object (the summary from /api/channels lacks fields
+    the PUT round-trip needs)."""
+    return http_get(f"{tunarr_url}/api/channels/{channel_id}", timeout=30)
+
+
+def upload_image_to_tunarr(tunarr_url, png_bytes, filename):
+    """POST multipart to Tunarr /api/upload/image. Returns the Tunarr-served
+    fileUrl. Raises on HTTP failure (callers decide how to report)."""
+    boundary = uuid.uuid4().hex
+    body = (
+        (f"--{boundary}\r\n"
+         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+         f"Content-Type: image/png\r\n\r\n").encode()
+        + png_bytes
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    req = urllib.request.Request(
+        tunarr_url + "/api/upload/image", data=body, method="POST",
+        headers={"Accept": "application/json",
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read())["fileUrl"]
+
+
+def set_tunarr_channel_icon(tunarr_url, channel, icon_url):
+    """PUT the channel back with icon.path set. Returns True on success."""
+    updated = dict(channel)
+    updated["icon"] = dict(channel.get("icon") or {})
+    updated["icon"]["path"] = icon_url
+    updated["icon"]["useDefaultIconFallback"] = False
+    return _tunarr_put(tunarr_url, f"/api/channels/{channel['id']}", updated) is not None
+
+
+def clear_tunarr_channel_icon(tunarr_url, channel):
+    """Reset a channel to the Tunarr default icon. Returns True on success."""
+    updated = dict(channel)
+    updated["icon"] = dict(channel.get("icon") or {})
+    updated["icon"]["path"] = ""
+    updated["icon"]["useDefaultIconFallback"] = True
+    return _tunarr_put(tunarr_url, f"/api/channels/{channel['id']}", updated) is not None

@@ -1,5 +1,6 @@
 """icon_engine unit tests — pure logic, all HTTP stubbed. No network."""
 
+import json
 import icon_engine
 
 
@@ -166,3 +167,67 @@ def test_spec_genre_prefers_genre_then_genres():
     assert icon_engine.spec_genre({"genre": "horror"}) == "horror"
     assert icon_engine.spec_genre({"genres": ["western", "comedy"]}) == "western"
     assert icon_engine.spec_genre({}) is None
+
+# ── Tunarr helpers ────────────────────────────────────────────────────────────
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = json.dumps(payload).encode()
+    def read(self):
+        return self._payload
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+def test_upload_image_multipart(monkeypatch):
+    captured = {}
+    def fake_urlopen(req, timeout=30):
+        captured["req"] = req
+        return _FakeResp({"name": "x.png",
+                          "fileUrl": "http://t/images/uploads/x.png"})
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    url = icon_engine.upload_image_to_tunarr("http://t", b"\x89PNGfake", "x.png")
+
+    assert url == "http://t/images/uploads/x.png"
+    req = captured["req"]
+    assert req.full_url == "http://t/api/upload/image"
+    assert req.get_header("Content-type", "").startswith(
+        "multipart/form-data; boundary=")
+    assert b"\x89PNGfake" in req.data
+    assert b'filename="x.png"' in req.data
+    assert b'name="file"' in req.data
+
+
+def test_set_tunarr_channel_icon(monkeypatch):
+    sent = {}
+    def fake_put(tunarr_url, path, body):
+        sent["path"], sent["body"] = path, body
+        return body
+    monkeypatch.setattr(icon_engine, "_tunarr_put", fake_put)
+
+    ch = {"id": "abc", "name": "X", "icon": {"path": "old"}}
+    ok = icon_engine.set_tunarr_channel_icon("http://t", ch, "http://img/new.png")
+
+    assert ok is True
+    assert sent["path"] == "/api/channels/abc"
+    assert sent["body"]["icon"]["path"] == "http://img/new.png"
+    assert sent["body"]["icon"]["useDefaultIconFallback"] is False
+    assert ch["icon"]["path"] == "old"  # input not mutated
+
+
+def test_clear_tunarr_channel_icon(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(icon_engine, "_tunarr_put",
+                        lambda u, p, b: sent.update(body=b) or b)
+    ok = icon_engine.clear_tunarr_channel_icon("http://t", {"id": "abc"})
+    assert ok is True
+    assert sent["body"]["icon"]["path"] == ""
+    assert sent["body"]["icon"]["useDefaultIconFallback"] is True
+
+
+def test_set_icon_reports_failure(monkeypatch):
+    monkeypatch.setattr(icon_engine, "_tunarr_put", lambda u, p, b: None)
+    assert icon_engine.set_tunarr_channel_icon("http://t", {"id": "x"}, "u") is False
