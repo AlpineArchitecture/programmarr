@@ -1779,6 +1779,7 @@ class CandidateSpec(BaseModel):
     value: Optional[str] = None        # studio/director/actor/network name, or marathon show title
     titles: Optional[list[str]] = None  # programming_block: resolved member titles present in library
     shuffle: Optional[str] = None      # override; else category default
+    live: bool = False                 # franchise only: emit identity ref instead of static titles
 
 
 class ComposeRequest(BaseModel):
@@ -1966,13 +1967,35 @@ def compose_channels(req: ComposeRequest):
             skipped.append({"name": spec.name or spec.kind, "reason": f"unknown kind '{spec.kind}'"})
             continue
         category, default_shuffle = meta
-        content = _resolve_spec(spec, movies, shows)
         name = spec.name or _auto_name(spec)
+
+        # Live franchise: emit an identity content-ref instead of a static title list.
+        # Cache miss → fall back to static so we never create a live channel that would
+        # resolve from nothing (the scheduler would refuse to wipe it every cycle).
+        per_channel_extras: dict = {}
+        if spec.kind == "franchise" and spec.live and spec.titles and spec.name:
+            fr_index = channel_engine.load_franchise_index(DATA_DIR)
+            entry = fr_index.get(channel_engine._norm_franchise_name(spec.name))
+            if entry:
+                checked = {t.lower().strip() for t in spec.titles}
+                exclude = [t for t in entry["titles"] if t.lower().strip() not in checked]
+                content = [{"match": "franchise", "name": entry["name"],
+                            "order": "release_date", "exclude": exclude}]
+                per_channel_extras["live"] = True
+                shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else "ordered"
+            else:
+                # Cache miss: static fallback (plain titles, not live).
+                content = _resolve_spec(spec, movies, shows)
+                shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
+        else:
+            content = _resolve_spec(spec, movies, shows)
+            shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
+
         if not content:
             skipped.append({"name": name, "reason": "no matching titles"})
             continue
-        shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
-        buckets[category].append({"name": name, "shuffle": shuffle, "content": content})
+        buckets[category].append({"name": name, "shuffle": shuffle, "content": content,
+                                   **per_channel_extras})
 
     # Batch-wide extras from the Planner toggles, applied to every built channel.
     extras: dict = {}
