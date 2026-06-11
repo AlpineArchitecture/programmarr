@@ -3,6 +3,8 @@
 Pure logic against seeded temp caches and fabricated library maps. No network."""
 
 import json
+import sys
+from pathlib import Path
 
 import channel_engine
 
@@ -24,8 +26,9 @@ def _seed_caches(tmp_path, tmdb_collections=None, wikidata_franchises=None):
     return tmp_path
 
 
-def _movie(title, release_ms=None, year=None):
-    return {"program": {"title": title, "releaseDate": release_ms, "year": year}}
+def _movie(title, release_ms=None, year=None, pid=None):
+    return {"id": pid or f"p-{title.lower().replace(' ', '-')}",
+            "program": {"title": title, "releaseDate": release_ms, "year": year}}
 
 
 def _maps():
@@ -36,7 +39,7 @@ def _maps():
     }
     show_map = {
         "star trek": {"title": "Star Trek", "showId": "st-1",
-                      "programs": [{"program": {"year": 1966}}]},
+                      "programs": [{"id": "p-st-1", "program": {"year": 1966}}]},
     }
     return movie_map, show_map
 
@@ -153,3 +156,41 @@ def test_resolve_content_mixes_franchise_ref_with_plain_titles(tmp_path):
     resolved, missing = channel_engine.resolve_content(
         content, movie_map, show_map, franchise_index=idx)
     assert sorted(r["title"] for r in resolved) == ["Die Hard", "Unrelated"]
+
+
+# ── callers build and pass the index ──────────────────────────────────────────
+
+def test_scheduler_cycle_resolves_franchise_refs(tmp_path, monkeypatch):
+    """The scheduler's resolve path must hand the franchise index to
+    resolve_content — proven by resolving a live franchise channel end-to-end
+    through scheduler._run_cycle_blocking with all I/O stubbed."""
+    # scheduler is in backend/, which is already on sys.path via conftest
+    import scheduler
+
+    _seed_caches(tmp_path, tmdb_collections=[
+        (1, "Die Hard Collection", ["Die Hard", "Die Hard 2"]),
+    ])
+    movie_map, show_map = _maps()
+
+    (tmp_path / "config.json").write_text(json.dumps({"tunarr_url": "http://t"}))
+    (tmp_path / "channels.json").write_text(json.dumps({"channels": [{
+        "number": 7, "name": "Die Hard 24/7", "shuffle": "ordered", "live": True,
+        "content": [{"match": "franchise", "name": "Die Hard Collection",
+                     "order": "release_date", "exclude": []}],
+    }]}))
+
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(scheduler, "LOGS_DIR", tmp_path / "logs")
+    monkeypatch.setattr(channel_engine, "build_library_index",
+                        lambda url: (movie_map, show_map))
+    monkeypatch.setattr(channel_engine, "find_channel_by_number",
+                        lambda url, n: {"id": "tid-7", "number": n, "name": "Die Hard 24/7"})
+    # Current programming is empty → the fresh ids must register as a change.
+    monkeypatch.setattr(channel_engine, "read_channel_programming",
+                        lambda url, cid: set())
+
+    summary = scheduler._run_cycle_blocking(apply=False)
+    assert summary["error"] is None
+    assert summary["changed"] == 1
+    assert summary["changes"][0]["number"] == 7
+    assert summary["changes"][0]["added_count"] == 2  # both Die Hard movies

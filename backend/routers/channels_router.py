@@ -120,6 +120,7 @@ async def apply_channel(number: int):
             ch.get("content", []), movie_map, show_map,
             plex_url=plex_url, plex_token=plex_token,
             plex_sections=plex_sections, collection_cache=collection_cache,
+            franchise_index=channel_engine.load_franchise_index(DATA_DIR),
         )
         if not resolved:
             raise channel_engine.ChannelEngineError(
