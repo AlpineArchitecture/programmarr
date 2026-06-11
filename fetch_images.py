@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-fetch_images.py — Fetch TMDB logos for single-title channels and set them in Tunarr.
+fetch_images.py — Fetch TMDB logos for Tunarr channels and set them in Tunarr.
 
-Only processes channels with exactly one content item (solo TV show or solo movie).
-Multi-title channels (TGIF, genre blocks, decades) are skipped.
+Solo-title channels (one content item) are searched by that title.
+Multi-title channels (network, franchise, entity, genre blocks, etc.) are searched
+by channel name using kind-aware strategies loaded from planner_state.json.
 
 Requires "tmdb_api_key" in config.json. Get a free key at https://www.themoviedb.org/settings/api
 
@@ -17,6 +18,8 @@ Usage:
 
 import argparse
 import json
+import os
+import re
 import sys
 import time
 import urllib.error
@@ -25,7 +28,15 @@ import urllib.request
 
 CONFIG_FILE = "config.json"
 DEFAULT_CHANNELS_FILE = "channels.json"
+PLANNER_STATE_FILE = "planner_state.json"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
+
+_FRANCHISE_SUFFIXES = re.compile(
+    r"\s+(Collection|Series|Franchise|Universe|Saga|Trilogy|Tetralogy|Anthology|Films?|Movies?|Pictures?)\s*$",
+    re.IGNORECASE,
+)
+_ENTITY_SUFFIXES = re.compile(r"\s+(Movies|Films?|Pictures?)\s*$", re.IGNORECASE)
+_DIRECTOR_PREFIX = re.compile(r"^Directed\s+by\s+", re.IGNORECASE)
 
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -45,6 +56,26 @@ def load_config():
         sys.exit(1)
 
     return cfg
+
+
+def load_planner_kind_hints(channels_json_path):
+    """Load channel-name -> kind mapping from planner_state.json. Returns {} on failure."""
+    candidates = [
+        os.path.join(os.path.dirname(channels_json_path) or ".", PLANNER_STATE_FILE),
+        os.path.join("data", PLANNER_STATE_FILE),
+    ]
+    for path in candidates:
+        try:
+            with open(path, encoding="utf-8") as f:
+                ps = json.load(f)
+            return {
+                v["name"].strip().lower(): v["kind"]
+                for v in ps.get("selected", {}).values()
+                if v.get("name") and v.get("kind")
+            }
+        except (FileNotFoundError, KeyError, json.JSONDecodeError):
+            continue
+    return {}
 
 
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
@@ -104,6 +135,24 @@ def tmdb_search_movie(title, api_key):
     return data["results"][0]["id"]
 
 
+def tmdb_search_company(name, api_key):
+    q = urllib.parse.urlencode({"query": name, "api_key": api_key})
+    data = http_get(f"https://api.themoviedb.org/3/search/company?{q}")
+    if not data or not data.get("results"):
+        return None
+    return data["results"][0]["id"]
+
+
+def tmdb_company_best_logo(company_id, api_key):
+    """Returns logo URL for a TMDB company/network id, or None."""
+    q = urllib.parse.urlencode({"api_key": api_key})
+    images = http_get(f"https://api.themoviedb.org/3/company/{company_id}/images?{q}")
+    if not images:
+        return None
+    path = tmdb_best_logo(images)
+    return TMDB_IMAGE_BASE + path if path else None
+
+
 def tmdb_best_logo(images, prefer_lang="en"):
     """Pick the best logo from a TMDB images response. Returns file_path or None."""
     logos = images.get("logos", [])
@@ -147,6 +196,91 @@ def fetch_logo_url(title, api_key):
             path = tmdb_best_logo(images)
             if path:
                 return TMDB_IMAGE_BASE + path, "Movie"
+
+    return None, None
+
+
+def clean_channel_name(name):
+    """Strip suffixes/prefixes that obscure the searchable entity name."""
+    name = _DIRECTOR_PREFIX.sub("", name).strip()
+    name = _FRANCHISE_SUFFIXES.sub("", name).strip()
+    name = _ENTITY_SUFFIXES.sub("", name).strip()
+    return name
+
+
+def fetch_logo_for_multi(ch_def, kind, api_key):
+    """
+    Fetch a TMDB logo for a multi-title channel using kind-aware search strategies.
+    Returns (logo_url, label) or (None, None).
+    """
+    name = ch_def["name"]
+    cleaned = clean_channel_name(name)
+    content_strings = [c for c in ch_def.get("content", []) if isinstance(c, str)]
+
+    def try_tv(title):
+        tid = tmdb_search_tv(title, api_key)
+        if not tid:
+            return None, None
+        q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
+        images = http_get(f"https://api.themoviedb.org/3/tv/{tid}/images?{q}")
+        path = tmdb_best_logo(images) if images else None
+        return (TMDB_IMAGE_BASE + path, "TV") if path else (None, None)
+
+    def try_movie(title):
+        mid = tmdb_search_movie(title, api_key)
+        if not mid:
+            return None, None
+        q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
+        images = http_get(f"https://api.themoviedb.org/3/movie/{mid}/images?{q}")
+        path = tmdb_best_logo(images) if images else None
+        return (TMDB_IMAGE_BASE + path, "Movie") if path else (None, None)
+
+    def try_company(title):
+        cid = tmdb_search_company(title, api_key)
+        if not cid:
+            return None, None
+        url = tmdb_company_best_logo(cid, api_key)
+        return (url, "Company") if url else (None, None)
+
+    if kind == "network":
+        strategies = [
+            (try_company, name),
+            (try_tv, name),
+            (try_movie, name),
+        ]
+    elif kind == "franchise":
+        strategies = [
+            (try_tv, cleaned),
+            (try_movie, cleaned),
+        ]
+        if content_strings:
+            strategies += [
+                (try_tv, content_strings[0]),
+                (try_movie, content_strings[0]),
+            ]
+    elif kind in ("director", "actor"):
+        strategies = [
+            (try_tv, cleaned),
+            (try_movie, cleaned),
+            (try_company, cleaned),
+        ]
+    else:
+        strategies = [
+            (try_tv, name),
+            (try_movie, name),
+            (try_company, name),
+        ]
+        if cleaned != name:
+            strategies += [
+                (try_tv, cleaned),
+                (try_movie, cleaned),
+            ]
+
+    for fn, arg in strategies:
+        url, label = fn(arg)
+        if url:
+            return url, label
+        time.sleep(0.25)
 
     return None, None
 
@@ -195,7 +329,7 @@ def clear_channel_icon(tunarr_url, channel, apply):
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch TMDB logos for solo-title Tunarr channels")
+    parser = argparse.ArgumentParser(description="Fetch TMDB logos for Tunarr channels")
     parser.add_argument("--json", default=DEFAULT_CHANNELS_FILE, help="channels.json file")
     parser.add_argument("--apply", action="store_true", help="Actually update Tunarr (default is dry run)")
     parser.add_argument("--channel", type=int, help="Process only this channel number")
@@ -237,30 +371,35 @@ def main():
         print(f"\nDone: {cleared} icons {'cleared' if args.apply else 'would be cleared'}")
         return
 
-    # ── Normal mode: fetch logos for single-content channels ───────────────────
+    # ── Build channel lists ────────────────────────────────────────────────────
 
-    # Filter to solo-content channels (skip collection references — they're multi-title)
     solo = [ch for ch in channels_def
             if len(ch.get("content", [])) == 1
             and isinstance(ch["content"][0], str)]
+
+    multi = [ch for ch in channels_def
+             if not (len(ch.get("content", [])) == 1 and isinstance(ch["content"][0], str))]
+
     if args.channel:
         solo = [ch for ch in solo if ch["number"] == args.channel]
-        if not solo:
+        multi = [ch for ch in multi if ch["number"] == args.channel]
+        if not solo and not multi:
             ch_match = next((c for c in channels_def if c["number"] == args.channel), None)
             if ch_match:
-                cnt = len(ch_match.get("content", []))
-                print(f"Channel #{args.channel} has {cnt} content items — only solo channels are supported here.")
+                print(f"Channel #{args.channel} not found in processable channels.")
             else:
                 print(f"Channel #{args.channel} not found in {args.json}")
             sys.exit(1)
 
-    print(f"Found {len(solo)} solo-title channel(s) to process\n")
+    print(f"Found {len(solo)} solo-title channel(s) and {len(multi)} multi-title channel(s)\n")
 
     print("Fetching Tunarr channels...")
     tunarr_chs = get_tunarr_channels(tunarr_url)
     print()
 
     stats = {"set": 0, "no_logo": 0, "no_channel": 0, "failed": 0}
+
+    # ── Solo-title channels ────────────────────────────────────────────────────
 
     for ch_def in solo:
         number = ch_def["number"]
@@ -292,6 +431,45 @@ def main():
         else:
             print(f"  -- FAILED to update Tunarr")
             stats["failed"] += 1
+
+    # ── Multi-title channels ───────────────────────────────────────────────────
+
+    if multi:
+        if solo:
+            print()
+        kind_hints = load_planner_kind_hints(args.json)
+
+        for ch_def in multi:
+            number = ch_def["number"]
+            name = ch_def["name"]
+            kind = kind_hints.get(name.strip().lower())
+
+            tch = tunarr_chs.get(number)
+            if not tch:
+                print(f"  SKIP #{number} {name} — not found in Tunarr (not deployed yet?)")
+                stats["no_channel"] += 1
+                continue
+
+            kind_label = f" [{kind}]" if kind else ""
+            print(f"  #{number} {name}{kind_label}", end="", flush=True)
+
+            logo_url, media_type = fetch_logo_for_multi(ch_def, kind, tmdb_key)
+            time.sleep(0.25)
+
+            if not logo_url:
+                print(f"  -- no logo found on TMDB")
+                stats["no_logo"] += 1
+                continue
+
+            ok = update_channel_icon(tunarr_url, tch, logo_url, apply=args.apply)
+            if ok:
+                verb = "Set" if args.apply else "[DRY RUN] Would set"
+                print(f"  -- {verb} {media_type} logo")
+                print(f"    {logo_url}")
+                stats["set"] += 1
+            else:
+                print(f"  -- FAILED to update Tunarr")
+                stats["failed"] += 1
 
     print(f"\n{'Applied' if args.apply else 'Dry run'}: "
           f"{stats['set']} logos {'set' if args.apply else 'found'}, "
