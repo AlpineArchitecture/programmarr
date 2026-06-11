@@ -90,8 +90,11 @@ def search_company_verified(name, api_key):
 
 def best_logo_path(images, prefer_lang="en"):
     """Best logo file_path from a TMDB images response, or None.
-    Prefers prefer_lang, then no-language, then highest vote overall."""
-    logos = (images or {}).get("logos") or []
+    Prefers prefer_lang, then no-language, then highest vote overall.
+    SVG logos are excluded outright — Plex renders guide icons from raster
+    files only, and a broken icon is worse than the badge fallback."""
+    logos = [l for l in ((images or {}).get("logos") or [])
+             if not (l.get("file_path") or "").lower().endswith(".svg")]
     if not logos:
         return None
     for lang in (prefer_lang, None, ""):

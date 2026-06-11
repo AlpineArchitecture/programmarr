@@ -231,3 +231,17 @@ def test_clear_tunarr_channel_icon(monkeypatch):
 def test_set_icon_reports_failure(monkeypatch):
     monkeypatch.setattr(icon_engine, "_tunarr_put", lambda u, p, b: None)
     assert icon_engine.set_tunarr_channel_icon("http://t", {"id": "x"}, "u") is False
+
+
+def test_best_logo_prefers_raster_over_higher_voted_svg():
+    # Plex guide icons must be raster; an SVG logo renders broken in the guide.
+    images = {"logos": [
+        {"file_path": "/logo.svg", "iso_639_1": "en", "vote_average": 9},
+        {"file_path": "/logo.png", "iso_639_1": "en", "vote_average": 2},
+    ]}
+    assert icon_engine.best_logo_path(images) == "/logo.png"
+
+
+def test_best_logo_none_when_only_svg():
+    images = {"logos": [{"file_path": "/only.svg", "iso_639_1": "en", "vote_average": 9}]}
+    assert icon_engine.best_logo_path(images) is None
