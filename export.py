@@ -31,13 +31,28 @@ def load_config():
             cfg = json.load(f)
     except FileNotFoundError:
         print(f"ERROR: {CONFIG_FILE} not found.")
-        print("Create it with: tunarr_url, plex_url, plex_token")
+        print("Create it with: tunarr_url and plex_servers (or plex_url + plex_token)")
         sys.exit(1)
-    for key in ("tunarr_url", "plex_url", "plex_token"):
-        if not cfg.get(key):
-            print(f"ERROR: '{key}' missing from {CONFIG_FILE}")
-            sys.exit(1)
+    if not cfg.get("tunarr_url"):
+        print(f"ERROR: 'tunarr_url' missing from {CONFIG_FILE}")
+        sys.exit(1)
+    has_plex = cfg.get("plex_servers") or (cfg.get("plex_url") and cfg.get("plex_token"))
+    if not has_plex:
+        print(f"ERROR: Plex connection missing — set plex_servers or plex_url + plex_token in {CONFIG_FILE}")
+        sys.exit(1)
     return cfg
+
+
+def _get_plex_servers(cfg):
+    """Return list of (name, url, token) for all configured Plex servers."""
+    servers = cfg.get("plex_servers") or []
+    if servers:
+        return [
+            (s.get("name", "Plex"), s["url"].rstrip("/"), s["token"])
+            for s in servers
+            if s.get("url") and s.get("token")
+        ]
+    return [("Plex", cfg["plex_url"].rstrip("/"), cfg["plex_token"])]
 
 
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
@@ -101,36 +116,36 @@ def fetch_plex_shows(plex_url, token, section_key):
 def build_tunarr_title_sets(tunarr_url):
     print("  Fetching Tunarr library for cross-reference...")
     sources = tunarr_get(tunarr_url, "/api/media-sources") or []
-    plex_source = next((s for s in sources if s.get("type") == "plex"), None)
-    if not plex_source:
+    plex_sources = [s for s in sources if s.get("type") == "plex"]
+    if not plex_sources:
         print("  WARNING: No Plex source in Tunarr — skipping cross-reference")
         return None, None
 
-    libs = plex_source.get("libraries", [])
-    # Collect ALL enabled libraries of each type
-    movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
-    tv_libs    = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
+    movie_titles: set = set()
+    tv_titles: set    = set()
 
-    movie_titles = set()
-    tv_titles    = set()
+    for plex_source in plex_sources:
+        libs = plex_source.get("libraries", [])
+        movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
+        tv_libs    = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
 
-    for lib in movie_libs:
-        programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
-        titles   = {p.get("program", {}).get("title", "").lower().strip() for p in programs}
-        movie_titles |= titles
-        print(f"  Tunarr has {len(titles)} movies ({lib.get('name', lib['id'])})")
+        for lib in movie_libs:
+            programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+            titles   = {p.get("program", {}).get("title", "").lower().strip() for p in programs}
+            movie_titles |= titles
+            print(f"  Tunarr has {len(titles)} movies ({lib.get('name', lib['id'])})")
 
-    for lib in tv_libs:
-        programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
-        titles   = {p.get("program", {}).get("show", {}).get("title", "").lower().strip()
-                    for p in programs if p.get("program", {}).get("show")}
-        tv_titles |= titles
-        print(f"  Tunarr has {len(titles)} TV shows ({lib.get('name', lib['id'])})")
+        for lib in tv_libs:
+            programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+            titles   = {p.get("program", {}).get("show", {}).get("title", "").lower().strip()
+                        for p in programs if p.get("program", {}).get("show")}
+            tv_titles |= titles
+            print(f"  Tunarr has {len(titles)} TV shows ({lib.get('name', lib['id'])})")
 
     if movie_titles:
-        print(f"  Tunarr movie total (all libraries): {len(movie_titles)}")
+        print(f"  Tunarr movie total (all sources): {len(movie_titles)}")
     if tv_titles:
-        print(f"  Tunarr TV total (all libraries): {len(tv_titles)}")
+        print(f"  Tunarr TV total (all sources): {len(tv_titles)}")
 
     return movie_titles, tv_titles
 
@@ -199,63 +214,70 @@ def main():
     parser = argparse.ArgumentParser(description="Export Plex library to CSV")
     parser.add_argument("--out", default=OUTPUT_FILE, help="Output CSV path")
     parser.add_argument("--no-crossref", action="store_true", help="Skip Tunarr sync check")
-    parser.add_argument("--movie-sections", default=None, help="Comma-separated section keys for movies (auto-detect if omitted, empty string = skip)")
-    parser.add_argument("--tv-sections", default=None, help="Comma-separated section keys for TV shows (auto-detect if omitted, empty string = skip)")
+    parser.add_argument("--movie-sections", default=None,
+                        help="Comma-separated section keys for movies (auto-detect if omitted, empty = skip). Applied to all servers.")
+    parser.add_argument("--tv-sections", default=None,
+                        help="Comma-separated section keys for TV shows (auto-detect if omitted, empty = skip). Applied to all servers.")
     args = parser.parse_args()
 
     cfg = load_config()
-    plex_url = cfg["plex_url"].rstrip("/")
-    plex_token = cfg["plex_token"]
     tunarr_url = cfg["tunarr_url"].rstrip("/")
+    plex_server_list = _get_plex_servers(cfg)
+    multi = len(plex_server_list) > 1
 
-    # ── Discover Plex sections ─────────────────────────────────────────────────
-    print("\n[1/4] Discovering Plex library sections...")
-    sections = get_plex_sections(plex_url, plex_token)
-    if not sections:
-        print("ERROR: Could not reach Plex or no sections found")
-        sys.exit(1)
-
-    if args.movie_sections is not None:
-        keys = {k.strip() for k in args.movie_sections.split(",") if k.strip()}
-        movie_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "movie"]
-    else:
-        movie_sections = [s for s in sections if s.get("type") == "movie"]
-
-    if args.tv_sections is not None:
-        keys = {k.strip() for k in args.tv_sections.split(",") if k.strip()}
-        tv_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "show"]
-    else:
-        tv_sections = [s for s in sections if s.get("type") == "show"]
-
-    if not movie_sections and not tv_sections:
-        print("ERROR: No movie or TV library sections found or selected")
-        sys.exit(1)
-
-    for s in movie_sections:
-        print(f"  Movie section: [{s['key']}] {s['title']}")
-    for s in tv_sections:
-        print(f"  TV section:    [{s['key']}] {s['title']}")
-
-    # ── Fetch Plex content ─────────────────────────────────────────────────────
-    print("\n[2/4] Fetching Plex content...")
+    # ── Discover and fetch from all Plex servers ───────────────────────────────
+    print(f"\n[1/4] Discovering Plex library sections ({len(plex_server_list)} server(s))...")
 
     plex_movies: list = []
+    plex_shows: list  = []
     seen_movie_titles: set = set()
-    for sec in movie_sections:
-        for item in fetch_plex_movies(plex_url, plex_token, sec["key"]):
-            t = item.get("title", "").lower().strip()
-            if t not in seen_movie_titles:
-                seen_movie_titles.add(t)
-                plex_movies.append(item)
+    seen_show_titles: set  = set()
 
-    plex_shows: list = []
-    seen_show_titles: set = set()
-    for sec in tv_sections:
-        for item in fetch_plex_shows(plex_url, plex_token, sec["key"]):
-            t = item.get("title", "").lower().strip()
-            if t not in seen_show_titles:
-                seen_show_titles.add(t)
-                plex_shows.append(item)
+    for srv_name, srv_url, srv_token in plex_server_list:
+        print(f"\n  Server: {srv_name} ({srv_url})")
+        sections = get_plex_sections(srv_url, srv_token)
+        if not sections:
+            print(f"  WARNING: Could not reach {srv_name} or no sections found — skipping")
+            continue
+
+        if args.movie_sections is not None:
+            keys = {k.strip() for k in args.movie_sections.split(",") if k.strip()}
+            movie_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "movie"]
+        else:
+            movie_sections = [s for s in sections if s.get("type") == "movie"]
+
+        if args.tv_sections is not None:
+            keys = {k.strip() for k in args.tv_sections.split(",") if k.strip()}
+            tv_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "show"]
+        else:
+            tv_sections = [s for s in sections if s.get("type") == "show"]
+
+        for s in movie_sections:
+            print(f"  Movie section: [{s['key']}] {s['title']}")
+        for s in tv_sections:
+            print(f"  TV section:    [{s['key']}] {s['title']}")
+
+        # ── Fetch Plex content ─────────────────────────────────────────────────
+        print(f"\n[2/4] Fetching content from {srv_name}...")
+        for sec in movie_sections:
+            for item in fetch_plex_movies(srv_url, srv_token, sec["key"]):
+                t = item.get("title", "").lower().strip()
+                if t not in seen_movie_titles:
+                    seen_movie_titles.add(t)
+                    item["_source_name"] = srv_name if multi else ""
+                    plex_movies.append(item)
+
+        for sec in tv_sections:
+            for item in fetch_plex_shows(srv_url, srv_token, sec["key"]):
+                t = item.get("title", "").lower().strip()
+                if t not in seen_show_titles:
+                    seen_show_titles.add(t)
+                    item["_source_name"] = srv_name if multi else ""
+                    plex_shows.append(item)
+
+    if not plex_movies and not plex_shows:
+        print("ERROR: No content fetched from any Plex server")
+        sys.exit(1)
 
     # ── Cross-reference with Tunarr ────────────────────────────────────────────
     tunarr_movies = None
@@ -278,18 +300,22 @@ def main():
         if tunarr_movies is not None and title.lower().strip() not in tunarr_movies:
             skipped_movies.append(title)
             continue
-        rows.append(movie_to_row(item))
+        row = movie_to_row(item)
+        row["Source"] = item.get("_source_name", "")
+        rows.append(row)
 
     for item in plex_shows:
         title = item.get("title", "")
         if tunarr_shows is not None and title.lower().strip() not in tunarr_shows:
             skipped_shows.append(title)
             continue
-        rows.append(show_to_row(item))
+        row = show_to_row(item)
+        row["Source"] = item.get("_source_name", "")
+        rows.append(row)
 
     # ── Write CSV ──────────────────────────────────────────────────────────────
     fieldnames = ["Title", "Year", "Type", "Rating", "Genres", "Director", "Studio", "Actors", "Seasons", "Episodes",
-                  "Country", "Mood", "Style"]
+                  "Country", "Mood", "Style", "Source"]
     with open(args.out, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

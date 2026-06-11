@@ -157,6 +157,7 @@ export const api = {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+export interface PlexServer { name: string; url: string; token: string }
 export interface ConnStatus { ok: boolean; url: string; error?: string }
 export interface UpdateInfo {
   enabled: boolean;

@@ -1,5 +1,5 @@
 import {
-  Alert, Box, Button, Card, Group,
+  Alert, Badge, Box, Button, Card, Group,
   NumberInput, PasswordInput, Stack, Switch, Text, TextInput, Title,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
@@ -9,10 +9,10 @@ import {
 } from '@hello-pangea/dnd';
 import {
   IconAlertCircle, IconCheck,
-  IconDeviceFloppy, IconGripVertical, IconRepeat,
+  IconDeviceFloppy, IconGripVertical, IconPlus, IconRepeat, IconTrash,
 } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
-import { api } from '../api/client';
+import { api, type PlexServer } from '../api/client';
 
 const MASK = '••••••••';
 
@@ -108,12 +108,89 @@ function CategoryOrderEditor({ order, onChange }: CategoryOrderEditorProps) {
   );
 }
 
+function emptyServer(): PlexServer {
+  return { name: '', url: 'http://', token: '' };
+}
+
+function PlexServerList({
+  servers,
+  onChange,
+}: {
+  servers: PlexServer[];
+  onChange: (s: PlexServer[]) => void;
+}) {
+  function update(i: number, field: keyof PlexServer, val: string) {
+    const next = servers.map((s, idx) => idx === i ? { ...s, [field]: val } : s);
+    onChange(next);
+  }
+  function remove(i: number) {
+    onChange(servers.filter((_, idx) => idx !== i));
+  }
+
+  return (
+    <Stack gap="md">
+      {servers.map((srv, i) => (
+        <Card key={i} withBorder p="sm" radius="sm">
+          <Group mb="xs" justify="space-between" wrap="nowrap">
+            <Group gap="xs">
+              <Text size="sm" fw={600}>{srv.name || `Server ${i + 1}`}</Text>
+              {i === 0 && <Badge size="xs" color="orange" variant="light">Primary</Badge>}
+            </Group>
+            {servers.length > 1 && (
+              <Button
+                variant="subtle" color="red" size="xs" px={6}
+                leftSection={<IconTrash size={13} />}
+                onClick={() => remove(i)}
+              >
+                Remove
+              </Button>
+            )}
+          </Group>
+          <Stack gap="xs">
+            <TextInput
+              label="Name"
+              placeholder="My Library"
+              size="xs"
+              value={srv.name}
+              onChange={(e) => update(i, 'name', e.currentTarget.value)}
+            />
+            <TextInput
+              label="Plex URL"
+              placeholder="http://192.168.1.10:32400"
+              size="xs"
+              value={srv.url}
+              onChange={(e) => update(i, 'url', e.currentTarget.value)}
+            />
+            <PasswordInput
+              label="Plex Token"
+              size="xs"
+              placeholder={srv.token === MASK ? 'Token saved — enter new value to change' : 'Your Plex token'}
+              value={srv.token === MASK ? '' : srv.token}
+              onChange={(e) => update(i, 'token', e.currentTarget.value || MASK)}
+            />
+          </Stack>
+        </Card>
+      ))}
+      <Button
+        variant="subtle"
+        color="orange"
+        size="xs"
+        leftSection={<IconPlus size={14} />}
+        onClick={() => onChange([...servers, emptyServer()])}
+      >
+        Add another Plex server
+      </Button>
+    </Stack>
+  );
+}
+
 export default function Settings() {
   const [values, setValues] = useState({
-    tunarr_url: '', plex_url: '', plex_token: '',
+    tunarr_url: '',
     tmdb_api_key: '', auth_username: '', auth_password: '',
     update_check_enabled: true,
   });
+  const [plexServers, setPlexServers] = useState<PlexServer[]>([emptyServer()]);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -127,13 +204,16 @@ export default function Settings() {
     api.getConfig().then((cfg) => {
       setValues({
         tunarr_url:    cfg.tunarr_url    || '',
-        plex_url:      cfg.plex_url      || '',
-        plex_token:    cfg.plex_token    || '',
         tmdb_api_key:  cfg.tmdb_api_key  || '',
         auth_username: cfg.auth_username || '',
         auth_password: cfg.auth_password || '',
         update_check_enabled: cfg.update_check_enabled !== false,
       });
+      // Migrate legacy plex_url/plex_token to plex_servers on first load.
+      const servers: PlexServer[] = cfg.plex_servers?.length
+        ? cfg.plex_servers
+        : (cfg.plex_url ? [{ name: 'My Library', url: cfg.plex_url, token: cfg.plex_token || '' }] : [emptyServer()]);
+      setPlexServers(servers);
       const stored: string[] = cfg.channel_order || [];
       setChannelOrder(resolveOrder(stored));
       setLoaded(true);
@@ -168,7 +248,7 @@ export default function Settings() {
   async function save() {
     setSaving(true);
     try {
-      await api.saveConfig({ ...values, channel_order: channelOrder });
+      await api.saveConfig({ ...values, plex_servers: plexServers, channel_order: channelOrder });
       notifications.show({
         title: 'Saved',
         message: 'Configuration updated',
@@ -190,28 +270,23 @@ export default function Settings() {
 
       {/* Connections */}
       <Card p="lg">
-        <Text fw={700} mb="md">Connections</Text>
+        <Text fw={700} mb="md">Tunarr</Text>
+        <TextInput
+          label="Tunarr URL"
+          placeholder="http://192.168.1.10:8000"
+          value={values.tunarr_url}
+          onChange={(e) => set('tunarr_url', e.currentTarget.value)}
+        />
+      </Card>
 
-        <Stack gap="sm">
-          <TextInput
-            label="Tunarr URL"
-            placeholder="http://192.168.1.10:8000"
-            value={values.tunarr_url}
-            onChange={(e) => set('tunarr_url', e.currentTarget.value)}
-          />
-          <TextInput
-            label="Plex URL"
-            placeholder="http://192.168.1.10:32400"
-            value={values.plex_url}
-            onChange={(e) => set('plex_url', e.currentTarget.value)}
-          />
-          <PasswordInput
-            label="Plex Token"
-            placeholder={isMasked(values.plex_token) ? 'Token saved — enter new value to change' : 'Your Plex token'}
-            value={isMasked(values.plex_token) ? '' : values.plex_token}
-            onChange={(e) => set('plex_token', e.currentTarget.value || MASK)}
-          />
-        </Stack>
+      {/* Plex servers */}
+      <Card p="lg">
+        <Text fw={700} mb={4}>Plex Servers</Text>
+        <Text size="xs" c="dimmed" mb="md">
+          The first server is the primary source. Additional servers are merged in during
+          export — content appearing on multiple servers is de-duplicated (primary wins).
+        </Text>
+        <PlexServerList servers={plexServers} onChange={setPlexServers} />
       </Card>
 
       {/* TMDB */}
