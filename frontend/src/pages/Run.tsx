@@ -455,20 +455,30 @@ function ExportStep({ onDone }: { onDone: () => void }) {
             {movieLibs.length > 0 && (
               <Stack gap={6}>
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase">Movies</Text>
-                {movieLibs.map(lib => (
-                  <Checkbox key={lib.key} label={lib.title} checked={libSels[lib.key] ?? true}
-                    onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
-                    size="sm" disabled={running} />
+                {movieLibs.map((lib, i) => (
+                  <Box key={lib.key}>
+                    {lib.server && (i === 0 || movieLibs[i - 1].server !== lib.server) && (
+                      <Text size="xs" c="dimmed" mb={2} mt={i === 0 ? 0 : 4}>{lib.server}</Text>
+                    )}
+                    <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
+                      onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                      size="sm" disabled={running} />
+                  </Box>
                 ))}
               </Stack>
             )}
             {tvLibs.length > 0 && (
               <Stack gap={6}>
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase">TV Shows</Text>
-                {tvLibs.map(lib => (
-                  <Checkbox key={lib.key} label={lib.title} checked={libSels[lib.key] ?? true}
-                    onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
-                    size="sm" disabled={running} />
+                {tvLibs.map((lib, i) => (
+                  <Box key={lib.key}>
+                    {lib.server && (i === 0 || tvLibs[i - 1].server !== lib.server) && (
+                      <Text size="xs" c="dimmed" mb={2} mt={i === 0 ? 0 : 4}>{lib.server}</Text>
+                    )}
+                    <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
+                      onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                      size="sm" disabled={running} />
+                  </Box>
                 ))}
               </Stack>
             )}

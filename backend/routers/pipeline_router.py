@@ -163,20 +163,36 @@ class ExportOptions(BaseModel):
 @router.get("/pipeline/libraries")
 def list_libraries():
     cfg = _load_config()
-    plex_url = cfg.get("plex_url", "").rstrip("/")
-    plex_token = cfg.get("plex_token", "")
-    if not plex_url or not plex_token:
+    servers = cfg.get("plex_servers") or []
+    if not servers and cfg.get("plex_url") and cfg.get("plex_token"):
+        servers = [{"name": "Plex", "url": cfg["plex_url"], "token": cfg["plex_token"]}]
+    if not servers:
         raise HTTPException(400, "Plex not configured")
-    try:
-        data = _plex_get(plex_url, plex_token, "/library/sections")
-        sections = data["MediaContainer"].get("Directory", [])
-    except Exception as e:
-        raise HTTPException(502, f"Could not reach Plex: {e}")
-    return [
-        {"key": s["key"], "title": s["title"], "type": s["type"]}
-        for s in sections
-        if s.get("type") in ("movie", "show")
-    ]
+
+    multi = len(servers) > 1
+    result = []
+    for i, srv in enumerate(servers):
+        url = srv.get("url", "").rstrip("/")
+        token = srv.get("token", "")
+        name = srv.get("name", f"Server {i + 1}")
+        if not url or not token:
+            continue
+        try:
+            data = _plex_get(url, token, "/library/sections")
+            sections = data["MediaContainer"].get("Directory", [])
+        except Exception:
+            continue  # server unreachable — skip rather than fail the whole list
+        for s in sections:
+            if s.get("type") not in ("movie", "show"):
+                continue
+            # Encode as "{server_index}:{section_key}" when multi-server so section keys
+            # from different servers don't collide (Plex keys are small non-unique integers).
+            key = f"{i}:{s['key']}" if multi else s["key"]
+            entry: dict = {"key": key, "title": s["title"], "type": s["type"]}
+            if multi:
+                entry["server"] = name
+            result.append(entry)
+    return result
 
 
 @router.post("/pipeline/export")

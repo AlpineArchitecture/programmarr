@@ -321,7 +321,7 @@ export interface PromptOptions {
   include_types?: string[];
   exclude_types?: string[];
 }
-export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show' }
+export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show'; server?: string }
 export interface PlexCollection { id: string; name: string; count: number; section: string; summary: string; has_poster: boolean }
 export interface CollectionSelection { name: string; channel_number: number; include: boolean }
 export interface LogEntry { name: string; size: number; modified: number }

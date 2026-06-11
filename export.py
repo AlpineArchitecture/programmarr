@@ -233,7 +233,7 @@ def main():
     seen_movie_titles: set = set()
     seen_show_titles: set  = set()
 
-    for srv_name, srv_url, srv_token in plex_server_list:
+    for srv_idx, (srv_name, srv_url, srv_token) in enumerate(plex_server_list):
         print(f"\n  Server: {srv_name} ({srv_url})")
         sections = get_plex_sections(srv_url, srv_token)
         if not sections:
@@ -241,14 +241,19 @@ def main():
             continue
 
         if args.movie_sections is not None:
+            # Accept both encoded "{server_index}:{key}" (multi-server UI) and bare "{key}" (legacy/CLI).
             keys = {k.strip() for k in args.movie_sections.split(",") if k.strip()}
-            movie_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "movie"]
+            movie_sections = [s for s in sections
+                              if (f"{srv_idx}:{s.get('key')}" in keys or s.get("key") in keys)
+                              and s.get("type") == "movie"]
         else:
             movie_sections = [s for s in sections if s.get("type") == "movie"]
 
         if args.tv_sections is not None:
             keys = {k.strip() for k in args.tv_sections.split(",") if k.strip()}
-            tv_sections = [s for s in sections if s.get("key") in keys and s.get("type") == "show"]
+            tv_sections = [s for s in sections
+                           if (f"{srv_idx}:{s.get('key')}" in keys or s.get("key") in keys)
+                           and s.get("type") == "show"]
         else:
             tv_sections = [s for s in sections if s.get("type") == "show"]
 
