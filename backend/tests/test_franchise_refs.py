@@ -110,3 +110,46 @@ def test_match_franchise_exclude_and_unknown(tmp_path):
     assert [r["title"] for r in resolved] == ["Die Hard"]
     assert channel_engine.match_franchise("Nope", idx, movie_map, show_map) == ([], [])
     assert channel_engine.match_franchise("Nope", None, movie_map, show_map) == ([], [])
+
+
+# ── resolve_content franchise refs ────────────────────────────────────────────
+
+def test_resolve_content_franchise_ref(tmp_path):
+    idx = channel_engine.load_franchise_index(_seed_caches(tmp_path, tmdb_collections=[
+        (1, "Die Hard Collection", ["Die Hard", "Die Hard 2"]),
+    ]))
+    movie_map, show_map = _maps()
+    content = [{"match": "franchise", "name": "Die Hard Collection",
+                "order": "release_date", "exclude": []}]
+    resolved, missing = channel_engine.resolve_content(
+        content, movie_map, show_map, franchise_index=idx)
+    assert [r["title"] for r in resolved] == ["Die Hard", "Die Hard 2"]
+    assert missing == []
+
+
+def test_resolve_content_franchise_ref_unknown_is_missing(tmp_path):
+    movie_map, show_map = _maps()
+    content = [{"match": "franchise", "name": "Nope"}]
+    resolved, missing = channel_engine.resolve_content(
+        content, movie_map, show_map, franchise_index={})
+    assert resolved == []
+    assert missing == ["[franchise:Nope]"]
+
+
+def test_resolve_content_franchise_ref_without_index_is_missing():
+    movie_map, show_map = _maps()
+    content = [{"match": "franchise", "name": "Die Hard Collection"}]
+    resolved, missing = channel_engine.resolve_content(content, movie_map, show_map)
+    assert resolved == []
+    assert missing == ["[franchise:Die Hard Collection]"]
+
+
+def test_resolve_content_mixes_franchise_ref_with_plain_titles(tmp_path):
+    idx = channel_engine.load_franchise_index(_seed_caches(tmp_path, tmdb_collections=[
+        (1, "Die Hard Collection", ["Die Hard"]),
+    ]))
+    movie_map, show_map = _maps()
+    content = ["Unrelated", {"match": "franchise", "name": "Die Hard Collection"}]
+    resolved, missing = channel_engine.resolve_content(
+        content, movie_map, show_map, franchise_index=idx)
+    assert sorted(r["title"] for r in resolved) == ["Die Hard", "Unrelated"]

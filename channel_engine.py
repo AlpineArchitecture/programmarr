@@ -366,14 +366,23 @@ def resolve_collection(plex_url, token, name, sections, cache):
 # ── Content resolution ─────────────────────────────────────────────────────────
 
 def resolve_content(content_list, movie_map, show_map,
-                    plex_url=None, plex_token=None, plex_sections=None, collection_cache=None):
+                    plex_url=None, plex_token=None, plex_sections=None, collection_cache=None,
+                    franchise_index=None):
     """Resolve a channel's content list into (resolved_items, missing).
 
-    Each entry is either a plain title string or a {"collection": "Name"} ref.
-    Collection refs are expanded to their member titles via Plex, then every
-    title is matched against the Tunarr library index. Returns the list of
-    resolved items (ready for build_schedule) plus the list of titles/refs that
-    could not be found (for reporting).
+    Each entry is one of:
+    - A plain title string — matched against the Tunarr library index by exact title.
+    - A {"collection": "Name"} ref — expanded to member titles via Plex, then each
+      title is matched against the library index.
+    - A {"match": "title_contains", "value": "..."} ref — word-boundary scan of the
+      Tunarr library; order/exclude supported.
+    - A {"match": "franchise", "name": "..."} ref — identity-based resolution via the
+      franchise index (load_franchise_index). Requires franchise_index to be passed;
+      a missing index or unknown franchise name degrades to a missing-entry warning so
+      downstream refuse-to-wipe guards keep live channels safe.
+
+    Returns (resolved_items, missing): resolved_items are ready for build_schedule;
+    missing is a list of titles/ref labels that could not be found.
     """
     plex_sections = plex_sections or []
     collection_cache = collection_cache if collection_cache is not None else {}
@@ -393,8 +402,18 @@ def resolve_content(content_list, movie_map, show_map,
                 print(f"    WARNING: Collection '{col_name}' not found in Plex")
                 missing.append(f"[collection:{col_name}]")
         elif isinstance(entry, dict) and "match" in entry:
-            value = entry.get("value", "")
-            if entry["match"] == "title_contains" and value:
+            if entry["match"] == "franchise" and entry.get("name"):
+                fr_name = entry["name"]
+                items, _ = match_franchise(fr_name, franchise_index, movie_map, show_map,
+                                           order=entry.get("order"), exclude=entry.get("exclude"))
+                if items:
+                    matched_items.extend(items)
+                    print(f"    Franchise '{fr_name}': {len(items)} titles")
+                else:
+                    print(f"    WARNING: franchise '{fr_name}' matched nothing (cache missing or no library members)")
+                    missing.append(f"[franchise:{fr_name}]")
+            elif entry["match"] == "title_contains" and entry.get("value"):
+                value = entry["value"]
                 items, _ = match_titles(value, movie_map, show_map,
                                         order=entry.get("order"), exclude=entry.get("exclude"))
                 if items:
@@ -404,6 +423,7 @@ def resolve_content(content_list, movie_map, show_map,
                     print(f"    WARNING: match '{value}' matched nothing in library")
                     missing.append(f"[match:{value}]")
             else:
+                value = entry.get("value", "")
                 print(f"    WARNING: unsupported match ref: {entry}")
                 missing.append(f"[match:{value or entry.get('match')}]")
         else:
