@@ -1,0 +1,119 @@
+"""icon_engine.py — pure, importable channel-icon resolution logic.
+
+Like channel_engine.py: no config.json, no argv, no sys.exit — safe to
+import into the long-lived FastAPI process AND from the fetch_images.py CLI.
+Must stay in the Dockerfile COPY line.
+
+Three layers (built across plan Tasks 2-4):
+  1. Verified TMDB searches — a result is accepted only if its name equals
+     the query after normalize_title(). Never results[0] on faith.
+  2. Icon policy (icon_attempts) — which channels may consult TMDB at all;
+     everything else gets a generated badge (badge_renderer.py).
+  3. Tunarr helpers — multipart image upload + set/clear a channel's icon.
+"""
+
+import json
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+
+TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
+
+_ARTICLES = re.compile(r"^(the|a|an)\s+")
+_PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
+_WS = re.compile(r"\s+")
+
+
+def normalize_title(s):
+    """Lowercase, strip punctuation, drop a leading article, collapse spaces."""
+    s = (s or "").strip().lower()
+    s = _PUNCT.sub("", s)
+    s = _ARTICLES.sub("", s)
+    return _WS.sub(" ", s).strip()
+
+
+# ── HTTP ───────────────────────────────────────────────────────────────────────
+
+def http_get(url, timeout=15):
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": "Programmarr/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        print(f"  ! HTTP {e.code}: {url}")
+        return None
+    except Exception as e:
+        print(f"  ! Error fetching {url}: {e}")
+        return None
+
+
+# ── Verified TMDB searches ─────────────────────────────────────────────────────
+
+def _tmdb_search(search_kind, query, api_key):
+    q = urllib.parse.urlencode({"query": query, "api_key": api_key})
+    data = http_get(f"https://api.themoviedb.org/3/search/{search_kind}?{q}")
+    return (data or {}).get("results") or []
+
+
+def _first_verified(results, query, *name_fields):
+    """First result (top 5) whose normalized name equals the normalized query."""
+    want = normalize_title(query)
+    if not want:
+        return None
+    for r in results[:5]:
+        for field in name_fields:
+            if normalize_title(r.get(field)) == want:
+                return r["id"]
+    return None
+
+
+def search_tv_verified(title, api_key):
+    return _first_verified(_tmdb_search("tv", title, api_key), title,
+                           "name", "original_name")
+
+
+def search_movie_verified(title, api_key):
+    return _first_verified(_tmdb_search("movie", title, api_key), title,
+                           "title", "original_title")
+
+
+def search_company_verified(name, api_key):
+    return _first_verified(_tmdb_search("company", name, api_key), name, "name")
+
+
+# ── Logo selection ─────────────────────────────────────────────────────────────
+
+def best_logo_path(images, prefer_lang="en"):
+    """Best logo file_path from a TMDB images response, or None.
+    Prefers prefer_lang, then no-language, then highest vote overall."""
+    logos = (images or {}).get("logos") or []
+    if not logos:
+        return None
+    for lang in (prefer_lang, None, ""):
+        candidates = [l for l in logos if l.get("iso_639_1") == lang]
+        if candidates:
+            return max(candidates, key=lambda l: l.get("vote_average", 0))["file_path"]
+    return max(logos, key=lambda l: l.get("vote_average", 0))["file_path"]
+
+
+def tv_logo_url(tv_id, api_key):
+    q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
+    path = best_logo_path(http_get(f"https://api.themoviedb.org/3/tv/{tv_id}/images?{q}"))
+    return TMDB_IMAGE_BASE + path if path else None
+
+
+def movie_logo_url(movie_id, api_key):
+    q = urllib.parse.urlencode({"api_key": api_key, "include_image_language": "en,null"})
+    path = best_logo_path(http_get(f"https://api.themoviedb.org/3/movie/{movie_id}/images?{q}"))
+    return TMDB_IMAGE_BASE + path if path else None
+
+
+def company_logo_url(company_id, api_key):
+    q = urllib.parse.urlencode({"api_key": api_key})
+    path = best_logo_path(http_get(f"https://api.themoviedb.org/3/company/{company_id}/images?{q}"))
+    return TMDB_IMAGE_BASE + path if path else None
