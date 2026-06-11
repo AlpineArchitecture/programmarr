@@ -467,7 +467,8 @@ function ExportStep({ onDone }: { onDone: () => void }) {
                 {movieLibs.map((lib, i) => (
                   <Box key={lib.key}>
                     {lib.server && (i === 0 || movieLibs[i - 1].server !== lib.server) && (
-                      <Text size="xs" c="dimmed" mb={2} mt={i === 0 ? 0 : 4}>{lib.server}</Text>
+                      <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
+                        styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
                     )}
                     <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
                       onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
@@ -482,7 +483,8 @@ function ExportStep({ onDone }: { onDone: () => void }) {
                 {tvLibs.map((lib, i) => (
                   <Box key={lib.key}>
                     {lib.server && (i === 0 || tvLibs[i - 1].server !== lib.server) && (
-                      <Text size="xs" c="dimmed" mb={2} mt={i === 0 ? 0 : 4}>{lib.server}</Text>
+                      <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
+                        styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
                     )}
                     <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
                       onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
