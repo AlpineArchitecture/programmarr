@@ -459,42 +459,56 @@ function ExportStep({ onDone }: { onDone: () => void }) {
             Could not load libraries — export will auto-detect: {libError}
           </Alert>
         )}
-        {!libLoading && !libError && libraries.length > 0 && (
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
-            {movieLibs.length > 0 && (
-              <Stack gap={6}>
-                <Text size="xs" fw={600} c="dimmed" tt="uppercase">Movies</Text>
-                {movieLibs.map((lib, i) => (
-                  <Box key={lib.key}>
-                    {lib.server && (i === 0 || movieLibs[i - 1].server !== lib.server) && (
-                      <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
-                        styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
-                    )}
-                    <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
-                      onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
-                      size="sm" disabled={running} />
-                  </Box>
-                ))}
-              </Stack>
-            )}
-            {tvLibs.length > 0 && (
-              <Stack gap={6}>
-                <Text size="xs" fw={600} c="dimmed" tt="uppercase">TV Shows</Text>
-                {tvLibs.map((lib, i) => (
-                  <Box key={lib.key}>
-                    {lib.server && (i === 0 || tvLibs[i - 1].server !== lib.server) && (
-                      <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
-                        styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
-                    )}
-                    <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
-                      onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
-                      size="sm" disabled={running} />
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </SimpleGrid>
-        )}
+        {!libLoading && !libError && libraries.length > 0 && (() => {
+          const movieServers = new Set(movieLibs.map(l => l.server).filter(Boolean));
+          const tvServers    = new Set(tvLibs.map(l => l.server).filter(Boolean));
+          const multiMovie   = movieServers.size > 1;
+          const multiTv      = tvServers.size > 1;
+          return (
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
+              {movieLibs.length > 0 && (
+                <Stack gap={6}>
+                  <Text size="xs" fw={600} c="dimmed" tt="uppercase">Movies</Text>
+                  {movieLibs.map((lib, i) => (
+                    <Box key={lib.key}>
+                      {multiMovie && lib.server && (i === 0 || movieLibs[i - 1].server !== lib.server) && (
+                        <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
+                          styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
+                      )}
+                      <Checkbox
+                        label={multiMovie && lib.server
+                          ? <><span>{lib.title}</span><Text span size="xs" c="dimmed" ml={4}>({lib.server})</Text></>
+                          : lib.title}
+                        checked={libSels[lib.key] ?? true}
+                        onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                        size="sm" disabled={running} />
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+              {tvLibs.length > 0 && (
+                <Stack gap={6}>
+                  <Text size="xs" fw={600} c="dimmed" tt="uppercase">TV Shows</Text>
+                  {tvLibs.map((lib, i) => (
+                    <Box key={lib.key}>
+                      {multiTv && lib.server && (i === 0 || tvLibs[i - 1].server !== lib.server) && (
+                        <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
+                          styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
+                      )}
+                      <Checkbox
+                        label={multiTv && lib.server
+                          ? <><span>{lib.title}</span><Text span size="xs" c="dimmed" ml={4}>({lib.server})</Text></>
+                          : lib.title}
+                        checked={libSels[lib.key] ?? true}
+                        onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                        size="sm" disabled={running} />
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+            </SimpleGrid>
+          );
+        })()}
       </Card>
 
       <Group align="center">
