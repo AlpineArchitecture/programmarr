@@ -414,3 +414,17 @@ Tunarr program's `releaseDate`; `exclude` drops false positives. Author-time pre
 **Moving parts** (scheduler loop, `channel_engine` updaters, `recipes_router`, the `Channels.tsx`
 authoring UI and status cards), full rationale, rejected alternatives, and history:
 [`docs/live-channels-design.md`](docs/live-channels-design.md).
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`AlpineArchitecture/programmarr`) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
