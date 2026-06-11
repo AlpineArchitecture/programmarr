@@ -2468,10 +2468,11 @@ export default function Run() {
 
   const { method, includeCollections } = setup;
 
-  // Called when the user clicks Nuke: only affects DEPLOY behavior (wipe Tunarr + number from 1).
-  // Picks are sticky — Nuke does NOT reset or delete planner_state.json.
+  // Called when the user clicks Nuke: clears checked candidates and the AI Extras toggle.
+  // genres/decades/comm/autoUpdate are preserved — only selections are reset.
   function handleNuke() {
-    // intentionally empty: picks are preserved; deploy behavior is governed by setup.mode
+    setPlanner(p => ({ ...p, selected: {}, curate: {} }));
+    setAiExtras(false);
   }
 
   // Pools the user flagged for AI tonal-splitting (✨ on a broad/decade pick).

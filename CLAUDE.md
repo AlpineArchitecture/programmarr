@@ -324,10 +324,12 @@ AI" toggle is on; Collections only if opted in.
   - **Saved on every change** via a debounced (~500ms) PUT in `PlannerStep` (guarded by
     `restoredRef` so the first-mount restore never overwrites the file).
   - **Restored on every Planner mount** (both Nuke and Edit modes) — `isEdit` gate removed.
-  - **Nuke does NOT clear picks** — `handleNuke` is intentionally a no-op for state.
-  - **"Clear all"** in the Planner build bar is the only thing that resets picks: clears
-    `selected`, `curate`, active genre/decade toggles and all batch toggles to defaults, then
-    calls `DELETE /pipeline/planner-state`.
+  - **Nuke clears candidate selections** — `handleNuke` resets `selected`, `curate`, and
+    `aiExtras`; genres/decades/comm/autoUpdate are preserved. The debounced save persists the
+    blank selections to `planner_state.json` automatically.
+  - **"Clear all"** in the Planner build bar does a full reset: clears `selected`, `curate`,
+    active genre/decade toggles and all batch toggles to defaults, then calls
+    `DELETE /pipeline/planner-state`.
   Contains: `activeGenres, activeDecades, selected, curate, aiExtras, commEnabled, commListId,
   commPad, autoUpdate`. API: `GET/PUT/DELETE /api/pipeline/planner-state`.
 - **The Planner is deterministic:** selected candidates post as `CandidateSpec[]` to
