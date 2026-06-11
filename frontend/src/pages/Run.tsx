@@ -533,12 +533,13 @@ function CandRow({ id, label, count, checked, onToggle, curatable, curate, onCur
   );
 }
 
-function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, onAddMany }: {
+function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, onAddMany, onDeselect }: {
   title: string; kind: CandidateKind; items: EntityFacet[];
   makeId: (v: string) => string; makeName: (v: string) => string;
   isSel: (id: string) => boolean;
   onToggle: (id: string, spec: CandidateSpec) => void;
   onAddMany: (items: { id: string; spec: CandidateSpec }[]) => void;
+  onDeselect?: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const [q, setQ] = useState('');
@@ -553,7 +554,13 @@ function EntitySection({ title, kind, items, makeId, makeName, isSel, onToggle, 
           <Text fw={600} size="sm" lineClamp={1}>{title} <Text span c="dimmed" size="xs">({items.length})</Text></Text>
           {selN ? <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>{selN} added</Badge> : null}
         </Group>
-        <BulkButtons items={addItems} onAdd={onAddMany} />
+        <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
+          {selN > 0 && onDeselect && (
+            <Button size="compact-xs" variant="subtle" color="gray"
+              onClick={(e) => { e.stopPropagation(); onDeselect(); }}>Deselect all</Button>
+          )}
+          <BulkButtons items={addItems} onAdd={onAddMany} />
+        </Group>
       </Group>
       <Collapse in={open}>
         <TextInput size="xs" mt="xs" placeholder={`Search ${title.toLowerCase()}…`} value={q}
@@ -1477,9 +1484,9 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             {((f.studios?.length ?? 0) > 0 || (f.directors?.length ?? 0) > 0 || (f.actors?.length ?? 0) > 0) && (
               <>
                 <Divider label="Studios, directors &amp; actors" labelPosition="left" />
-                {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-                {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
-                {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} />}
+                {(f.studios?.length ?? 0) > 0 && <EntitySection title="Studios" kind="studio" items={f.studios!} makeId={cid.studio} makeName={(v) => v} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} onDeselect={() => removeMany(f.studios!.map(i => cid.studio(i.value)))} />}
+                {(f.directors?.length ?? 0) > 0 && <EntitySection title="Directors" kind="director" items={f.directors!} makeId={cid.director} makeName={(v) => `Directed by ${v}`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} onDeselect={() => removeMany(f.directors!.map(i => cid.director(i.value)))} />}
+                {(f.actors?.length ?? 0) > 0 && <EntitySection title="Actors" kind="actor" items={f.actors!} makeId={cid.actor} makeName={(v) => `${v} Movies`} isSel={isSel} onToggle={toggleSel} onAddMany={addMany} onDeselect={() => removeMany(f.actors!.map(i => cid.actor(i.value)))} />}
               </>
             )}
 
@@ -1538,6 +1545,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                     isSel={isSel}
                     onToggle={toggleSel}
                     onAddMany={addMany}
+                    onDeselect={() => removeMany(f.countries!.map(i => cid.country(i.value)))}
                   />
                 )}
                 {(f.moods?.length ?? 0) > 0 && (
@@ -1550,6 +1558,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                     isSel={isSel}
                     onToggle={toggleSel}
                     onAddMany={addMany}
+                    onDeselect={() => removeMany(f.moods!.map(i => cid.mood(i.value)))}
                   />
                 )}
                 {(f.styles?.length ?? 0) > 0 && (
@@ -1562,6 +1571,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                     isSel={isSel}
                     onToggle={toggleSel}
                     onAddMany={addMany}
+                    onDeselect={() => removeMany(f.styles!.map(i => cid.style(i.value)))}
                   />
                 )}
               </>
