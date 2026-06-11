@@ -75,3 +75,94 @@ def test_best_logo_prefers_english_then_votes():
 
 def test_best_logo_none_when_no_logos():
     assert icon_engine.best_logo_path({"logos": []}) is None
+
+
+# ── icon policy ───────────────────────────────────────────────────────────────
+
+def test_badge_only_kinds_never_consult_tmdb():
+    ch = {"name": "Horror", "content": ["It", "Scream", "The Thing"]}
+    for kind in ("genre", "genre_decade", "blend", "tv_genre", "tv_movie_mix",
+                 "theme", "country", "mood", "style", "programming_block",
+                 "director", "actor"):
+        assert icon_engine.icon_attempts(ch, kind) == [], kind
+
+
+def test_unknown_multi_title_channel_is_badge_only():
+    # The exact channel shape that used to produce false positives.
+    ch = {"name": "Horror", "content": ["It", "Scream"]}
+    assert icon_engine.icon_attempts(ch, None) == []
+
+
+def test_solo_title_channel_tries_its_title_regardless_of_kind():
+    ch = {"name": "Die Hard 24/7", "content": ["Die Hard"]}
+    assert icon_engine.icon_attempts(ch, "genre") == [("tv", "Die Hard"),
+                                                      ("movie", "Die Hard")]
+    assert icon_engine.icon_attempts(ch, None) == [("tv", "Die Hard"),
+                                                   ("movie", "Die Hard")]
+
+
+def test_marathon_searches_tv_by_show_title():
+    ch = {"name": "Seinfeld Marathon", "content": ["Seinfeld"]}
+    assert icon_engine.icon_attempts(ch, "marathon") == [("tv", "Seinfeld"),
+                                                         ("movie", "Seinfeld")]
+
+
+def test_franchise_strips_suffix_and_tries_tv_then_movie():
+    ch = {"name": "Star Wars Saga", "content": ["A New Hope", "Empire"]}
+    assert icon_engine.icon_attempts(ch, "franchise") == [("tv", "Star Wars"),
+                                                          ("movie", "Star Wars")]
+
+
+def test_network_and_studio_search_company():
+    ch = {"name": "HBO", "content": ["The Wire", "The Sopranos"]}
+    assert icon_engine.icon_attempts(ch, "network") == [("company", "HBO")]
+    ch2 = {"name": "A24", "content": ["Hereditary", "Lady Bird"]}
+    assert icon_engine.icon_attempts(ch2, "studio") == [("company", "A24")]
+
+
+def test_collection_ref_content_is_not_solo():
+    ch = {"name": "Kometa Picks", "content": [{"collection": "Picks"}]}
+    assert icon_engine.icon_attempts(ch, None) == []
+
+
+# ── resolve_tmdb_logo ─────────────────────────────────────────────────────────
+
+def test_resolve_walks_attempts_in_order(monkeypatch):
+    monkeypatch.setattr(icon_engine, "search_tv_verified", lambda t, k: None)
+    monkeypatch.setattr(icon_engine, "search_movie_verified",
+                        lambda t, k: 42 if t == "Star Wars" else None)
+    monkeypatch.setattr(icon_engine, "movie_logo_url",
+                        lambda mid, k: "http://img/sw.png" if mid == 42 else None)
+    attempts = [("tv", "Star Wars"), ("movie", "Star Wars")]
+    assert icon_engine.resolve_tmdb_logo(attempts, "key") == "http://img/sw.png"
+
+
+def test_resolve_verified_id_without_logo_falls_through(monkeypatch):
+    monkeypatch.setattr(icon_engine, "search_tv_verified", lambda t, k: 7)
+    monkeypatch.setattr(icon_engine, "tv_logo_url", lambda tid, k: None)
+    monkeypatch.setattr(icon_engine, "search_movie_verified", lambda t, k: None)
+    assert icon_engine.resolve_tmdb_logo([("tv", "X"), ("movie", "X")], "key") is None
+
+
+def test_resolve_empty_attempts_is_none():
+    assert icon_engine.resolve_tmdb_logo([], "key") is None
+
+
+# ── planner spec hints ────────────────────────────────────────────────────────
+
+def test_load_spec_hints(tmp_path):
+    ps = tmp_path / "planner_state.json"
+    ps.write_text('{"selected": {"a": {"kind": "genre", "name": "Horror", '
+                  '"genre": "horror"}, "bad": {"kind": "x"}}}')
+    hints = icon_engine.load_spec_hints(ps)
+    assert hints == {"horror": {"kind": "genre", "name": "Horror", "genre": "horror"}}
+
+
+def test_load_spec_hints_missing_file(tmp_path):
+    assert icon_engine.load_spec_hints(tmp_path / "nope.json") == {}
+
+
+def test_spec_genre_prefers_genre_then_genres():
+    assert icon_engine.spec_genre({"genre": "horror"}) == "horror"
+    assert icon_engine.spec_genre({"genres": ["western", "comedy"]}) == "western"
+    assert icon_engine.spec_genre({}) is None

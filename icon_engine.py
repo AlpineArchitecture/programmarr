@@ -117,3 +117,84 @@ def company_logo_url(company_id, api_key):
     q = urllib.parse.urlencode({"api_key": api_key})
     path = best_logo_path(http_get(f"https://api.themoviedb.org/3/company/{company_id}/images?{q}"))
     return TMDB_IMAGE_BASE + path if path else None
+
+
+# ── Icon policy ────────────────────────────────────────────────────────────────
+
+# Kinds for which NO TMDB lookup is trustworthy — always a generated badge.
+BADGE_ONLY_KINDS = {
+    "genre", "genre_decade", "blend", "tv_genre", "tv_movie_mix", "theme",
+    "country", "mood", "style", "programming_block", "director", "actor",
+}
+
+_FRANCHISE_SUFFIXES = re.compile(
+    r"\s+(Collection|Series|Franchise|Universe|Saga|Trilogy|Tetralogy|"
+    r"Anthology|Films?|Movies?|Pictures?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def icon_attempts(ch_def, kind):
+    """Ordered (search_kind, query) attempts for a verified TMDB logo.
+
+    Empty list => badge-only channel. search_kind is "tv" | "movie" | "company".
+    Solo-title channels always try their one title (the channel IS that title),
+    regardless of kind.
+    """
+    name = (ch_def.get("name") or "").strip()
+    content = ch_def.get("content") or []
+    strings = [c for c in content if isinstance(c, str)]
+    solo = len(content) == 1 and len(strings) == 1
+
+    if solo:
+        return [("tv", strings[0]), ("movie", strings[0])]
+    if kind in BADGE_ONLY_KINDS:
+        return []
+    if kind == "marathon":
+        title = strings[0] if strings else name
+        return [("tv", title), ("movie", title)]
+    if kind == "franchise":
+        cleaned = _FRANCHISE_SUFFIXES.sub("", name).strip() or name
+        return [("tv", cleaned), ("movie", cleaned)]
+    if kind in ("network", "studio"):
+        return [("company", name)]
+    return []  # unknown kind, multi-title: the old false-positive class — badge.
+
+
+def resolve_tmdb_logo(attempts, api_key):
+    """Run verified-search attempts in order; return the first logo URL or None."""
+    searchers = {
+        "tv": (search_tv_verified, tv_logo_url),
+        "movie": (search_movie_verified, movie_logo_url),
+        "company": (search_company_verified, company_logo_url),
+    }
+    for search_kind, query in attempts:
+        search, logo = searchers[search_kind]
+        found_id = search(query, api_key)
+        if found_id:
+            url = logo(found_id, api_key)
+            if url:
+                return url
+    return None
+
+
+# ── Planner spec hints ─────────────────────────────────────────────────────────
+
+def load_spec_hints(path):
+    """planner_state.json 'selected' specs keyed by lowercased channel name.
+    Returns {} on any failure — hints are best-effort."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            ps = json.load(f)
+        return {
+            v["name"].strip().lower(): v
+            for v in (ps.get("selected") or {}).values()
+            if isinstance(v, dict) and v.get("name")
+        }
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def spec_genre(spec):
+    """Best genre hint from a CandidateSpec dict (genre, else first of genres)."""
+    return spec.get("genre") or (spec.get("genres") or [None])[0]
