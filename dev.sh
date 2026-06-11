@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 # dev.sh — fast local dev loop for Linux/WSL
 #
-# Runs Vite HMR (:5173) + uvicorn --reload (:7979) in one terminal.
-# On Linux, uvicorn --reload works directly — no watchfiles wrapper needed
-# (the Windows workaround in dev.ps1 is not required here).
+# Kills any old instance, then starts:
+#   Vite HMR   -> http://localhost:5173  (open this — frontend with instant hot reload)
+#   uvicorn    -> http://localhost:7979  (API, auto-reloads on Python changes)
 #
-# Open http://localhost:5173 in your browser (Vite proxies /api -> :7979).
-# Ctrl+C stops both processes.
+# Ctrl+C stops both.
 
-set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-cleanup() { kill $(jobs -p) 2>/dev/null; }
+# Kill anything holding our ports
+fuser -k 7979/tcp 5173/tcp 2>/dev/null || true
+sleep 0.5
+
+cleanup() { kill "$(jobs -p)" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
 export PROGRAMMARR_DATA="$ROOT/data"
 export PROGRAMMARR_SCRIPTS="$ROOT"
 
 echo ""
-echo "Dev loop starting..."
-echo "  Frontend (HMR):   http://localhost:5173   <- open this in your browser"
-echo "  Backend (reload): http://localhost:7979"
-echo "  Ctrl+C to stop both."
+echo "  Frontend (HMR):  http://localhost:5173  <- open this"
+echo "  Backend (API):   http://localhost:7979"
+echo "  Ctrl+C to stop."
 echo ""
 
 "$ROOT/.venv/bin/python3" -m uvicorn main:app --reload --port 7979 --app-dir "$ROOT/backend" &
