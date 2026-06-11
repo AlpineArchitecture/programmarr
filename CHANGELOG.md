@@ -4,6 +4,51 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] — 2026-06-10
+
+### Added
+
+- **Multi-title channel logos.** `fetch_images.py` now fetches real TMDB logos for
+  network, franchise, entity (director/actor), and generic multi-title channels — not
+  just solo-title channels. Kind-aware search strategies: network channels try
+  company/network search first; franchise channels try the cleaned name then the first
+  content item; director/actor channels use the cleaned name; everything else falls
+  back through TV → movie → company. Kind hints are read from `planner_state.json`;
+  missing file is a safe no-op. Solo-title path is unchanged.
+- **In-app update banner.** When a new GitHub release is available, a dismissible
+  banner appears in the app linking to the release notes. Backed by
+  `GET /api/update-check`, which polls the GitHub Releases API and caches the result.
+- **"Check for updates" toggle in Settings.** Update polling is on by default; users
+  can opt out without rebuilding the container. Persisted to `config.json` as
+  `update_check_enabled`.
+
+### Fixed
+
+- **Live-channel name-match guard.** `update_channel_in_place` now takes an
+  `expected_name` and refuses to patch (raises, then skips + logs) if the Tunarr
+  channel at that number carries a different name. Prevents silent content scrambling
+  when two Programmarr instances share one Tunarr server — or when `channels.json`
+  drifts out of sync with Tunarr's numbering. Wired into the scheduler, the
+  Channels-page "Save and Apply," and the surgical deploy.
+- **Live-channel indexing now covers all Plex libraries.** `build_library_index`
+  previously indexed only the first enabled movie and first enabled TV library, silently
+  dropping entire secondary libraries (e.g. a "Cartoons" section alongside "TV Shows").
+  It now aggregates every enabled library of each kind.
+- **Live-channel dedup across libraries.** A show that appears in more than one Plex
+  library is indexed once, preferring the copy with the most playable (non-`missing`)
+  episodes. Without this, a dead duplicate could shadow the real copy, or doubled
+  episode counts caused a permanent diff mismatch that churned the channel every cycle.
+- **Light mode theming.** Introduced semantic CSS surface/border tokens
+  (`--app-bg`, `--surface-panel`, `--surface-sunken`, `--border-subtle`) defined
+  per color scheme, replacing 40+ hardcoded dark values across 7 components that never
+  flipped in light mode. Warm off-white page background replaces blinding gray-0.
+  Terminal surfaces (SSE output, Logs, AI prompt) stay dark in both modes by design.
+  Dark mode is visually unchanged.
+- **Logs page readable in light mode.** The log code block forces a dark terminal
+  background but text was inheriting Mantine's default dark color — dark-on-dark,
+  unreadable. Text is now pinned to the same light terminal value used by the SSE
+  terminal and AI prompt preview.
+
 ## [0.5.0] — 2026-06-09
 
 A large Planner overhaul: smarter channel discovery from new data sources, a guided
@@ -375,6 +420,7 @@ and patches it **in place** as the library grows — no redeploy, no manual edit
 - GitHub Actions CI publishing to GHCR; Watchtower auto-update support
   (including the `DOCKER_API_VERSION` fix for newer Docker engines).
 
+[0.6.0]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.6.0
 [0.2.3]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.3
 [0.2.2]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.2
 [0.2.1]: https://github.com/AlpineArchitecture/programmarr/releases/tag/v0.2.1
