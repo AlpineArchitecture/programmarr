@@ -12,6 +12,7 @@ No dependencies beyond the Python standard library.
 """
 
 import json
+import os
 import re
 import uuid
 import urllib.error
@@ -224,6 +225,98 @@ def match_titles(value, movie_map, show_map, order=None, exclude=None):
     resolved = [t[3] for t in matched]
     preview = [{"title": t[2], "year": t[1]} for t in matched]
     return resolved, preview
+
+
+def _norm_franchise_name(name):
+    return " ".join((name or "").lower().split())
+
+
+def load_franchise_index(data_dir):
+    """Franchise membership from the Planner's caches, keyed by normalized name.
+
+    {norm_name: {"name": display_name, "titles": [member title, ...]}}
+    Sources: data_dir/wikidata_cache.json (series/franchise members, spans movies
+    and TV) and data_dir/tmdb_enrichment.json (belongs_to_collection groups).
+    TMDB wins name collisions (its collection data is more precise — same rule as
+    the Planner's _merge_franchises). Best-effort: a missing/corrupt cache simply
+    contributes nothing; worst case is {}.
+    """
+    index = {}
+
+    try:
+        with open(os.path.join(str(data_dir), "wikidata_cache.json"), encoding="utf-8") as f:
+            for fr in (json.load(f).get("franchises") or []):
+                name = (fr.get("name") or "").strip()
+                titles = [m.get("title") for m in fr.get("members") or [] if m.get("title")]
+                if name and titles:
+                    index[_norm_franchise_name(name)] = {"name": name, "titles": titles}
+    except (OSError, ValueError):
+        pass
+
+    try:
+        with open(os.path.join(str(data_dir), "tmdb_enrichment.json"), encoding="utf-8") as f:
+            enrichment = json.load(f).get("enrichment") or {}
+        buckets = {}
+        for title, rec in enrichment.items():
+            coll = rec.get("collection") or {}
+            coll_id, coll_name = coll.get("id"), (coll.get("name") or "").strip()
+            if coll_id and coll_name:
+                buckets.setdefault(coll_id, {"name": coll_name, "titles": []})["titles"].append(title)
+        for b in buckets.values():
+            index[_norm_franchise_name(b["name"])] = b  # TMDB overwrites → wins
+    except (OSError, ValueError):
+        pass
+
+    return index
+
+
+def match_franchise(name, franchise_index, movie_map, show_map, order=None, exclude=None):
+    """Resolver for {"match": "franchise"} content refs.
+
+    Identity-based: members come from the cached TMDB/Wikidata franchise data
+    (load_franchise_index), NOT from name matching — so a franchise channel works
+    even when members share no words with the franchise name (MCU → "Iron Man").
+    Returns (resolved_items, preview) exactly like match_titles. Unknown
+    franchise or missing index → ([], []) — callers treat that as "matched
+    nothing" and refuse to wipe live channels downstream.
+    """
+    entry = (franchise_index or {}).get(_norm_franchise_name(name))
+    if not entry:
+        return [], []
+
+    exclude_set = {e.lower().strip() for e in (exclude or [])}
+    matched = []  # (sort_release_ms, year, title, item) — same shape as match_titles
+
+    for member_title in entry["titles"]:
+        key = (member_title or "").lower().strip()
+        if not key or key in exclude_set:
+            continue
+        p = movie_map.get(key)
+        if p is not None:
+            prog = p.get("program", {})
+            release_ms = prog.get("releaseDate")
+            title = prog.get("title", member_title)
+            matched.append((
+                release_ms if release_ms is not None else float("inf"),
+                prog.get("year"), title,
+                {"type": "Movie", "title": title, "programs": [p]},
+            ))
+            continue
+        s = show_map.get(key)
+        if s is not None:
+            first_prog = s["programs"][0].get("program", {}) if s.get("programs") else {}
+            matched.append((
+                float("inf"),  # shows have no single release date — sort to the end
+                first_prog.get("year"), s["title"],
+                {"type": "TV", "title": s["title"], "showId": s["showId"], "programs": s["programs"]},
+            ))
+
+    if order == "release_date":
+        matched.sort(key=lambda t: (t[0], t[2].lower()))
+    else:
+        matched.sort(key=lambda t: t[2].lower())
+
+    return [t[3] for t in matched], [{"title": t[2], "year": t[1]} for t in matched]
 
 
 # ── Plex collection resolution ─────────────────────────────────────────────────
