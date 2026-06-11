@@ -136,7 +136,9 @@ All config lives in `config.json` (gitignored — in `data/` for Docker, project
 See `config.json.example` for the full shape. Keys:
 
 - `tunarr_url`, `plex_url`, `plex_token` — required connection settings.
-- `tmdb_api_key` — optional; only `fetch_images.py` uses it. Free key at https://www.themoviedb.org/settings/api
+- `tmdb_api_key` — optional; used by `fetch_images.py` for verified TMDB logo lookups.
+  Without it, every channel gets a generated badge instead (icons still work). Free key at
+  https://www.themoviedb.org/settings/api
 - `auth_username` / `auth_password` — optional HTTP Basic Auth. **Both blank = auth disabled.** When set, every backend request requires them.
 - `recipes_enabled` (bool, default `false`), `recipe_interval_hours` (number, default `12`) — live-channel scheduler (see Live Channels).
 - `tunarr_channel_group` (string, optional) — Tunarr `groupTitle` for all created channels (default `"tunarr"`).
@@ -290,6 +292,12 @@ the basis for future era-matched pooling (90s ads → 90s channel; see `docs/ide
 **Mid-roll (ads inside a show) is deliberately not used — it doesn't stream on hardware-accelerated
 (QSV) Tunarr; see [`docs/tunarr-commercials-findings.md`](docs/tunarr-commercials-findings.md).**
 
+**Icon pin (optional).** A channel may carry `"icon": {"mode": "badge"|"tmdb"|"custom",
+"url": "…", "pinned": true}` — written only by `POST /api/channels/{number}/icon` (the
+Channels-editor icon control). `fetch_images.py` skips pinned channels and never writes
+this field; removing it (the editor's "Reset to automatic") returns the channel to the
+automatic art pass.
+
 ## API Endpoints
 
 All endpoint tables — **Pipeline**, **Recipe**, **Tunarr**, **TMDB**, **Plex** — live in
@@ -358,9 +366,10 @@ The blow-by-blow of each step's components and props is the code's job — read 
 **Plex guide shows channel icons, not text names.** When Plex receives a channel with any icon
 in the XMLTV feed, it renders only the icon and suppresses the text label — a Plex design
 decision, not a Programmarr bug. Tunarr injects a default icon for every channel, so without
-custom icons the guide is a wall of identical icons. `fetch_images.py` gives solo-title channels
-real TMDB logos; multi-title channels still show the Tunarr default until a logo strategy exists
-for them. Refreshing/restarting Plex does not change this.
+custom icons the guide is a wall of identical icons. `fetch_images.py` now gives **every**
+channel an icon: verified TMDB logos where trustworthy, generated name-stamped badges
+everywhere else — so the guide is readable even though Plex hides the text labels.
+Refreshing/restarting Plex does not change the icon-suppression behavior itself.
 
 ## Git Workflow
 
