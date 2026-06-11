@@ -14,6 +14,8 @@ if str(_BACKEND) not in sys.path:
 
 import channel_engine  # noqa: E402
 import scheduler       # noqa: E402  (shared deploy_lock)
+import badge_renderer  # noqa: E402
+import icon_engine     # noqa: E402
 
 router = APIRouter()
 DATA_DIR = Path(os.environ.get("PROGRAMMARR_DATA", Path(__file__).parent.parent.parent))
@@ -140,6 +142,87 @@ async def apply_channel(number: int):
         return {"ok": True, "number": number, "program_count": count}
     except channel_engine.ChannelEngineError as e:
         raise HTTPException(409, str(e))
+
+
+@router.post("/channels/{number}/icon")
+async def channel_icon(number: int, body: dict):
+    """Set or pin a channel's Tunarr icon.
+
+    body: {"mode": "badge" | "tmdb" | "custom" | "clear", "url": "..."(custom only)}
+    badge/tmdb/custom write a pin into channels.json ("icon": {..., "pinned": true})
+    so automatic art passes (fetch_images.py) skip the channel; "clear" resets the
+    Tunarr icon to default and removes the pin (back to automatic).
+    """
+    mode = (body or {}).get("mode")
+    if mode not in ("badge", "tmdb", "custom", "clear"):
+        raise HTTPException(422, "mode must be one of: badge, tmdb, custom, clear")
+
+    data = load()
+    ch = next((c for c in data.get("channels", []) if c.get("number") == number), None)
+    if ch is None:
+        raise HTTPException(404, f"Channel {number} not in channels.json")
+
+    cfg = _load_config()
+    tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    if not tunarr_url:
+        raise HTTPException(400, "Tunarr not configured")
+
+    name = (ch.get("name") or "").strip()
+
+    def _do():
+        summary = channel_engine.find_channel_by_number(tunarr_url, number)
+        if summary is None:
+            raise channel_engine.ChannelEngineError(
+                f"Channel #{number} not in Tunarr — deploy it first")
+        tch = icon_engine.get_full_channel(tunarr_url, summary["id"])
+        if tch is None:
+            raise channel_engine.ChannelEngineError("Could not read channel from Tunarr")
+
+        if mode == "clear":
+            if not icon_engine.clear_tunarr_channel_icon(tunarr_url, tch):
+                raise channel_engine.ChannelEngineError("Tunarr icon reset failed")
+            return ""
+
+        if mode == "custom":
+            url = (body.get("url") or "").strip()
+            if not url:
+                raise channel_engine.ChannelEngineError("url required for custom mode")
+        elif mode == "badge":
+            spec = icon_engine.load_spec_hints(
+                DATA_DIR / "planner_state.json").get(name.lower(), {})
+            png = badge_renderer.render_badge(
+                name, kind=spec.get("kind"), genre=icon_engine.spec_genre(spec))
+            url = icon_engine.upload_image_to_tunarr(
+                tunarr_url, png, f"programmarr-ch{number}-{os.urandom(4).hex()}.png")
+        else:  # tmdb
+            key = cfg.get("tmdb_api_key", "")
+            if not key:
+                raise channel_engine.ChannelEngineError(
+                    "tmdb_api_key not configured — use a badge or custom URL")
+            spec = icon_engine.load_spec_hints(
+                DATA_DIR / "planner_state.json").get(name.lower(), {})
+            url = icon_engine.resolve_tmdb_logo(
+                icon_engine.icon_attempts(ch, spec.get("kind")), key)
+            if not url:
+                raise channel_engine.ChannelEngineError(
+                    "No verified TMDB logo for this channel — use a badge or custom URL")
+
+        if not icon_engine.set_tunarr_channel_icon(tunarr_url, tch, url):
+            raise channel_engine.ChannelEngineError("Tunarr icon update failed")
+        return url
+
+    try:
+        async with scheduler.deploy_lock:
+            url = await asyncio.to_thread(_do)
+    except channel_engine.ChannelEngineError as e:
+        raise HTTPException(409, str(e))
+
+    if mode == "clear":
+        ch.pop("icon", None)
+    else:
+        ch["icon"] = {"mode": mode, "url": url, "pinned": True}
+    save(data)
+    return {"ok": True, "mode": mode, "url": url}
 
 
 @router.get("/library/titles")
