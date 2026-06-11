@@ -197,24 +197,30 @@ def tunarr_show_to_row(show_title, episodes, source_name):
     }
 
 
-def build_extra_rows_from_tunarr(tunarr_url, seen_movie_titles, seen_show_titles):
-    """Fetch content from all Tunarr Plex sources, skipping titles already in the primary export."""
+def build_extra_rows_from_tunarr(tunarr_url, seen_movie_titles, seen_show_titles,
+                                  allowed_movie_libs=None, allowed_tv_libs=None):
+    """Fetch content from all Tunarr sources, skipping titles already in the primary export.
+
+    allowed_movie_libs / allowed_tv_libs: set of Tunarr library UUIDs to include.
+    None = include all (CLI default). Empty set = skip entirely.
+    """
     print("  Fetching additional content from other Tunarr sources...")
     sources = tunarr_get(tunarr_url, "/api/media-sources") or []
-    plex_sources = [s for s in sources if s.get("type") == "plex"]
-    if not plex_sources:
+    if not sources:
         return [], []
 
     extra_movie_rows = []
     extra_show_rows  = []
 
-    for source in plex_sources:
-        source_name = source.get("name", "Plex")
+    for source in sources:
+        source_name = source.get("name", source.get("type", "Tunarr"))
         libs = source.get("libraries", [])
         movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
         show_libs  = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
 
         for lib in movie_libs:
+            if allowed_movie_libs is not None and lib["id"] not in allowed_movie_libs:
+                continue
             programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
             for p in programs:
                 prog = p.get("program", {})
@@ -225,6 +231,8 @@ def build_extra_rows_from_tunarr(tunarr_url, seen_movie_titles, seen_show_titles
                 extra_movie_rows.append(tunarr_movie_to_row(prog, source_name))
 
         for lib in show_libs:
+            if allowed_tv_libs is not None and lib["id"] not in allowed_tv_libs:
+                continue
             programs = tunarr_get(tunarr_url, f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
             shows: dict = {}
             for p in programs:
@@ -245,7 +253,7 @@ def build_extra_rows_from_tunarr(tunarr_url, seen_movie_titles, seen_show_titles
     if new_movies or new_shows:
         print(f"  Found {new_movies} additional movies, {new_shows} additional TV shows from Tunarr")
     else:
-        print("  No additional content (primary Plex covers everything in Tunarr)")
+        print("  No additional content (primary Plex covers everything)")
 
     return extra_movie_rows, extra_show_rows
 
@@ -315,9 +323,13 @@ def main():
     parser.add_argument("--out", default=OUTPUT_FILE, help="Output CSV path")
     parser.add_argument("--no-crossref", action="store_true", help="Skip Tunarr sync check")
     parser.add_argument("--movie-sections", default=None,
-                        help="Comma-separated section keys for movies (auto-detect if omitted, empty = skip). Applied to all servers.")
+                        help="Comma-separated Plex section keys for movies (auto-detect if omitted, empty = skip).")
     parser.add_argument("--tv-sections", default=None,
-                        help="Comma-separated section keys for TV shows (auto-detect if omitted, empty = skip). Applied to all servers.")
+                        help="Comma-separated Plex section keys for TV shows (auto-detect if omitted, empty = skip).")
+    parser.add_argument("--tunarr-movie-libs", default=None,
+                        help="Comma-separated Tunarr library UUIDs for extra movie sources (auto = all, empty = skip).")
+    parser.add_argument("--tunarr-tv-libs", default=None,
+                        help="Comma-separated Tunarr library UUIDs for extra TV sources (auto = all, empty = skip).")
     args = parser.parse_args()
 
     cfg = load_config()
@@ -386,9 +398,20 @@ def main():
 
     # ── Supplement from other Tunarr sources ───────────────────────────────────
     # Pull content that Tunarr knows about but isn't in the primary Plex export.
-    # De-duped against seen_movie_titles / seen_show_titles already collected above.
+    # allowed_*_libs: None = all (auto/CLI), set = user-selected, empty set = skip.
+    def _parse_lib_ids(raw):
+        if raw is None:
+            return None
+        ids = {s.strip() for s in raw.split(",") if s.strip()}
+        return ids  # empty set means "user selected nothing" → skip all
+
+    allowed_movie_libs = _parse_lib_ids(args.tunarr_movie_libs)
+    allowed_tv_libs    = _parse_lib_ids(args.tunarr_tv_libs)
+
     extra_movie_rows, extra_show_rows = build_extra_rows_from_tunarr(
-        tunarr_url, seen_movie_titles, seen_show_titles
+        tunarr_url, seen_movie_titles, seen_show_titles,
+        allowed_movie_libs=allowed_movie_libs,
+        allowed_tv_libs=allowed_tv_libs,
     )
 
     # ── Cross-reference with Tunarr ────────────────────────────────────────────

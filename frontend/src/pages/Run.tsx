@@ -415,13 +415,22 @@ function ExportStep({ onDone }: { onDone: () => void }) {
   const selectedCount = Object.values(libSels).filter(Boolean).length;
 
   async function run() {
-    const movieSections = movieLibs.filter(l => libSels[l.key]).map(l => l.key);
-    const tvSections = tvLibs.filter(l => libSels[l.key]).map(l => l.key);
+    // Library keys are prefixed: "plex:{section_key}" for primary Plex, "tunarr:{lib_uuid}" for others.
+    const movieSections   = movieLibs.filter(l => libSels[l.key] && l.key.startsWith('plex:')).map(l => l.key.slice(5));
+    const tvSections      = tvLibs.filter(l => libSels[l.key] && l.key.startsWith('plex:')).map(l => l.key.slice(5));
+    const tunarrMovieLibs = movieLibs.filter(l => libSels[l.key] && l.key.startsWith('tunarr:')).map(l => l.key.slice(7));
+    const tunarrTvLibs    = tvLibs.filter(l => libSels[l.key] && l.key.startsWith('tunarr:')).map(l => l.key.slice(7));
     setLines([]); setDone(false); setSummary(null); setRunning(true);
     try {
       const code = await streamPipeline('/pipeline/export', {}, (ev: StreamEvent) => {
         if (ev.type === 'line') setLines(l => [...l, ev.text]);
-      }, { no_crossref: noCrossref, movie_sections: movieSections, tv_sections: tvSections });
+      }, {
+        no_crossref: noCrossref,
+        movie_sections: movieSections,
+        tv_sections: tvSections,
+        tunarr_movie_libs: tunarrMovieLibs,
+        tunarr_tv_libs: tunarrTvLibs,
+      });
       const ok = code === 0;
       setSuccess(ok); setDone(true);
       if (ok) setSummary(await api.getCsvInfo());

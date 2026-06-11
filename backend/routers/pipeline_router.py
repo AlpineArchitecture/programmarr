@@ -156,42 +156,53 @@ async def _locked_stream(script: str, args: list[str], tag: str) -> AsyncGenerat
 
 class ExportOptions(BaseModel):
     no_crossref: bool = False
-    movie_sections: Optional[list[str]] = None  # None = auto-detect; [] = skip type entirely
+    movie_sections: Optional[list[str]] = None   # primary Plex section keys; None = auto, [] = skip
     tv_sections: Optional[list[str]] = None
+    tunarr_movie_libs: Optional[list[str]] = None  # Tunarr library UUIDs for extra sources
+    tunarr_tv_libs: Optional[list[str]] = None
 
 
 @router.get("/pipeline/libraries")
 def list_libraries():
     cfg = _load_config()
-    servers = cfg.get("plex_servers") or []
-    if not servers and cfg.get("plex_url") and cfg.get("plex_token"):
-        servers = [{"name": "Plex", "url": cfg["plex_url"], "token": cfg["plex_token"]}]
-    if not servers:
+    plex_url   = cfg.get("plex_url", "").rstrip("/").lower()
+    plex_token = cfg.get("plex_token", "")
+    tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    if not plex_url or not plex_token:
         raise HTTPException(400, "Plex not configured")
 
-    multi = len(servers) > 1
     result = []
-    for i, srv in enumerate(servers):
-        url = srv.get("url", "").rstrip("/")
-        token = srv.get("token", "")
-        name = srv.get("name", f"Server {i + 1}")
-        if not url or not token:
-            continue
-        try:
-            data = _plex_get(url, token, "/library/sections")
-            sections = data["MediaContainer"].get("Directory", [])
-        except Exception:
-            continue  # server unreachable — skip rather than fail the whole list
-        for s in sections:
+
+    # ── Primary Plex sections (via Plex API, key prefixed "plex:") ─────────────
+    srv_name = (cfg.get("plex_servers") or [{}])[0].get("name", "Your Library")
+    try:
+        data = _plex_get(plex_url, plex_token, "/library/sections")
+        for s in data["MediaContainer"].get("Directory", []):
             if s.get("type") not in ("movie", "show"):
                 continue
-            # Encode as "{server_index}:{section_key}" when multi-server so section keys
-            # from different servers don't collide (Plex keys are small non-unique integers).
-            key = f"{i}:{s['key']}" if multi else s["key"]
-            entry: dict = {"key": key, "title": s["title"], "type": s["type"]}
-            if multi:
-                entry["server"] = name
-            result.append(entry)
+            result.append({"key": f"plex:{s['key']}", "title": s["title"],
+                            "type": s["type"], "server": srv_name})
+    except Exception:
+        pass  # unreachable — UI shows error from libError fallback
+
+    # ── All other Tunarr-connected sources (key prefixed "tunarr:") ────────────
+    if tunarr_url:
+        for source in (channel_engine.api(tunarr_url, "GET", "/api/media-sources") or []):
+            # Skip the primary Plex — its sections are already listed above.
+            if source.get("type") == "plex" and source.get("uri", "").rstrip("/").lower() == plex_url:
+                continue
+            source_name = source.get("name", source.get("type", "Unknown"))
+            for lib in source.get("libraries", []):
+                if not lib.get("enabled"):
+                    continue
+                media_type = lib.get("mediaType", "")
+                lib_type = ("movie" if media_type in ("movie", "movies")
+                            else "show" if media_type == "shows" else None)
+                if not lib_type:
+                    continue
+                result.append({"key": f"tunarr:{lib['id']}", "title": lib.get("name", lib["id"]),
+                                "type": lib_type, "server": source_name})
+
     return result
 
 
@@ -204,6 +215,10 @@ async def run_export(opts: ExportOptions = ExportOptions()):
         args += ["--movie-sections", ",".join(opts.movie_sections)]
     if opts.tv_sections is not None:
         args += ["--tv-sections", ",".join(opts.tv_sections)]
+    if opts.tunarr_movie_libs is not None:
+        args += ["--tunarr-movie-libs", ",".join(opts.tunarr_movie_libs)]
+    if opts.tunarr_tv_libs is not None:
+        args += ["--tunarr-tv-libs", ",".join(opts.tunarr_tv_libs)]
     return _sse(_stream("export.py", args, "export"))
 
 
