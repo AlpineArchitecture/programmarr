@@ -1,10 +1,11 @@
 import {
   ActionIcon, Alert, Badge, Box, Button, Card, Center, Checkbox, Chip, Code, Collapse, Divider, Group,
-  Image, Loader, NumberInput, ScrollArea, Select, SimpleGrid, Stack,
+  Image, Loader, Modal, NumberInput, ScrollArea, Select, SimpleGrid, Stack,
   Stepper, Switch, Text, TextInput, Textarea, ThemeIcon, Title, Tooltip, UnstyledButton,
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import { Dropzone } from '@mantine/dropzone';
+import { useDisclosure } from '@mantine/hooks';
 import {
   IconAlertCircle, IconAlertTriangle, IconArrowRight, IconCheck, IconChevronDown, IconCopy, IconDeviceTv,
   IconDownload, IconExternalLink, IconPlayerPlay, IconRefresh, IconRobot, IconSearch, IconSparkles,
@@ -596,11 +597,13 @@ function BulkButtons({ items, onAdd }: { items: AddItem[]; onAdd: (i: AddItem[])
 // Category groups start expanded when their section is open. A "Done" button in the
 // footer collapses a handled category to its header summary. Re-openable by clicking
 // the header. Top 10 / Add all no longer collapse the group.
-function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, children }: {
+function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, onDeselect, children }: {
   title: string; count: number; selectedCount?: number;
-  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; children: React.ReactNode;
+  addItems?: AddItem[]; onAdd?: (i: AddItem[]) => void; onDeselect?: () => void; children: React.ReactNode | ((q: string) => React.ReactNode);
 }) {
   const [open, setOpen] = useState(true);
+  const [q, setQ] = useState('');
+  const showSearch = count > 20;
   return (
     <Card withBorder p="sm">
       <Group justify="space-between" wrap="nowrap" style={{ cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
@@ -609,10 +612,32 @@ function CollapsibleSection({ title, count, selectedCount, addItems, onAdd, chil
           <Text fw={600} size="sm" lineClamp={1}>{title} <Text span c="dimmed" size="xs">({count})</Text></Text>
           {selectedCount ? <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>{selectedCount} added</Badge> : null}
         </Group>
-        {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} />}
+        <Group gap={4} wrap="nowrap" style={{ flexShrink: 0 }}>
+          {selectedCount != null && selectedCount > 0 && onDeselect && (
+            <Button size="compact-xs" variant="subtle" color="gray"
+              onClick={(e) => { e.stopPropagation(); onDeselect(); }}>Deselect all</Button>
+          )}
+          {addItems && onAdd && <BulkButtons items={addItems} onAdd={onAdd} />}
+        </Group>
       </Group>
       <Collapse in={open}>
-        {children}
+        {showSearch && (
+          <TextInput
+            size="xs"
+            mt="xs"
+            placeholder="Search…"
+            value={q}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            leftSection={<IconSearch size={13} />}
+          />
+        )}
+        {showSearch ? (
+          <ScrollArea.Autosize mah={260} mt="xs">
+            {typeof children === 'function' ? children(q) : children}
+          </ScrollArea.Autosize>
+        ) : (
+          typeof children === 'function' ? children('') : children
+        )}
         <Group justify="flex-end" mt="xs">
           <Button size="compact-xs" variant="subtle" color="dimmed"
             onClick={(e) => { e.stopPropagation(); setOpen(false); }}>Done</Button>
@@ -751,6 +776,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
   const [showMore, setShowMore] = useState(false);
   // Accordion: which of the three sections (0=TV, 1=Movies, 2=TV+Movies) is open. Section 0 starts open.
   const [openSection, setOpenSection] = useState<number>(0);
+  const [resetOpen, { open: openReset, close: closeReset }] = useDisclosure(false);
   function openNext(current: number) { setOpenSection(current + 1); }
   function toggleSection(idx: number) { setOpenSection(s => s === idx ? -1 : idx); }
 
@@ -997,6 +1023,13 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     patch({ selected: next });
   }
 
+  function removeMany(ids: string[]) {
+    const nextSel = { ...planner.selected };
+    const nextCur = { ...planner.curate };
+    ids.forEach(id => { delete nextSel[id]; delete nextCur[id]; });
+    patch({ selected: nextSel, curate: nextCur });
+  }
+
   // Debounced save: persist the full planner intent 500ms after any change.
   // Guard: skip until the initial restore has completed so we don't clobber the saved file
   // with an empty state on first mount.
@@ -1130,6 +1163,24 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     } finally { setBuilding(false); }
   }
 
+  function doReset() {
+    const minItems = f?.min_items ?? 5;
+    const defaultGenres: Record<string, boolean> = {};
+    const defaultDecades: Record<string, boolean> = {};
+    (f?.genres?.canonical ?? []).forEach(g => { defaultGenres[g.tag] = g.count >= minItems; });
+    (f?.decades ?? []).forEach(d => { defaultDecades[d.label] = true; });
+    patch({ selected: {}, curate: {}, activeGenres: defaultGenres, activeDecades: defaultDecades });
+    setAiExtras(false);
+    setCommEnabled(false);
+    setCommListId(null);
+    setCommPad('5');
+    setAutoUpdate(false);
+    api.deletePlannerState().catch(() => {});
+    restoredRef.current = false;
+    setTimeout(() => { restoredRef.current = true; }, 0);
+    closeReset();
+  }
+
   return (
     <Stack gap="lg">
       <Text size="sm" c="dimmed">
@@ -1239,11 +1290,15 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             const items: AddItem[] = f.marathons!.map(m => ({ id: cid.marathon(m.title), spec: { kind: 'marathon' as CandidateKind, value: m.title, name: `${m.title} Marathon` } }));
             return (
               <CollapsibleSection title="Marathons — one channel per show" count={f.marathons!.length}
-                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                {f.marathons!.map((m, i) => (
-                  <CandRow key={items[i].id} id={items[i].id} count={m.episodes} label={m.title} checked={isSel(items[i].id)}
-                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                ))}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany} onDeselect={() => removeMany(items.map(i => i.id))}>
+                {(q) => {
+                  const pairs = f.marathons!.map((m, i) => ({ m, item: items[i] }));
+                  const filtered = !q ? pairs : pairs.filter(({ m }) => m.title.toLowerCase().includes(q.toLowerCase()));
+                  return filtered.map(({ m, item }) => (
+                    <CandRow key={item.id} id={item.id} count={m.episodes} label={m.title} checked={isSel(item.id)}
+                      onToggle={() => toggleSel(item.id, item.spec)} />
+                  ));
+                }}
               </CollapsibleSection>
             );
           })()}
@@ -1251,11 +1306,15 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             const items: AddItem[] = f.tv_genres!.map(t => ({ id: cid.tv(t.genre), spec: { kind: 'tv_genre' as CandidateKind, genre: t.genre, name: `${t.genre} TV` } }));
             return (
               <CollapsibleSection title="Genre blocks — themed multi-show" count={f.tv_genres!.length}
-                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                {f.tv_genres!.map((t, i) => (
-                  <CandRow key={items[i].id} id={items[i].id} count={t.count} label={`${t.genre} TV`} checked={isSel(items[i].id)}
-                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                ))}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany} onDeselect={() => removeMany(items.map(i => i.id))}>
+                {(q) => {
+                  const pairs = f.tv_genres!.map((t, i) => ({ t, item: items[i] }));
+                  const filtered = !q ? pairs : pairs.filter(({ t }) => t.genre.toLowerCase().includes(q.toLowerCase()));
+                  return filtered.map(({ t, item }) => (
+                    <CandRow key={item.id} id={item.id} count={t.count} label={`${t.genre} TV`} checked={isSel(item.id)}
+                      onToggle={() => toggleSel(item.id, item.spec)} />
+                  ));
+                }}
               </CollapsibleSection>
             );
           })()}
@@ -1276,17 +1335,22 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 selectedCount={countSel(netItems.map(i => i.id))}
                 addItems={netItems}
                 onAdd={addMany}
+                onDeselect={() => removeMany(netItems.map(i => i.id))}
               >
-                {f.networks!.map((n, i) => (
-                  <CandRow
-                    key={netItems[i].id}
-                    id={netItems[i].id}
-                    count={n.count}
-                    label={n.value}
-                    checked={isSel(netItems[i].id)}
-                    onToggle={() => toggleSel(netItems[i].id, netItems[i].spec)}
-                  />
-                ))}
+                {(q) => {
+                  const pairs = f.networks!.map((n, i) => ({ n, item: netItems[i] }));
+                  const filtered = !q ? pairs : pairs.filter(({ n }) => n.value.toLowerCase().includes(q.toLowerCase()));
+                  return filtered.map(({ n, item }) => (
+                    <CandRow
+                      key={item.id}
+                      id={item.id}
+                      count={n.count}
+                      label={n.value}
+                      checked={isSel(item.id)}
+                      onToggle={() => toggleSel(item.id, item.spec)}
+                    />
+                  ));
+                }}
               </CollapsibleSection>
             );
           })()}
@@ -1306,17 +1370,22 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                 selectedCount={countSel(items.map(i => i.id))}
                 addItems={items}
                 onAdd={addMany}
+                onDeselect={() => removeMany(items.map(i => i.id))}
               >
-                {programmingBlocks.map((b, i) => (
-                  <CandRow
-                    key={items[i].id}
-                    id={items[i].id}
-                    count={b.present_count}
-                    label={`${b.name} — ${b.present_count} of ${b.shows.length} shows  (${b.network}, ${b.era})`}
-                    checked={isSel(items[i].id)}
-                    onToggle={() => toggleSel(items[i].id, items[i].spec)}
-                  />
-                ))}
+                {(q) => {
+                  const pairs = programmingBlocks.map((b, i) => ({ b, item: items[i] }));
+                  const filtered = !q ? pairs : pairs.filter(({ b }) => b.name.toLowerCase().includes(q.toLowerCase()));
+                  return filtered.map(({ b, item }) => (
+                    <CandRow
+                      key={item.id}
+                      id={item.id}
+                      count={b.present_count}
+                      label={`${b.name} — ${b.present_count} of ${b.shows.length} shows  (${b.network}, ${b.era})`}
+                      checked={isSel(item.id)}
+                      onToggle={() => toggleSel(item.id, item.spec)}
+                    />
+                  ));
+                }}
               </CollapsibleSection>
             );
           })()}
@@ -1356,12 +1425,16 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               const items: AddItem[] = cells.map(c => ({ id: cid.gd(c.genre, c.decade_start), spec: { kind: 'genre_decade' as CandidateKind, genre: c.genre, decade_start: c.decade_start, name: gdName(c.decade_label, c.display) } }));
               return (
                 <CollapsibleSection key={d.label} title={d.label} count={cells.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {cells.map((c, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={c.count} label={gdName(c.decade_label, c.display)} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)}
-                      curatable={aiExtras} curate={isCurate(items[i].id)} onCurate={() => toggleCurate(items[i].id)} />
-                  ))}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany} onDeselect={() => removeMany(items.map(i => i.id))}>
+                  {(q) => {
+                    const pairs = cells.map((c, i) => ({ c, item: items[i] }));
+                    const filtered = !q ? pairs : pairs.filter(({ c }) => c.display.toLowerCase().includes(q.toLowerCase()));
+                    return filtered.map(({ c, item }) => (
+                      <CandRow key={item.id} id={item.id} count={c.count} label={gdName(c.decade_label, c.display)} checked={isSel(item.id)}
+                        onToggle={() => toggleSel(item.id, item.spec)}
+                        curatable={aiExtras} curate={isCurate(item.id)} onCurate={() => toggleCurate(item.id)} />
+                    ));
+                  }}
                 </CollapsibleSection>
               );
             })}
@@ -1370,11 +1443,15 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               const items: AddItem[] = subGenres.map(x => ({ id: cid.blend(x.blend.genres[0], x.blend.genres[1]), spec: { kind: 'blend' as CandidateKind, genres: x.blend.genres, name: x.s.name } }));
               return (
                 <CollapsibleSection title="Sub-genres" count={subGenres.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {subGenres.map(({ s, blend }, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={blend.count} label={s.name} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                  ))}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany} onDeselect={() => removeMany(items.map(i => i.id))}>
+                  {(q) => {
+                    const pairs = subGenres.map((x, i) => ({ x, item: items[i] }));
+                    const filtered = !q ? pairs : pairs.filter(({ x }) => x.s.name.toLowerCase().includes(q.toLowerCase()));
+                    return filtered.map(({ x, item }) => (
+                      <CandRow key={item.id} id={item.id} count={x.blend.count} label={x.s.name} checked={isSel(item.id)}
+                        onToggle={() => toggleSel(item.id, item.spec)} />
+                    ));
+                  }}
                 </CollapsibleSection>
               );
             })()}
@@ -1383,12 +1460,16 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
               const items: AddItem[] = broadCands.map(g => ({ id: cid.genre(g.tag), spec: { kind: 'genre' as CandidateKind, genre: g.tag, name: `${g.display} Movies` } }));
               return (
                 <CollapsibleSection title="Broad genres" count={broadCands.length}
-                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                  {broadCands.map((g, i) => (
-                    <CandRow key={items[i].id} id={items[i].id} count={g.count} label={`${g.display} Movies`} checked={isSel(items[i].id)}
-                      onToggle={() => toggleSel(items[i].id, items[i].spec)}
-                      curatable={aiExtras} curate={isCurate(items[i].id)} onCurate={() => toggleCurate(items[i].id)} />
-                  ))}
+                  selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany} onDeselect={() => removeMany(items.map(i => i.id))}>
+                  {(q) => {
+                    const pairs = broadCands.map((g, i) => ({ g, item: items[i] }));
+                    const filtered = !q ? pairs : pairs.filter(({ g }) => g.display.toLowerCase().includes(q.toLowerCase()));
+                    return filtered.map(({ g, item }) => (
+                      <CandRow key={item.id} id={item.id} count={g.count} label={`${g.display} Movies`} checked={isSel(item.id)}
+                        onToggle={() => toggleSel(item.id, item.spec)}
+                        curatable={aiExtras} curate={isCurate(item.id)} onCurate={() => toggleCurate(item.id)} />
+                    ));
+                  }}
                 </CollapsibleSection>
               );
             })()}
@@ -1421,17 +1502,22 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                       selectedCount={countSel(items.map(i => i.id))}
                       addItems={items}
                       onAdd={addMany}
+                      onDeselect={() => removeMany(items.map(i => i.id))}
                     >
-                      {themes.map((t, i) => (
-                        <CandRow
-                          key={items[i].id}
-                          id={items[i].id}
-                          count={t.count}
-                          label={t.name}
-                          checked={isSel(items[i].id)}
-                          onToggle={() => toggleSel(items[i].id, items[i].spec)}
-                        />
-                      ))}
+                      {(q) => {
+                        const pairs = themes.map((t, i) => ({ t, item: items[i] }));
+                        const filtered = !q ? pairs : pairs.filter(({ t }) => t.name.toLowerCase().includes(q.toLowerCase()));
+                        return filtered.map(({ t, item }) => (
+                          <CandRow
+                            key={item.id}
+                            id={item.id}
+                            count={t.count}
+                            label={t.name}
+                            checked={isSel(item.id)}
+                            onToggle={() => toggleSel(item.id, item.spec)}
+                          />
+                        ));
+                      }}
                     </CollapsibleSection>
                   );
                 })()}
@@ -1502,14 +1588,18 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             }));
             return (
               <CollapsibleSection title="Mixed-genre channels" count={f.tv_movie_genres!.length}
-                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany}>
-                {(f.tv_movie_genres as TvMovieGenreFacet[]).map((x, i) => (
-                  <CandRow key={items[i].id} id={items[i].id}
-                    count={x.tv_count + x.movie_count}
-                    label={`${x.genre} — ${x.tv_count} episodes + ${x.movie_count} films`}
-                    checked={isSel(items[i].id)}
-                    onToggle={() => toggleSel(items[i].id, items[i].spec)} />
-                ))}
+                selectedCount={countSel(items.map(i => i.id))} addItems={items} onAdd={addMany} onDeselect={() => removeMany(items.map(i => i.id))}>
+                {(q) => {
+                  const pairs = (f.tv_movie_genres as TvMovieGenreFacet[]).map((x, i) => ({ x, item: items[i] }));
+                  const filtered = !q ? pairs : pairs.filter(({ x }) => x.genre.toLowerCase().includes(q.toLowerCase()));
+                  return filtered.map(({ x, item }) => (
+                    <CandRow key={item.id} id={item.id}
+                      count={x.tv_count + x.movie_count}
+                      label={`${x.genre} — ${x.tv_count} episodes + ${x.movie_count} films`}
+                      checked={isSel(item.id)}
+                      onToggle={() => toggleSel(item.id, item.spec)} />
+                  ));
+                }}
               </CollapsibleSection>
             );
           })() : (
@@ -1562,19 +1652,25 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                   setFranchiseMemberOverrides(nextOverrides);
                   addMany(items);
                 }}
+                onDeselect={() => removeMany(franchiseAddItems.map(i => i.id))}
               >
-                <Stack gap="xs" mt="xs">
-                  {franchises.map((fr) => (
-                    <FranchiseCard
-                      key={fr.name}
-                      franchise={fr}
-                      isSelected={isSel(cid.franchise(fr.name))}
-                      checkedTitles={franchiseCheckedTitles(fr)}
-                      onToggle={() => toggleFranchise(fr)}
-                      onToggleMember={(title) => toggleFranchiseMember(fr, title)}
-                    />
-                  ))}
-                </Stack>
+                {(q) => {
+                  const filtered = !q ? franchises : franchises.filter(fr => fr.name.toLowerCase().includes(q.toLowerCase()));
+                  return (
+                    <Stack gap="xs" mt="xs">
+                      {filtered.map((fr) => (
+                        <FranchiseCard
+                          key={fr.name}
+                          franchise={fr}
+                          isSelected={isSel(cid.franchise(fr.name))}
+                          checkedTitles={franchiseCheckedTitles(fr)}
+                          onToggle={() => toggleFranchise(fr)}
+                          onToggleMember={(title) => toggleFranchiseMember(fr, title)}
+                        />
+                      ))}
+                    </Stack>
+                  );
+                }}
               </CollapsibleSection>
             );
           })() : franchisesFetched && !tmdbScanRunning && franchises.length === 0 ? (
@@ -1593,31 +1689,20 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
             {curateCount > 0 && <Text size="xs" c="grape.4">+ {curateCount} pool{curateCount !== 1 ? 's' : ''} for AI to split by tone</Text>}
           </Box>
           <Group gap="xs">
-            <Button variant="subtle" size="xs" color="gray" onClick={() => {
-              // Reset all picks and toggles to defaults, then wipe the saved state file.
-              const minItems = f?.min_items ?? 5;
-              const defaultGenres: Record<string, boolean> = {};
-              const defaultDecades: Record<string, boolean> = {};
-              (f?.genres?.canonical ?? []).forEach(g => { defaultGenres[g.tag] = g.count >= minItems; });
-              (f?.decades ?? []).forEach(d => { defaultDecades[d.label] = true; });
-              patch({ selected: {}, curate: {}, activeGenres: defaultGenres, activeDecades: defaultDecades });
-              setAiExtras(false);
-              setCommEnabled(false);
-              setCommListId(null);
-              setCommPad('5');
-              setAutoUpdate(false);
-              api.deletePlannerState().catch(() => {});
-              // Suppress the save that would fire for this clear-all render, then re-enable
-              // so subsequent picks are saved normally.
-              restoredRef.current = false;
-              setTimeout(() => { restoredRef.current = true; }, 0);
-            }}>Clear all</Button>
+            <Button variant="subtle" size="xs" color="red" onClick={openReset}>Reset</Button>
             <Button color="orange" leftSection={<IconWand size={15} />} disabled={selectedCount === 0 && !aiExtras} loading={building} onClick={build}>
               {exactSpecs.length === 0 ? 'Continue to AI' : `Build ${exactSpecs.length} Channel${exactSpecs.length !== 1 ? 's' : ''}`}
             </Button>
           </Group>
         </Group>
       </Card>
+      <Modal opened={resetOpen} onClose={closeReset} title="Reset planner?" size="sm" centered>
+        <Text size="sm" mb="lg">This will clear all picks, genres, decades, and saved state.</Text>
+        <Group justify="flex-end" gap="xs">
+          <Button variant="subtle" color="gray" onClick={closeReset}>Cancel</Button>
+          <Button color="red" onClick={doReset}>Reset</Button>
+        </Group>
+      </Modal>
     </Stack>
   );
 }
