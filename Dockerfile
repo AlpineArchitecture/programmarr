@@ -25,7 +25,8 @@ COPY backend/ ./backend/
 
 # Pipeline scripts, prompt template, and static data catalogs
 COPY export.py create.py channel_engine.py channel_blocks.py generate_no_ai.py generate_from_collections.py \
-     fetch_images.py sync_plex.py PROMPT.md programming_blocks.json themed_keywords.json ./
+     fetch_images.py sync_plex.py icon_engine.py badge_renderer.py PROMPT.md programming_blocks.json themed_keywords.json ./
+COPY badge_assets/ ./badge_assets/
 
 # Built React app → served as static files by FastAPI
 COPY --from=frontend-build /build/dist ./backend/static/

@@ -125,10 +125,12 @@ export default function Settings() {
 
   useEffect(() => {
     api.getConfig().then((cfg) => {
+      // Read primary Plex from plex_servers[0] if present (migration), else legacy fields.
+      const primary = cfg.plex_servers?.[0];
       setValues({
         tunarr_url:    cfg.tunarr_url    || '',
-        plex_url:      cfg.plex_url      || '',
-        plex_token:    cfg.plex_token    || '',
+        plex_url:      primary?.url      || cfg.plex_url      || '',
+        plex_token:    primary?.token    || cfg.plex_token    || '',
         tmdb_api_key:  cfg.tmdb_api_key  || '',
         auth_username: cfg.auth_username || '',
         auth_password: cfg.auth_password || '',
@@ -191,7 +193,6 @@ export default function Settings() {
       {/* Connections */}
       <Card p="lg">
         <Text fw={700} mb="md">Connections</Text>
-
         <Stack gap="sm">
           <TextInput
             label="Tunarr URL"
@@ -200,13 +201,14 @@ export default function Settings() {
             onChange={(e) => set('tunarr_url', e.currentTarget.value)}
           />
           <TextInput
-            label="Plex URL"
+            label="Your Plex URL"
+            description="Your personal Plex server — used for playback and library export. Content from other Plex servers connected to Tunarr is included automatically."
             placeholder="http://192.168.1.10:32400"
             value={values.plex_url}
             onChange={(e) => set('plex_url', e.currentTarget.value)}
           />
           <PasswordInput
-            label="Plex Token"
+            label="Your Plex Token"
             placeholder={isMasked(values.plex_token) ? 'Token saved — enter new value to change' : 'Your Plex token'}
             value={isMasked(values.plex_token) ? '' : values.plex_token}
             onChange={(e) => set('plex_token', e.currentTarget.value || MASK)}

@@ -50,7 +50,7 @@ def two_shows_libs(monkeypatch):
                 _prog("Phantom S1E2 real", show="Phantom"),
                 _prog("Phantom S1E3 real", show="Phantom")],
     }
-    monkeypatch.setattr(channel_engine, "get_plex_source", lambda url: source)
+    monkeypatch.setattr(channel_engine, "get_plex_sources", lambda url: [source])
 
     def fake_api(url, method, path, body=None, timeout=60):
         for lib_id, items in progs.items():

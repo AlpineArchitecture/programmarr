@@ -20,11 +20,6 @@ _(Add freely. One bullet per idea. Rough is fine — this is a notebook, not a s
   cover Plex *playlists* — likely rename it "Collections & Playlists." Playlists
   are user-ordered, so they could map naturally to `ordered` channels.
 
-- **Logos for multi-title channels.** `fetch_images.py` only handles solo-title
-  channels (one show/movie). Genre/decade/themed blocks still show the generic
-  Tunarr icon in the Plex guide. Need a logo strategy for multi-title channels
-  (generated tile? representative title? custom upload?).
-
 - **`tmdb_franchise` match type.** A principled alternative to `title_contains`
   for live franchise channels: match by TMDB collection ID instead of guessing
   from title text — authoritative, no false positives. (See the franchise-matcher

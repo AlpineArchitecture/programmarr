@@ -82,61 +82,69 @@ def get_plex_source(tunarr_url):
     return next((s for s in sources if s.get("type") == "plex"), None)
 
 
+def get_plex_sources(tunarr_url):
+    sources = api(tunarr_url, "GET", "/api/media-sources") or []
+    return [s for s in sources if s.get("type") == "plex"]
+
+
 def build_library_index(tunarr_url):
-    source = get_plex_source(tunarr_url)
-    if not source:
+    plex_sources = get_plex_sources(tunarr_url)
+    if not plex_sources:
         raise ChannelEngineError("No Plex source found in Tunarr")
 
-    libs = source.get("libraries", [])
-    # A Plex server can expose MULTIPLE movie or shows libraries (e.g. 'TV Shows' AND
-    # 'Cartoons'). Index every enabled one of each kind — picking only the first
-    # silently drops whole libraries, so channels referencing shows that live in a
-    # secondary library would resolve to empty.
-    movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
-    tv_libs = [l for l in libs if l.get("mediaType") == "shows" and l.get("enabled")]
-
     movie_map = {}
+    # title-key -> {title, by_lib: {lib_id: {showId, programs}}}
+    # Collected across ALL Plex sources before picking the best copy per show.
+    tv_candidates = {}
+
+    for source in plex_sources:
+        source_name = source.get("name", "Plex")
+        libs = source.get("libraries", [])
+        # A Plex server can expose MULTIPLE movie or shows libraries (e.g. 'TV Shows' AND
+        # 'Cartoons'). Index every enabled one of each kind across all sources — picking only
+        # the first source/library silently drops whole libraries.
+        movie_libs = [l for l in libs if l.get("mediaType") in ("movie", "movies") and l.get("enabled")]
+        tv_libs    = [l for l in libs if l.get("mediaType") == "shows"              and l.get("enabled")]
+
+        if movie_libs:
+            print(f"  Indexing movies ({source_name})...")
+            for lib in movie_libs:
+                programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+                for p in programs:
+                    title = p.get("program", {}).get("title", "")
+                    if title:
+                        key = title.lower().strip()
+                        if key not in movie_map:
+                            movie_map[key] = p
+
+        if tv_libs:
+            print(f"  Indexing TV shows ({source_name})...")
+            for lib in tv_libs:
+                programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+                for p in programs:
+                    prog = p.get("program", {})
+                    show = prog.get("show", {})
+                    show_id = show.get("uuid") or prog.get("showId")
+                    title = show.get("title", "")
+                    if not show_id or not title:
+                        continue
+                    key = title.lower().strip()
+                    c = tv_candidates.setdefault(key, {"title": title, "by_lib": {}})
+                    entry = c["by_lib"].setdefault(lib["id"], {"showId": show_id, "programs": []})
+                    entry["programs"].append(p)
+
+    print(f"  Indexed {len(movie_map)} movies")
+
+    # For each show pick the single copy (across all sources/libraries) with the most
+    # PLAYABLE episodes, so a dead duplicate never shadows the real one or inflates the
+    # live-channel diff into churn.
     show_map = {}
-
-    if movie_libs:
-        print(f"  Indexing movie library...")
-        for lib in movie_libs:
-            programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
-            for p in programs:
-                title = p.get("program", {}).get("title", "")
-                if title:
-                    movie_map[title.lower().strip()] = p
-        print(f"  Indexed {len(movie_map)} movies")
-
-    if tv_libs:
-        print(f"  Indexing TV library...")
-        # Collect every copy of each show, per library. A title can appear in more than
-        # one library (e.g. filed under both 'TV Shows' and 'Cartoons'), sometimes with
-        # one copy dead (all files missing). We must index each show ONCE — otherwise
-        # resolve() doubles its episodes while Tunarr's single show-slot enumerates one,
-        # so the live-channel diff never converges (churn).
-        candidates = {}  # title-key -> {title, by_lib: {lib_id: {showId, programs}}}
-        for lib in tv_libs:
-            programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
-            for p in programs:
-                prog = p.get("program", {})
-                show = prog.get("show", {})
-                show_id = show.get("uuid") or prog.get("showId")
-                title = show.get("title", "")
-                if not show_id or not title:
-                    continue
-                key = title.lower().strip()
-                c = candidates.setdefault(key, {"title": title, "by_lib": {}})
-                entry = c["by_lib"].setdefault(lib["id"], {"showId": show_id, "programs": []})
-                entry["programs"].append(p)
-        # For each show pick the single library copy with the most PLAYABLE episodes, so a
-        # dead duplicate (all state:'missing') never shadows the real one.
-        def _playable(entry):
-            return sum(1 for p in entry["programs"] if p.get("program", {}).get("state") != "missing")
-        for key, c in candidates.items():
-            best = max(c["by_lib"].values(), key=_playable)
-            show_map[key] = {"title": c["title"], "showId": best["showId"], "programs": best["programs"]}
-        print(f"  Indexed {len(show_map)} TV shows")
+    def _playable(entry):
+        return sum(1 for p in entry["programs"] if p.get("program", {}).get("state") != "missing")
+    for key, c in tv_candidates.items():
+        best = max(c["by_lib"].values(), key=_playable)
+        show_map[key] = {"title": c["title"], "showId": best["showId"], "programs": best["programs"]}
+    print(f"  Indexed {len(show_map)} TV shows")
 
     return movie_map, show_map
 

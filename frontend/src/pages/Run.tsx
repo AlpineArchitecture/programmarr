@@ -415,13 +415,22 @@ function ExportStep({ onDone }: { onDone: () => void }) {
   const selectedCount = Object.values(libSels).filter(Boolean).length;
 
   async function run() {
-    const movieSections = movieLibs.filter(l => libSels[l.key]).map(l => l.key);
-    const tvSections = tvLibs.filter(l => libSels[l.key]).map(l => l.key);
+    // Library keys are prefixed: "plex:{section_key}" for primary Plex, "tunarr:{lib_uuid}" for others.
+    const movieSections   = movieLibs.filter(l => libSels[l.key] && l.key.startsWith('plex:')).map(l => l.key.slice(5));
+    const tvSections      = tvLibs.filter(l => libSels[l.key] && l.key.startsWith('plex:')).map(l => l.key.slice(5));
+    const tunarrMovieLibs = movieLibs.filter(l => libSels[l.key] && l.key.startsWith('tunarr:')).map(l => l.key.slice(7));
+    const tunarrTvLibs    = tvLibs.filter(l => libSels[l.key] && l.key.startsWith('tunarr:')).map(l => l.key.slice(7));
     setLines([]); setDone(false); setSummary(null); setRunning(true);
     try {
       const code = await streamPipeline('/pipeline/export', {}, (ev: StreamEvent) => {
         if (ev.type === 'line') setLines(l => [...l, ev.text]);
-      }, { no_crossref: noCrossref, movie_sections: movieSections, tv_sections: tvSections });
+      }, {
+        no_crossref: noCrossref,
+        movie_sections: movieSections,
+        tv_sections: tvSections,
+        tunarr_movie_libs: tunarrMovieLibs,
+        tunarr_tv_libs: tunarrTvLibs,
+      });
       const ok = code === 0;
       setSuccess(ok); setDone(true);
       if (ok) setSummary(await api.getCsvInfo());
@@ -455,20 +464,32 @@ function ExportStep({ onDone }: { onDone: () => void }) {
             {movieLibs.length > 0 && (
               <Stack gap={6}>
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase">Movies</Text>
-                {movieLibs.map(lib => (
-                  <Checkbox key={lib.key} label={lib.title} checked={libSels[lib.key] ?? true}
-                    onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
-                    size="sm" disabled={running} />
+                {movieLibs.map((lib, i) => (
+                  <Box key={lib.key}>
+                    {lib.server && (i === 0 || movieLibs[i - 1].server !== lib.server) && (
+                      <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
+                        styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
+                    )}
+                    <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
+                      onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                      size="sm" disabled={running} />
+                  </Box>
                 ))}
               </Stack>
             )}
             {tvLibs.length > 0 && (
               <Stack gap={6}>
                 <Text size="xs" fw={600} c="dimmed" tt="uppercase">TV Shows</Text>
-                {tvLibs.map(lib => (
-                  <Checkbox key={lib.key} label={lib.title} checked={libSels[lib.key] ?? true}
-                    onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
-                    size="sm" disabled={running} />
+                {tvLibs.map((lib, i) => (
+                  <Box key={lib.key}>
+                    {lib.server && (i === 0 || tvLibs[i - 1].server !== lib.server) && (
+                      <Divider label={lib.server} labelPosition="left" mt={i === 0 ? 0 : 6} mb={2}
+                        styles={{ label: { fontSize: 11, fontWeight: 600 } }} />
+                    )}
+                    <Checkbox label={lib.title} checked={libSels[lib.key] ?? true}
+                      onChange={(e) => { const v = e.currentTarget.checked; setLibSels(s => ({ ...s, [lib.key]: v })); }}
+                      size="sm" disabled={running} />
+                  </Box>
                 ))}
               </Stack>
             )}
@@ -2458,10 +2479,11 @@ export default function Run() {
 
   const { method, includeCollections } = setup;
 
-  // Called when the user clicks Nuke: only affects DEPLOY behavior (wipe Tunarr + number from 1).
-  // Picks are sticky — Nuke does NOT reset or delete planner_state.json.
+  // Called when the user clicks Nuke: clears checked candidates and the AI Extras toggle.
+  // genres/decades/comm/autoUpdate are preserved — only selections are reset.
   function handleNuke() {
-    // intentionally empty: picks are preserved; deploy behavior is governed by setup.mode
+    setPlanner(p => ({ ...p, selected: {}, curate: {} }));
+    setAiExtras(false);
   }
 
   // Pools the user flagged for AI tonal-splitting (✨ on a broad/decade pick).

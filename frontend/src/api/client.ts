@@ -33,6 +33,11 @@ export const api = {
   updateChannel: (n: number, ch: object) =>
     req(`/channels/${n}`, { method: 'PUT', body: JSON.stringify(ch) }),
   deleteChannel: (n: number) => req(`/channels/${n}`, { method: 'DELETE' }),
+  setChannelIcon: (n: number, body: { mode: 'badge' | 'tmdb' | 'custom' | 'clear'; url?: string }) =>
+    req<{ ok: boolean; mode: string; url: string }>(`/channels/${n}/icon`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   getLibraryTitles: () => req<string[]>('/library/titles'),
 
   getCsvInfo: () => req<CsvInfo>('/pipeline/csv/info'),
@@ -157,6 +162,7 @@ export const api = {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+export interface PlexServer { name: string; url: string; token: string }
 export interface ConnStatus { ok: boolean; url: string; error?: string }
 export interface UpdateInfo {
   enabled: boolean;
@@ -182,6 +188,7 @@ export function isMatchRef(c: ContentItem): c is MatchRef {
 export function isCollectionRef(c: ContentItem): c is { collection: string } {
   return typeof c === 'object' && c !== null && 'collection' in c;
 }
+export interface ChannelIcon { mode: 'badge' | 'tmdb' | 'custom'; url?: string; pinned?: boolean }
 export interface Channel {
   number: number;
   name: string;
@@ -189,6 +196,7 @@ export interface Channel {
   content: ContentItem[];
   live?: boolean;
   commercials?: Commercials;
+  icon?: ChannelIcon;
 }
 
 // ── Live channels (recipes) ──
@@ -313,7 +321,7 @@ export interface PromptOptions {
   include_types?: string[];
   exclude_types?: string[];
 }
-export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show' }
+export interface PlexLibrary { key: string; title: string; type: 'movie' | 'show'; server?: string }
 export interface PlexCollection { id: string; name: string; count: number; section: string; summary: string; has_poster: boolean }
 export interface CollectionSelection { name: string; channel_number: number; include: boolean }
 export interface LogEntry { name: string; size: number; modified: number }
