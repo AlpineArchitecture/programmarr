@@ -140,10 +140,10 @@ export const api = {
     fetch(`${BASE}/pipeline/surgical-deploy`, { method: 'POST' }),
 
   // ── Live channels (recipes) ──
-  previewRecipe: (value: string, order?: string | null, exclude: string[] = []) =>
+  previewRecipe: (value: string, order?: string | null, exclude: string[] = [], match: 'title_contains' | 'franchise' = 'title_contains') =>
     req<RecipePreview>('/recipes/preview', {
       method: 'POST',
-      body: JSON.stringify({ value, order, exclude }),
+      body: JSON.stringify({ value, order, exclude, match }),
     }),
   getRecipesStatus: () => req<RecipesStatus>('/recipes/status'),
   runRecipes: (apply: boolean, only?: number) =>
@@ -180,8 +180,10 @@ export interface FillerList { id: string; name: string; contentCount: number }
 // Commercials: a channel can pull from a Tunarr filler list, played in gaps
 // between shows (pad_minutes controls the gap size). Absent = commercials off.
 export interface Commercials { filler_list_id: string; filler_list_name?: string; pad_minutes?: number }
+export interface PlaybackSetting { structure: 'interleaved' | 'timeline'; episodes_per_block?: number }
 export interface MatchRef { match: 'title_contains'; value: string; order?: string | null; exclude?: string[] }
-export type ContentItem = string | { collection: string } | MatchRef;
+export interface FranchiseRef { match: 'franchise'; name: string; order?: string | null; exclude?: string[] }
+export type ContentItem = string | { collection: string } | MatchRef | FranchiseRef;
 export function isMatchRef(c: ContentItem): c is MatchRef {
   return typeof c === 'object' && c !== null && 'match' in c;
 }
@@ -197,6 +199,7 @@ export interface Channel {
   live?: boolean;
   commercials?: Commercials;
   icon?: ChannelIcon;
+  playback?: PlaybackSetting;
 }
 
 // ── Live channels (recipes) ──
@@ -284,6 +287,7 @@ export interface CandidateSpec {
   /** programming_block: the resolved member titles present in the library. */
   titles?: string[];
   shuffle?: 'ordered' | 'shuffle' | 'block';
+  live?: boolean;
 }
 
 /** A single member of a franchise (present in the library). */

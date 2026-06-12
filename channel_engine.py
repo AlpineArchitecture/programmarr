@@ -12,6 +12,7 @@ No dependencies beyond the Python standard library.
 """
 
 import json
+import os
 import re
 import uuid
 import urllib.error
@@ -226,6 +227,98 @@ def match_titles(value, movie_map, show_map, order=None, exclude=None):
     return resolved, preview
 
 
+def _norm_franchise_name(name):
+    return " ".join((name or "").lower().split())
+
+
+def load_franchise_index(data_dir):
+    """Franchise membership from the Planner's caches, keyed by normalized name.
+
+    {norm_name: {"name": display_name, "titles": [member title, ...]}}
+    Sources: data_dir/wikidata_cache.json (series/franchise members, spans movies
+    and TV) and data_dir/tmdb_enrichment.json (belongs_to_collection groups).
+    TMDB wins name collisions (its collection data is more precise — same rule as
+    the Planner's _merge_franchises). Best-effort: a missing/corrupt cache simply
+    contributes nothing; worst case is {}.
+    """
+    index = {}
+
+    try:
+        with open(os.path.join(str(data_dir), "wikidata_cache.json"), encoding="utf-8") as f:
+            for fr in (json.load(f).get("franchises") or []):
+                name = (fr.get("name") or "").strip()
+                titles = [m.get("title") for m in fr.get("members") or [] if m.get("title")]
+                if name and titles:
+                    index[_norm_franchise_name(name)] = {"name": name, "titles": titles}
+    except (OSError, ValueError):
+        pass
+
+    try:
+        with open(os.path.join(str(data_dir), "tmdb_enrichment.json"), encoding="utf-8") as f:
+            enrichment = json.load(f).get("enrichment") or {}
+        buckets = {}
+        for title, rec in enrichment.items():
+            coll = rec.get("collection") or {}
+            coll_id, coll_name = coll.get("id"), (coll.get("name") or "").strip()
+            if coll_id and coll_name:
+                buckets.setdefault(coll_id, {"name": coll_name, "titles": []})["titles"].append(title)
+        for b in buckets.values():
+            index[_norm_franchise_name(b["name"])] = b  # TMDB overwrites → wins
+    except (OSError, ValueError):
+        pass
+
+    return index
+
+
+def match_franchise(name, franchise_index, movie_map, show_map, order=None, exclude=None):
+    """Resolver for {"match": "franchise"} content refs.
+
+    Identity-based: members come from the cached TMDB/Wikidata franchise data
+    (load_franchise_index), NOT from name matching — so a franchise channel works
+    even when members share no words with the franchise name (MCU → "Iron Man").
+    Returns (resolved_items, preview) exactly like match_titles. Unknown
+    franchise or missing index → ([], []) — callers treat that as "matched
+    nothing" and refuse to wipe live channels downstream.
+    """
+    entry = (franchise_index or {}).get(_norm_franchise_name(name))
+    if not entry:
+        return [], []
+
+    exclude_set = {e.lower().strip() for e in (exclude or [])}
+    matched = []  # (sort_release_ms, year, title, item) — same shape as match_titles
+
+    for member_title in entry["titles"]:
+        key = (member_title or "").lower().strip()
+        if not key or key in exclude_set:
+            continue
+        p = movie_map.get(key)
+        if p is not None:
+            prog = p.get("program", {})
+            release_ms = prog.get("releaseDate")
+            title = prog.get("title", member_title)
+            matched.append((
+                release_ms if release_ms is not None else float("inf"),
+                prog.get("year"), title,
+                {"type": "Movie", "title": title, "programs": [p]},
+            ))
+            continue
+        s = show_map.get(key)
+        if s is not None:
+            first_prog = s["programs"][0].get("program", {}) if s.get("programs") else {}
+            matched.append((
+                float("inf"),  # shows have no single release date — sort to the end
+                first_prog.get("year"), s["title"],
+                {"type": "TV", "title": s["title"], "showId": s["showId"], "programs": s["programs"]},
+            ))
+
+    if order == "release_date":
+        matched.sort(key=lambda t: (t[0], t[2].lower()))
+    else:
+        matched.sort(key=lambda t: t[2].lower())
+
+    return [t[3] for t in matched], [{"title": t[2], "year": t[1]} for t in matched]
+
+
 # ── Plex collection resolution ─────────────────────────────────────────────────
 
 def get_plex_sections(plex_url, token):
@@ -273,14 +366,23 @@ def resolve_collection(plex_url, token, name, sections, cache):
 # ── Content resolution ─────────────────────────────────────────────────────────
 
 def resolve_content(content_list, movie_map, show_map,
-                    plex_url=None, plex_token=None, plex_sections=None, collection_cache=None):
+                    plex_url=None, plex_token=None, plex_sections=None, collection_cache=None,
+                    franchise_index=None):
     """Resolve a channel's content list into (resolved_items, missing).
 
-    Each entry is either a plain title string or a {"collection": "Name"} ref.
-    Collection refs are expanded to their member titles via Plex, then every
-    title is matched against the Tunarr library index. Returns the list of
-    resolved items (ready for build_schedule) plus the list of titles/refs that
-    could not be found (for reporting).
+    Each entry is one of:
+    - A plain title string — matched against the Tunarr library index by exact title.
+    - A {"collection": "Name"} ref — expanded to member titles via Plex, then each
+      title is matched against the library index.
+    - A {"match": "title_contains", "value": "..."} ref — word-boundary scan of the
+      Tunarr library; order/exclude supported.
+    - A {"match": "franchise", "name": "..."} ref — identity-based resolution via the
+      franchise index (load_franchise_index). Requires franchise_index to be passed;
+      a missing index or unknown franchise name degrades to a missing-entry warning so
+      downstream refuse-to-wipe guards keep live channels safe.
+
+    Returns (resolved_items, missing): resolved_items are ready for build_schedule;
+    missing is a list of titles/ref labels that could not be found.
     """
     plex_sections = plex_sections or []
     collection_cache = collection_cache if collection_cache is not None else {}
@@ -300,8 +402,18 @@ def resolve_content(content_list, movie_map, show_map,
                 print(f"    WARNING: Collection '{col_name}' not found in Plex")
                 missing.append(f"[collection:{col_name}]")
         elif isinstance(entry, dict) and "match" in entry:
-            value = entry.get("value", "")
-            if entry["match"] == "title_contains" and value:
+            if entry["match"] == "franchise" and entry.get("name"):
+                fr_name = entry["name"]
+                items, _ = match_franchise(fr_name, franchise_index, movie_map, show_map,
+                                           order=entry.get("order"), exclude=entry.get("exclude"))
+                if items:
+                    matched_items.extend(items)
+                    print(f"    Franchise '{fr_name}': {len(items)} titles")
+                else:
+                    print(f"    WARNING: franchise '{fr_name}' matched nothing (cache missing or no library members)")
+                    missing.append(f"[franchise:{fr_name}]")
+            elif entry["match"] == "title_contains" and entry.get("value"):
+                value = entry["value"]
                 items, _ = match_titles(value, movie_map, show_map,
                                         order=entry.get("order"), exclude=entry.get("exclude"))
                 if items:
@@ -311,6 +423,7 @@ def resolve_content(content_list, movie_map, show_map,
                     print(f"    WARNING: match '{value}' matched nothing in library")
                     missing.append(f"[match:{value}]")
             else:
+                value = entry.get("value", "")
                 print(f"    WARNING: unsupported match ref: {entry}")
                 missing.append(f"[match:{value or entry.get('match')}]")
         else:
@@ -330,17 +443,71 @@ def resolve_content(content_list, movie_map, show_map,
 
 # ── Schedule builder ───────────────────────────────────────────────────────────
 
-def build_schedule(shuffle_type, resolved_items, pad_ms=0):
+def _episode_sort_key(p):
+    """Sort key for a show's episode programs in season/episode order.
+    Uses real Tunarr field names: season={index: N} and episodeNumber.
+    """
+    prog = p.get("program", {})
+    season_obj = prog.get("season") or {}
+    season_num = season_obj.get("index") or 0 if isinstance(season_obj, dict) else 0
+    return (season_num, prog.get("episodeNumber") or 0)
+
+
+def _item_premiere_ms(item):
+    """Premiere timestamp for timeline ordering: a movie's releaseDate; a show's
+    earliest episode releaseDate (fallback: Jan 1 of its year). Unknown → +inf
+    (sorts to the end, deterministically by title)."""
+    progs = item.get("programs") or []
+    dates = [p.get("program", {}).get("releaseDate") for p in progs]
+    dates = [d for d in dates if d is not None]
+    if dates:
+        return min(dates)
+    years = [p.get("program", {}).get("year") for p in progs]
+    years = [y for y in years if y]
+    if years:
+        from datetime import datetime, timezone
+        return datetime(min(years), 1, 1, tzinfo=timezone.utc).timestamp() * 1000
+    return float("inf")
+
+
+def build_schedule(shuffle_type, resolved_items, pad_ms=0, playback=None):
     """Build a rolling random schedule.
 
     pad_ms > 0 rounds each program up to the next pad_ms boundary, opening a flex
     gap after it (flexPreference="end"). That gap is what the channel's attached
     filler list ("commercials") fills at playback — see the Commercials feature.
     pad_ms == 0 (default) keeps episodes back-to-back, unchanged from before.
+
+    playback is the optional per-channel structure dict:
+    - {"structure": "interleaved", "episodes_per_block": N} reweights the random
+      slots so movies play chronological at weight n_shows and show slots use "next"
+      at weight N — on average N episodes air between consecutive movies.
+    - {"structure": "timeline"} posts a Tunarr manual lineup in strict release order:
+      items sorted by premiere (movie releaseDate; show's earliest episode date, year
+      fallback, unknown → +inf); shows flattened in season/episode order at their
+      premiere position. Commercials padding is a no-op in v1 (manual lineups
+      don't auto-pad).
+    - None (default) = unchanged legacy behavior (all weights 1).
     """
     all_programs = [p for item in resolved_items for p in item["programs"]]
     if not all_programs:
         return None
+
+    if (playback or {}).get("structure") == "timeline":
+        # Strict release order as ONE looping manual lineup: each item at its
+        # premiere position; a show's full run plays there in season/episode order.
+        # Manual lineups don't auto-pad, so commercials padding is ignored here (v1).
+        lineup = []
+        for item in sorted(resolved_items,
+                           key=lambda it: (_item_premiere_ms(it),
+                                           (it.get("title") or "").lower())):
+            programs = item["programs"]
+            if item["type"] == "TV":
+                programs = sorted(programs, key=_episode_sort_key)
+            for p in programs:
+                lineup.append({"type": "content", "id": p["id"],
+                               "duration": int(p.get("program", {}).get("duration") or 0) or 1})
+        return {"type": "manual", "lineup": lineup, "append": False}
 
     is_ordered = shuffle_type == "ordered"
     is_block = shuffle_type == "block"
@@ -373,6 +540,18 @@ def build_schedule(shuffle_type, resolved_items, pad_ms=0):
             "weight": 1,
             "order": "chronological" if is_ordered else "shuffle",
         })
+
+    structure = (playback or {}).get("structure")
+    if structure == "interleaved":
+        episodes_per_block = max(1, int((playback or {}).get("episodes_per_block") or 4))
+        show_slots = [s for s in slots if s["type"] == "show"]
+        for s in show_slots:
+            s["order"] = "next"
+            s["weight"] = episodes_per_block
+        for s in slots:
+            if s["type"] == "movie":
+                s["order"] = "chronological"
+                s["weight"] = max(1, len(show_slots))
 
     return {
         "type": "random",
@@ -449,11 +628,12 @@ def classify_channels(
         return (ch.get("name") or "").strip().lower()
 
     def _content_sig(ch):
-        """Canonical content + shuffle signature for change-detection."""
+        """Canonical content + shuffle + playback signature for change-detection."""
         return (
             json.dumps(ch.get("content", []), sort_keys=True),
             ch.get("shuffle", ""),
             bool(ch.get("live")),
+            json.dumps(ch.get("playback") or {}, sort_keys=True),
         )
 
     desired_by_name: dict[str, dict] = {}
@@ -543,7 +723,7 @@ def read_channel_programming(tunarr_url, channel_id):
     return {i["id"] for i in pr.get("lineup", []) if i.get("type") == "content" and i.get("id")}
 
 
-def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, expected_name=None):
+def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, expected_name=None, playback=None):
     """Patch an existing channel's programming in place — never delete/recreate.
 
     Looks the channel up by number (preserving its Tunarr id and Plex DVR mapping),
@@ -553,7 +733,10 @@ def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, exp
 
     pad_ms preserves a commercials channel's gap on live updates (the attached filler
     list survives — only programming is replaced — but the pad must be re-applied or the
-    gap, and thus the commercials, would vanish after a cycle).
+    gap, and thus the commercials, would vanish after a cycle). Similarly, playback
+    (the per-channel structure dict) must be re-applied on live updates for the same
+    reason as pad_ms — omitting it would silently revert an interleaved or timeline
+    channel to the default shuffle behavior after each cycle.
 
     expected_name guards against the by-number scramble: if given, the Tunarr channel
     found at `number` must carry that name (case/space-insensitive) or we refuse to
@@ -571,7 +754,7 @@ def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, exp
                 f"Channel #{number} name mismatch: Tunarr has '{ch.get('name')}', "
                 f"expected '{expected_name}' — refusing to overwrite "
                 f"(channels.json out of sync with Tunarr)")
-    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved, pad_ms=pad_ms)
+    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved, pad_ms=pad_ms, playback=playback)
     if not schedule:
         raise ChannelEngineError(f"Channel #{number}: no schedule could be built (no content resolved)")
     return set_programming(tunarr_url, ch["id"], schedule)

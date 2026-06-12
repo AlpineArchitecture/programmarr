@@ -27,6 +27,7 @@ from channel_engine import (
     build_schedule,
     get_plex_sections,
     get_transcode_config,
+    load_franchise_index,
     resolve_content,
     set_programming,
 )
@@ -172,6 +173,7 @@ def main():
         for ch in channels
         for item in ch.get("content", [])
     )
+    franchise_index = load_franchise_index(".")
     plex_sections = []
     collection_cache = {}
     if uses_collections:
@@ -227,6 +229,7 @@ def main():
             content_list, movie_map, show_map,
             plex_url=plex_url, plex_token=plex_token,
             plex_sections=plex_sections, collection_cache=collection_cache,
+            franchise_index=franchise_index,
         )
 
         if not resolved:
@@ -259,7 +262,7 @@ def main():
         channel_id = ch_result.get("id")
 
         # Build and post schedule (pad opens the commercial gap when enabled)
-        schedule = build_schedule(shuffle, resolved, pad_ms=comm_pad_ms)
+        schedule = build_schedule(shuffle, resolved, pad_ms=comm_pad_ms, playback=ch.get("playback"))
         if not schedule:
             print(f"  FAIL #{number} {name} — could not build schedule")
             stats["skipped"] += 1

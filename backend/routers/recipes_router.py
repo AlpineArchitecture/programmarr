@@ -41,14 +41,22 @@ class PreviewRequest(BaseModel):
     value: str
     exclude: list[str] = []
     order: Optional[str] = None
+    match: str = "title_contains"
 
 
 @router.post("/recipes/preview")
 def preview_recipe(req: PreviewRequest):
-    """Show exactly which current Tunarr titles a title_contains rule matches.
+    """Show exactly which current Tunarr titles a live ref rule matches.
 
     Powers the author-time confirm step: the user sees the matched titles (in the
     order they'll air) before saving a live recipe, so a bad rule is caught up front.
+
+    Supports both live ref types:
+    - ``title_contains`` (default) — word-boundary name matching via
+      ``channel_engine.match_titles``.
+    - ``franchise`` — cached-membership identity resolution via
+      ``channel_engine.match_franchise`` (same TMDB/Wikidata data the Planner uses).
+      ``value`` should be the collection/franchise name (e.g. "Die Hard Collection").
     """
     if not req.value.strip():
         raise HTTPException(400, "match value is required")
@@ -63,10 +71,16 @@ def preview_recipe(req: PreviewRequest):
     except channel_engine.ChannelEngineError as e:
         raise HTTPException(502, f"Tunarr library unavailable: {e}")
 
-    _, preview = channel_engine.match_titles(
-        req.value, movie_map, show_map, order=req.order, exclude=req.exclude
-    )
-    return {"value": req.value, "order": req.order, "count": len(preview), "matches": preview}
+    if req.match == "franchise":
+        fr_index = channel_engine.load_franchise_index(DATA_DIR)
+        _, preview = channel_engine.match_franchise(
+            req.value, fr_index, movie_map, show_map,
+            order=req.order or "release_date", exclude=req.exclude)
+    else:
+        _, preview = channel_engine.match_titles(
+            req.value, movie_map, show_map, order=req.order, exclude=req.exclude)
+    return {"value": req.value, "match": req.match, "order": req.order,
+            "count": len(preview), "matches": preview}
 
 
 # ── Scheduler control / status ─────────────────────────────────────────────────

@@ -298,6 +298,13 @@ Channels-editor icon control). `fetch_images.py` skips pinned channels and never
 this field; removing it (the editor's "Reset to automatic") returns the channel to the
 automatic art pass.
 
+**Playback structure (optional).** `"playback": {"structure": "interleaved"|"timeline",
+"episodes_per_block": 4}` controls cross-media scheduling: *interleaved* keeps movies in
+watch order with ~N-episode blocks between (random-slot weights); *timeline* posts a manual
+Tunarr lineup in strict release order (show runs air at their premiere position; commercials
+padding is a no-op there). Absent = today's shuffle behavior. Live franchise channels compose
+with interleaved/4 by default; editable per channel in the Channels editor.
+
 ## API Endpoints
 
 All endpoint tables — **Pipeline**, **Recipe**, **Tunarr**, **TMDB**, **Plex** — live in
@@ -427,13 +434,26 @@ default (`recipes_enabled: false`).
    drives correctness — `data/recipe_state.json` is cosmetic UI-only metadata (last-synced
    badges), never read by the diff.
 
-**Franchise content-ref** — the one new item allowed in a channel's `content` list:
+**Title-match content-ref** — word-boundary name matching:
 ```json
 {"match": "title_contains", "value": "Bad Boys", "order": "release_date", "exclude": []}
 ```
 Word-boundary match (so "It" does not match "Little Women"); `order: "release_date"` sorts by the
 Tunarr program's `releaseDate`; `exclude` drops false positives. Author-time preview
 (`POST /api/recipes/preview`) requires human confirmation before saving — the LLM never auto-authors these.
+
+**Franchise content-ref** — identity-based, for franchises whose members don't share a name:
+```json
+{"match": "franchise", "name": "Die Hard Collection", "order": "release_date", "exclude": []}
+```
+Members come from the Planner's cached TMDB (`belongs_to_collection`) + Wikidata franchise
+data (`channel_engine.load_franchise_index` / `match_franchise`) — never name matching, so
+new sequels join by membership once the scans have seen them (cache refresh stays on the
+Planner's scan triggers). Authored by the Planner's per-franchise **"Keep updated"** switch
+(`/pipeline/compose` computes `exclude` from unchecked members — the card's member list is
+the author-time preview). Cache-miss at compose time falls back to a static channel; at
+resolve time it counts as matched-nothing, and the refuse-to-wipe guards keep the channel
+intact. Live franchise channels carry `playback: interleaved` by default (see channels.json schema).
 
 **Moving parts** (scheduler loop, `channel_engine` updaters, `recipes_router`, the `Channels.tsx`
 authoring UI and status cards), full rationale, rejected alternatives, and history:

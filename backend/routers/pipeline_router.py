@@ -1779,6 +1779,7 @@ class CandidateSpec(BaseModel):
     value: Optional[str] = None        # studio/director/actor/network name, or marathon show title
     titles: Optional[list[str]] = None  # programming_block: resolved member titles present in library
     shuffle: Optional[str] = None      # override; else category default
+    live: bool = False                 # franchise only: emit identity ref instead of static titles
 
 
 class ComposeRequest(BaseModel):
@@ -1966,13 +1967,36 @@ def compose_channels(req: ComposeRequest):
             skipped.append({"name": spec.name or spec.kind, "reason": f"unknown kind '{spec.kind}'"})
             continue
         category, default_shuffle = meta
-        content = _resolve_spec(spec, movies, shows)
         name = spec.name or _auto_name(spec)
+
+        # Live franchise: emit an identity content-ref instead of a static title list.
+        # Cache miss → fall back to static so we never create a live channel that would
+        # resolve from nothing (the scheduler would refuse to wipe it every cycle).
+        per_channel_extras: dict = {}
+        if spec.kind == "franchise" and spec.live and spec.titles and spec.name:
+            fr_index = channel_engine.load_franchise_index(DATA_DIR)
+            entry = fr_index.get(channel_engine._norm_franchise_name(spec.name))
+            if entry:
+                checked = {t.lower().strip() for t in spec.titles}
+                exclude = [t for t in entry["titles"] if t.lower().strip() not in checked]
+                content = [{"match": "franchise", "name": entry["name"],
+                            "order": "release_date", "exclude": exclude}]
+                per_channel_extras["live"] = True
+                per_channel_extras["playback"] = {"structure": "interleaved", "episodes_per_block": 4}
+                shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else "ordered"
+            else:
+                # Cache miss: static fallback (plain titles, not live).
+                content = _resolve_spec(spec, movies, shows)
+                shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
+        else:
+            content = _resolve_spec(spec, movies, shows)
+            shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
+
         if not content:
             skipped.append({"name": name, "reason": "no matching titles"})
             continue
-        shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else default_shuffle
-        buckets[category].append({"name": name, "shuffle": shuffle, "content": content})
+        buckets[category].append({"name": name, "shuffle": shuffle, "content": content,
+                                   **per_channel_extras})
 
     # Batch-wide extras from the Planner toggles, applied to every built channel.
     extras: dict = {}
@@ -2433,6 +2457,8 @@ async def run_surgical_deploy():
             else:
                 movie_map_shared, show_map_shared = {}, {}
 
+            franchise_index_shared = channel_engine.load_franchise_index(DATA_DIR)
+
             # ── 1. Updates in place ───────────────────────────────────────────
             for item in diff["update"]:
                 desired_ch = item["desired"]
@@ -2444,7 +2470,8 @@ async def run_surgical_deploy():
                 name = desired_ch.get("name", "")
                 yield _emit(f"  Updating #{num} {name} in place…")
 
-                def _do_update(ch=desired_ch, n=num, mv=movie_map_shared, sh=show_map_shared):
+                def _do_update(ch=desired_ch, n=num, mv=movie_map_shared, sh=show_map_shared,
+                               fi=franchise_index_shared):
                     plex_sections, collection_cache = [], {}
                     if any(isinstance(it, dict) and "collection" in it for it in ch.get("content", [])):
                         if plex_url and plex_token:
@@ -2453,6 +2480,7 @@ async def run_surgical_deploy():
                         ch.get("content", []), mv, sh,
                         plex_url=plex_url, plex_token=plex_token,
                         plex_sections=plex_sections, collection_cache=collection_cache,
+                        franchise_index=fi,
                     )
                     if not resolved:
                         raise channel_engine.ChannelEngineError(
@@ -2461,7 +2489,7 @@ async def run_surgical_deploy():
                     pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm.get("filler_list_id") else 0
                     channel_engine.update_channel_in_place(
                         tunarr_url, n, ch.get("shuffle", "shuffle"), resolved, pad_ms=pad_ms,
-                        expected_name=ch.get("name"))
+                        expected_name=ch.get("name"), playback=ch.get("playback"))
                     return missing
 
                 try:

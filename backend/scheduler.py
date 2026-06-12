@@ -180,6 +180,12 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
         if plex_url and plex_token:
             plex_sections = channel_engine.get_plex_sections(plex_url, plex_token)
 
+    # Franchise index only if a live channel uses franchise refs
+    franchise_index = {}
+    if any(isinstance(it, dict) and it.get("match") == "franchise"
+           for ch in live for it in ch.get("content", [])):
+        franchise_index = channel_engine.load_franchise_index(DATA_DIR)
+
     for ch in live:
         number = ch.get("number")
         name = ch.get("name", "Unnamed")
@@ -187,6 +193,7 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
             ch.get("content", []), movie_map, show_map,
             plex_url=plex_url, plex_token=plex_token,
             plex_sections=plex_sections, collection_cache=collection_cache,
+            franchise_index=franchise_index,
         )
         fresh_ids = _program_ids(resolved)
 
@@ -232,7 +239,7 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
                 pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm.get("filler_list_id") else 0
                 channel_engine.update_channel_in_place(
                     tunarr_url, number, ch.get("shuffle", "shuffle"), resolved,
-                    pad_ms=pad_ms, expected_name=name)
+                    pad_ms=pad_ms, expected_name=name, playback=ch.get("playback"))
                 change["applied"] = True
             except channel_engine.ChannelEngineError as e:
                 summary["skipped"].append({"number": number, "name": name, "reason": str(e)})

@@ -497,6 +497,109 @@ def test_franchise_no_titles_skipped(pr, seed):
     assert out["skipped"][0]["reason"] == "no matching titles"
 
 
+# ── live franchise refs ────────────────────────────────────────────────────────
+
+def _write_tmdb_enrichment(pr, collection_id, collection_name, titles):
+    """Write a minimal tmdb_enrichment.json with the given collection members."""
+    enrichment = {
+        t: {"title": t, "year": 1990 + i, "collection": {"id": collection_id, "name": collection_name}, "keywords": []}
+        for i, t in enumerate(titles)
+    }
+    cache = {"sig": "x", "enrichment": enrichment}
+    (pr._test_data_dir / "tmdb_enrichment.json").write_text(
+        json.dumps(cache), encoding="utf-8"
+    )
+
+
+def test_compose_live_franchise_emits_franchise_ref(pr, seed):
+    """A franchise spec with live=True and a matching cache entry produces a live channel
+    whose content is a single franchise identity ref; unchecked members become the exclude list."""
+    seed([
+        movie("Die Hard", year=1988),
+        movie("Die Hard 2", year=1990),
+        movie("Die Hard 3", year=1995),
+    ])
+    # Cache has three members; spec only checks the first two.
+    _write_tmdb_enrichment(pr, 1570, "Die Hard Collection",
+                           ["Die Hard", "Die Hard 2", "Die Hard 3"])
+
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Die Hard Collection",
+        "titles": ["Die Hard", "Die Hard 2"],
+        "live": True,
+    }])
+    assert out["count"] == 1
+
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    ch = draft["channels"][0]
+
+    assert ch.get("live") is True
+    assert ch["shuffle"] == "ordered"
+    assert len(ch["content"]) == 1
+    ref = ch["content"][0]
+    assert ref["match"] == "franchise"
+    assert ref["name"] == "Die Hard Collection"
+    assert ref["order"] == "release_date"
+    # exclude = members NOT checked, in index order
+    assert ref["exclude"] == ["Die Hard 3"]
+    assert ch["playback"] == {"structure": "interleaved", "episodes_per_block": 4}
+
+
+def test_compose_live_franchise_without_cache_falls_back_static(pr, seed):
+    """A live=True franchise spec with no cache files falls back to a static channel
+    (plain title list, no live flag)."""
+    seed([
+        movie("Die Hard", year=1988),
+        movie("Die Hard 2", year=1990),
+        movie("Die Hard 3", year=1995),
+    ])
+    # No tmdb_enrichment.json or wikidata_cache.json written.
+
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Die Hard Collection",
+        "titles": ["Die Hard", "Die Hard 2"],
+        "live": True,
+    }])
+    assert out["count"] == 1
+
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    ch = draft["channels"][0]
+
+    # Static fallback: plain titles, not live.
+    assert not ch.get("live")
+    assert all(isinstance(item, str) for item in ch["content"])
+    assert "Die Hard" in ch["content"]
+    assert "Die Hard 2" in ch["content"]
+
+
+def test_compose_non_live_franchise_unchanged(pr, seed):
+    """A franchise spec without live (or live=False) composes exactly as before:
+    static title list sorted by year, no live flag, even when a cache exists."""
+    seed([
+        movie("Die Hard", year=1988),
+        movie("Die Hard 2", year=1990),
+    ])
+    _write_tmdb_enrichment(pr, 1570, "Die Hard Collection",
+                           ["Die Hard", "Die Hard 2", "Die Hard 3"])
+
+    out = _compose(pr, [{
+        "kind": "franchise",
+        "name": "Die Hard Collection",
+        "titles": ["Die Hard", "Die Hard 2"],
+        # live omitted — defaults to False
+    }])
+    assert out["count"] == 1
+
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    ch = draft["channels"][0]
+
+    assert not ch.get("live")
+    assert ch["content"] == ["Die Hard", "Die Hard 2"]
+    assert all(isinstance(item, str) for item in ch["content"])
+
+
 # ── F12: country / mood / style compose kinds ──────────────────────────────────
 
 def test_country_spec_resolves_titles(pr, seed):

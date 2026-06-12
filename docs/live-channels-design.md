@@ -285,3 +285,25 @@ superseded**: the unified re-resolve model (no `recipe.type`) and the
 no-writeback/diff-vs-Tunarr design above are the permanent approach. That file has
 been retired; its still-relevant ideas (agnosticism, "What This Is Not") are folded
 in above.
+
+## Franchise refs (Phase 2a, 2026-06)
+
+`{"match": "franchise", "name": …}` joins `title_contains` as the second live ref type.
+Rationale: title matching cannot express franchises whose members share no words (MCU).
+Membership is read from the TMDB/Wikidata caches via `channel_engine.load_franchise_index`
+(TMDB wins name collisions, same rule as the Planner merge) and resolved by
+`match_franchise`, which mirrors `match_titles`' contract — (resolved, preview), shows sort
+after movies in release order. The scheduler is unchanged: refs resolve through
+`resolve_content`, the diff/patch cycle is ref-agnostic. Rejected: embedding TMDB/Wikidata
+IDs in the ref (cache is name-keyed; IDs differ across sources), scheduler-triggered cache
+refresh (circular import with the router layer; revisit in 2b if staleness bites).
+
+### Playback structure (Phase 2b)
+
+Interleaved = random-slot weighting (movie slot chronological at weight n_shows, show slots
+"next" at weight N) — an average-N approximation, accepted over exact alternation because it
+reuses Tunarr's scheduler verbatim. Timeline = manual lineup (the only Tunarr type that can
+express strict cross-media release order); the live diff is unaffected because
+read_channel_programming extracts content ids from either lineup shape. Rejected: exact
+movie/episode alternation via generated manual lineups for interleaved too (loses Tunarr's
+rolling-window randomization and 30-day horizon for no user-visible gain).

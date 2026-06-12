@@ -333,3 +333,15 @@ def test_merge_deployed_numbers_all_new():
     desired = [_ch("A", number=10), _ch("B", number=11)]
     out = channel_engine.merge_deployed_numbers(desired, deployed=[])
     assert [c["number"] for c in out] == [10, 11]
+
+
+def test_playback_change_lands_in_update_bucket():
+    deployed = [{"number": 1, "name": "Saga", "shuffle": "ordered",
+                 "content": ["A"], "live": True}]
+    desired = [{"number": 1, "name": "Saga", "shuffle": "ordered",
+                "content": ["A"], "live": True,
+                "playback": {"structure": "timeline"}}]
+    out = channel_engine.classify_channels(desired, deployed, {"saga"})
+    assert len(out["update"]) == 1
+    assert out["update"][0]["desired"]["name"] == "Saga"
+    assert out["unchanged"] == []

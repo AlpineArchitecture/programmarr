@@ -1,6 +1,6 @@
 import {
   ActionIcon, Badge, Box, Button, Card, Checkbox, Divider, Group,
-  Loader, Modal, ScrollArea, Select, Stack, Switch, Text, TextInput, Title,
+  Loader, Modal, NumberInput, ScrollArea, Select, Stack, Switch, Text, TextInput, Title,
   Tooltip,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
@@ -10,7 +10,7 @@ import {
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, Channel, ChannelSyncState, ContentItem, FillerList, isMatchRef, RecipeMatch, TunarrChannel } from '../api/client';
+import { api, Channel, ChannelSyncState, ContentItem, FillerList, FranchiseRef, isMatchRef, RecipeMatch, TunarrChannel } from '../api/client';
 
 function syncedAgo(iso?: string): string {
   if (!iso) return 'never';
@@ -29,6 +29,8 @@ const SHUFFLE_OPTIONS = [
 ];
 
 interface MatchRule { value: string; order: string; exclude: string[] }
+const isFranchiseRef = (c: any): c is FranchiseRef =>
+  typeof c === 'object' && c !== null && c.match === 'franchise';
 
 // ── Franchise auto-match builder ───────────────────────────────────────────────
 
@@ -177,6 +179,7 @@ function ChannelModal({
   const [newItem, setNewItem] = useState('');
   const [live, setLive] = useState(false);
   const [matchRef, setMatchRef] = useState<MatchRule | null>(null);
+  const [franchiseRefs, setFranchiseRefs] = useState<FranchiseRef[]>([]);
   const [building, setBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -185,6 +188,10 @@ function ChannelModal({
   const [commListId, setCommListId] = useState<string | null>(null);
   const [commPad, setCommPad] = useState('5');
   const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
+
+  // Playback structure
+  const [pbStructure, setPbStructure] = useState<string>('default');
+  const [pbEpisodes, setPbEpisodes] = useState<string | number>(4);
 
   // Channel icon
   const [iconBusy, setIconBusy] = useState<string | null>(null);
@@ -211,11 +218,15 @@ function ChannelModal({
     setIconUrl(channel.icon?.url ?? '');
     setCustomIconUrl('');
 
+    setPbStructure(channel.playback?.structure ?? 'default');
+    setPbEpisodes(channel.playback?.episodes_per_block ?? 4);
+
     const mref = channel.content.find(isMatchRef);
     setMatchRef(mref ? { value: mref.value, order: mref.order || 'release_date', exclude: mref.exclude || [] } : null);
+    setFranchiseRefs(channel.content.filter(isFranchiseRef));
     setContent(
       channel.content
-        .filter((c) => !isMatchRef(c))
+        .filter((c) => !isMatchRef(c) && !isFranchiseRef(c))
         .map((c) => (typeof c === 'string' ? c : `{collection: ${(c as any).collection}}`))
     );
   }, [channel]);
@@ -243,6 +254,7 @@ function ChannelModal({
         exclude: matchRef.exclude,
       });
     }
+    franchiseRefs.forEach((ref) => rawContent.push(ref));
     const payload: any = { number: Number(number), name, shuffle, content: rawContent };
     if (live) payload.live = true;
     if (commEnabled && commListId) {
@@ -252,6 +264,12 @@ function ChannelModal({
         pad_minutes: Number(commPad),
       };
     }
+    if (pbStructure === 'interleaved') {
+      payload.playback = { structure: 'interleaved', episodes_per_block: Number(pbEpisodes) || 4 };
+    } else if (pbStructure === 'timeline') {
+      payload.playback = { structure: 'timeline' };
+    }
+    // 'default' → no playback key at all
     await api.updateChannel(channel!.number, payload);
   }
 
@@ -333,9 +351,14 @@ function ChannelModal({
               </ActionIcon>
             </Group>
           ))}
-          {content.length === 0 && !matchRef && (
+          {content.length === 0 && !matchRef && franchiseRefs.length === 0 && (
             <Text size="xs" c="dimmed">No fixed titles — add titles below or a franchise auto-match.</Text>
           )}
+          {franchiseRefs.map((r) => (
+            <Text key={r.name} size="sm" c="dimmed">
+              🔁 Franchise: {r.name} (auto-updating{r.exclude?.length ? `, ${r.exclude.length} excluded` : ''})
+            </Text>
+          ))}
         </Stack>
 
         <Group gap="xs">
@@ -445,6 +468,25 @@ function ChannelModal({
               />
             </Group>
           )
+        )}
+
+        <Divider label="Playback structure" labelPosition="left" />
+        <Select
+          size="xs"
+          value={pbStructure}
+          onChange={(v) => setPbStructure(v ?? 'default')}
+          data={[
+            { value: 'default', label: 'Standard (use shuffle setting)' },
+            { value: 'interleaved', label: 'Interleaved — movies in order, episode blocks between' },
+            { value: 'timeline', label: 'Timeline — strict release order' },
+          ]}
+        />
+        {pbStructure === 'interleaved' && (
+          <NumberInput size="xs" label="Episodes per block" min={1} max={12}
+                       value={pbEpisodes} onChange={setPbEpisodes} />
+        )}
+        {pbStructure === 'timeline' && (
+          <Text size="xs" c="dimmed">Commercial padding is not applied in timeline mode.</Text>
         )}
 
         {channel && (

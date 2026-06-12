@@ -63,7 +63,7 @@ scheduler reuses.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/recipes/preview` | JSON body `{value, exclude?, order?}`; runs `match_titles` against the live Tunarr library and returns `{value, order, count, matches:[{title, year}]}` — the author-time confirm list for a `title_contains` franchise rule (word-boundary match, release-date ordered) |
+| POST | `/api/recipes/preview` | JSON body `{value, exclude?, order?, match?}`; previews the resolved titles for a live ref before saving. `match` is `"title_contains"` (default, word-boundary name match via `match_titles`) or `"franchise"` (cached-membership identity resolution via `match_franchise`, backed by the same TMDB/Wikidata data the Planner uses — `value` is the collection/franchise name). Returns `{value, match, order, count, matches:[{title, year}]}` |
 | GET | `/api/recipes/status` | Scheduler state: `{enabled, paused, running, interval_hours, next_run_seconds, live_count, last_cycle, channels}`. `next_run_seconds` = seconds to next auto cycle (null if disabled/paused); `channels` = per-channel sync metadata from `recipe_state.json` |
 | POST | `/api/recipes/run` | Run one cycle on demand. `apply=true` (default) patches; `apply=false` is a dry run (detect + log, no Tunarr writes). `only=<number>` scopes the cycle to one live channel. Same code path the background loop uses |
 | POST | `/api/recipes/pause` | `paused=true\|false` — runtime kill switch; halts/resumes the loop without a restart |
