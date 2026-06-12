@@ -262,7 +262,7 @@ def main():
         channel_id = ch_result.get("id")
 
         # Build and post schedule (pad opens the commercial gap when enabled)
-        schedule = build_schedule(shuffle, resolved, pad_ms=comm_pad_ms)
+        schedule = build_schedule(shuffle, resolved, pad_ms=comm_pad_ms, playback=ch.get("playback"))
         if not schedule:
             print(f"  FAIL #{number} {name} — could not build schedule")
             stats["skipped"] += 1

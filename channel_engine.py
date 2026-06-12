@@ -628,11 +628,12 @@ def classify_channels(
         return (ch.get("name") or "").strip().lower()
 
     def _content_sig(ch):
-        """Canonical content + shuffle signature for change-detection."""
+        """Canonical content + shuffle + playback signature for change-detection."""
         return (
             json.dumps(ch.get("content", []), sort_keys=True),
             ch.get("shuffle", ""),
             bool(ch.get("live")),
+            json.dumps(ch.get("playback") or {}, sort_keys=True),
         )
 
     desired_by_name: dict[str, dict] = {}
@@ -722,7 +723,7 @@ def read_channel_programming(tunarr_url, channel_id):
     return {i["id"] for i in pr.get("lineup", []) if i.get("type") == "content" and i.get("id")}
 
 
-def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, expected_name=None):
+def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, expected_name=None, playback=None):
     """Patch an existing channel's programming in place — never delete/recreate.
 
     Looks the channel up by number (preserving its Tunarr id and Plex DVR mapping),
@@ -732,7 +733,10 @@ def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, exp
 
     pad_ms preserves a commercials channel's gap on live updates (the attached filler
     list survives — only programming is replaced — but the pad must be re-applied or the
-    gap, and thus the commercials, would vanish after a cycle).
+    gap, and thus the commercials, would vanish after a cycle). Similarly, playback
+    (the per-channel structure dict) must be re-applied on live updates for the same
+    reason as pad_ms — omitting it would silently revert an interleaved or timeline
+    channel to the default shuffle behavior after each cycle.
 
     expected_name guards against the by-number scramble: if given, the Tunarr channel
     found at `number` must carry that name (case/space-insensitive) or we refuse to
@@ -750,7 +754,7 @@ def update_channel_in_place(tunarr_url, number, shuffle, resolved, pad_ms=0, exp
                 f"Channel #{number} name mismatch: Tunarr has '{ch.get('name')}', "
                 f"expected '{expected_name}' — refusing to overwrite "
                 f"(channels.json out of sync with Tunarr)")
-    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved, pad_ms=pad_ms)
+    schedule = build_schedule(SHUFFLE_MAP.get(shuffle, "shuffle"), resolved, pad_ms=pad_ms, playback=playback)
     if not schedule:
         raise ChannelEngineError(f"Channel #{number}: no schedule could be built (no content resolved)")
     return set_programming(tunarr_url, ch["id"], schedule)

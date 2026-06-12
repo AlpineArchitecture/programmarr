@@ -117,3 +117,19 @@ def test_timeline_show_without_releasedate_sorts_by_year_then_end():
 def test_timeline_empty_items_returns_none():
     assert channel_engine.build_schedule(
         "ordered", [], playback={"structure": "timeline"}) is None
+
+
+# ── plumbing ──────────────────────────────────────────────────────────────────
+
+def test_update_channel_in_place_passes_playback(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(channel_engine, "find_channel_by_number",
+                        lambda url, n: {"id": "tid", "name": "X"})
+    monkeypatch.setattr(channel_engine, "set_programming",
+                        lambda url, cid, payload: captured.update(payload=payload) or {})
+    items = [_movie_item("Movie A", "m1", 100),
+             _show_item("Show X", "sx", [("e1", 1, 1, 50)])]
+    channel_engine.update_channel_in_place(
+        "http://t", 5, "ordered", items,
+        playback={"structure": "timeline"}, expected_name="X")
+    assert captured["payload"]["type"] == "manual"

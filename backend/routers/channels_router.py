@@ -134,7 +134,7 @@ async def apply_channel(number: int):
         pad_ms = int(comm.get("pad_minutes", 5)) * 60000 if comm.get("filler_list_id") else 0
         channel_engine.update_channel_in_place(
             tunarr_url, number, ch.get("shuffle", "shuffle"), resolved, pad_ms=pad_ms,
-            expected_name=ch.get("name"))
+            expected_name=ch.get("name"), playback=ch.get("playback"))
         return len(resolved)
 
     try:
