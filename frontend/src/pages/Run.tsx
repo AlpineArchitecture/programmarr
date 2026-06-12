@@ -735,12 +735,14 @@ const SUBGENRES: SubGenre[] = [
 ];
 
 // Expandable card for a single franchise candidate with per-member checkboxes.
-function FranchiseCard({ franchise, isSelected, checkedTitles, onToggle, onToggleMember }: {
+function FranchiseCard({ franchise, isSelected, checkedTitles, live, onToggle, onToggleMember, onSetLive }: {
   franchise: FranchiseCandidate;
   isSelected: boolean;
   checkedTitles: string[];
+  live?: boolean;
   onToggle: () => void;
   onToggleMember: (title: string) => void;
+  onSetLive: (live: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const partial = isSelected && checkedTitles.length < franchise.members.length;
@@ -784,6 +786,16 @@ function FranchiseCard({ franchise, isSelected, checkedTitles, onToggle, onToggl
               </Badge>
             </Group>
           ))}
+          {isSelected && (
+            <Switch
+              size="xs"
+              label="Keep updated"
+              description="Deploys live — new library additions to this franchise appear automatically"
+              checked={!!live}
+              onChange={(e) => onSetLive(e.currentTarget.checked)}
+              mt="xs"
+            />
+          )}
         </Stack>
       </Collapse>
     </Card>
@@ -1105,9 +1117,17 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
     if (checkedTitles.length === 0) {
       delete nextSelected[id];
     } else {
-      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: checkedTitles };
+      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: checkedTitles, live: planner.selected[id]?.live };
     }
     patch({ selected: nextSelected });
+  }
+
+  /** Set the live flag on a franchise spec without disturbing member titles. */
+  function setFranchiseLive(fr: FranchiseCandidate, live: boolean) {
+    const id = cid.franchise(fr.name);
+    const sel = planner.selected[id];
+    if (!sel) return;
+    patch({ selected: { ...planner.selected, [id]: { ...sel, live } } });
   }
 
   /** Toggle the entire franchise (select all / deselect all). */
@@ -1125,7 +1145,7 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
       const nextOverrides = { ...franchiseMemberOverrides };
       delete nextOverrides[fr.name]; // clear any partial override → all selected
       setFranchiseMemberOverrides(nextOverrides);
-      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: fr.members.map(m => m.title) };
+      nextSelected[id] = { kind: 'franchise' as CandidateKind, name: fr.name, titles: fr.members.map(m => m.title), live: planner.selected[id]?.live };
     }
     patch({ selected: nextSelected });
   }
@@ -1695,8 +1715,10 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
                           franchise={fr}
                           isSelected={isSel(cid.franchise(fr.name))}
                           checkedTitles={franchiseCheckedTitles(fr)}
+                          live={!!planner.selected[cid.franchise(fr.name)]?.live}
                           onToggle={() => toggleFranchise(fr)}
                           onToggleMember={(title) => toggleFranchiseMember(fr, title)}
+                          onSetLive={(live) => setFranchiseLive(fr, live)}
                         />
                       ))}
                     </Stack>

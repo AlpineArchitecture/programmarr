@@ -10,7 +10,7 @@ import {
 } from '@tabler/icons-react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, Channel, ChannelSyncState, ContentItem, FillerList, isMatchRef, RecipeMatch, TunarrChannel } from '../api/client';
+import { api, Channel, ChannelSyncState, ContentItem, FillerList, FranchiseRef, isMatchRef, RecipeMatch, TunarrChannel } from '../api/client';
 
 function syncedAgo(iso?: string): string {
   if (!iso) return 'never';
@@ -29,6 +29,8 @@ const SHUFFLE_OPTIONS = [
 ];
 
 interface MatchRule { value: string; order: string; exclude: string[] }
+const isFranchiseRef = (c: any): c is FranchiseRef =>
+  typeof c === 'object' && c !== null && c.match === 'franchise';
 
 // ── Franchise auto-match builder ───────────────────────────────────────────────
 
@@ -177,6 +179,7 @@ function ChannelModal({
   const [newItem, setNewItem] = useState('');
   const [live, setLive] = useState(false);
   const [matchRef, setMatchRef] = useState<MatchRule | null>(null);
+  const [franchiseRefs, setFranchiseRefs] = useState<FranchiseRef[]>([]);
   const [building, setBuilding] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -213,9 +216,10 @@ function ChannelModal({
 
     const mref = channel.content.find(isMatchRef);
     setMatchRef(mref ? { value: mref.value, order: mref.order || 'release_date', exclude: mref.exclude || [] } : null);
+    setFranchiseRefs(channel.content.filter(isFranchiseRef));
     setContent(
       channel.content
-        .filter((c) => !isMatchRef(c))
+        .filter((c) => !isMatchRef(c) && !isFranchiseRef(c))
         .map((c) => (typeof c === 'string' ? c : `{collection: ${(c as any).collection}}`))
     );
   }, [channel]);
@@ -243,6 +247,7 @@ function ChannelModal({
         exclude: matchRef.exclude,
       });
     }
+    franchiseRefs.forEach((ref) => rawContent.push(ref));
     const payload: any = { number: Number(number), name, shuffle, content: rawContent };
     if (live) payload.live = true;
     if (commEnabled && commListId) {
@@ -333,9 +338,14 @@ function ChannelModal({
               </ActionIcon>
             </Group>
           ))}
-          {content.length === 0 && !matchRef && (
+          {content.length === 0 && !matchRef && franchiseRefs.length === 0 && (
             <Text size="xs" c="dimmed">No fixed titles — add titles below or a franchise auto-match.</Text>
           )}
+          {franchiseRefs.map((r) => (
+            <Text key={r.name} size="sm" c="dimmed">
+              🔁 Franchise: {r.name} (auto-updating{r.exclude?.length ? `, ${r.exclude.length} excluded` : ''})
+            </Text>
+          ))}
         </Stack>
 
         <Group gap="xs">
