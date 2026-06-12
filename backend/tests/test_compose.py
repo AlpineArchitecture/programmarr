@@ -543,6 +543,7 @@ def test_compose_live_franchise_emits_franchise_ref(pr, seed):
     assert ref["order"] == "release_date"
     # exclude = members NOT checked, in index order
     assert ref["exclude"] == ["Die Hard 3"]
+    assert ch["playback"] == {"structure": "interleaved", "episodes_per_block": 4}
 
 
 def test_compose_live_franchise_without_cache_falls_back_static(pr, seed):

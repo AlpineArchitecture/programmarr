@@ -1982,6 +1982,7 @@ def compose_channels(req: ComposeRequest):
                 content = [{"match": "franchise", "name": entry["name"],
                             "order": "release_date", "exclude": exclude}]
                 per_channel_extras["live"] = True
+                per_channel_extras["playback"] = {"structure": "interleaved", "episodes_per_block": 4}
                 shuffle = spec.shuffle if spec.shuffle in ("ordered", "shuffle", "block") else "ordered"
             else:
                 # Cache miss: static fallback (plain titles, not live).
