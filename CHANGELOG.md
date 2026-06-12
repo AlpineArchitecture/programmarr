@@ -4,6 +4,47 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] — 2026-06-11
+
+### Added
+
+- **Playback structure (per-channel).** Channels can carry
+  `"playback": {"structure": "interleaved"|"timeline", "episodes_per_block": N}`.
+  *Interleaved* keeps movies in watch order with ~N-episode blocks between them;
+  *timeline* posts a manual Tunarr lineup in strict release order (show runs air at
+  their premiere position). The field is plumbed through every deploy path (compose,
+  surgical deploy, nuke, apply) and editable per channel in the Channels editor.
+  Live franchise channels default to interleaved/4.
+- **Franchise live content-refs.** A new identity-based ref
+  `{"match": "franchise", "name": "…", "order": "release_date", "exclude": []}`
+  lets live channels auto-add franchise members that don't share a name (resolved from
+  the cached TMDB `belongs_to_collection` + Wikidata franchise index, never name
+  matching). Authored by the Planner's per-franchise **"Keep updated"** switch; the
+  scheduler, surgical deploy, and `apply` all resolve it; recipes preview supports it.
+- **Channel icon overhaul.** Every channel now gets an icon: verified TMDB logos where
+  trustworthy (kind-gated, name-must-match-query) and generated name-stamped badges
+  everywhere else (`badge_renderer` + committed `badge_assets/`). New Channels-editor
+  icon control (badge / TMDB / custom upload / reset-to-automatic) via
+  `POST /api/channels/{number}/icon`, with pin support so manual icons survive the
+  automatic art pass. `tmdb_api_key` is now optional — without it everything badges.
+- **Multi-source / multi-server library support.** Export auto-supplements from all
+  Tunarr media sources; the Export-step library picker shows every source grouped by
+  server. Multi-Plex-server support across export, deploy, and Settings.
+- **Planner refinements.** Deselect-all on entity dropdowns, a reset confirmation,
+  Nuke now clears candidate selections, and auto search+scroll for large candidate
+  lists.
+
+### Fixed
+
+- **Icons never use SVG logos.** Plex guide icons must be raster — SVG TMDB logos are
+  now rejected so the guide renders.
+- **Export-step library labels.** Divider labels group library checkboxes by source
+  server; redundant per-label server suffix removed.
+
+### Changed
+
+- **Self-healing dev loop.** `dev.ps1` kills stale instances before starting.
+
 ## [0.6.0] — 2026-06-10
 
 ### Added
