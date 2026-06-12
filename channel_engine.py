@@ -443,6 +443,33 @@ def resolve_content(content_list, movie_map, show_map,
 
 # ── Schedule builder ───────────────────────────────────────────────────────────
 
+def _episode_sort_key(p):
+    """Sort key for a show's episode programs in season/episode order.
+    Uses real Tunarr field names: season={index: N} and episodeNumber.
+    """
+    prog = p.get("program", {})
+    season_obj = prog.get("season") or {}
+    season_num = season_obj.get("index") or 0 if isinstance(season_obj, dict) else 0
+    return (season_num, prog.get("episodeNumber") or 0)
+
+
+def _item_premiere_ms(item):
+    """Premiere timestamp for timeline ordering: a movie's releaseDate; a show's
+    earliest episode releaseDate (fallback: Jan 1 of its year). Unknown → +inf
+    (sorts to the end, deterministically by title)."""
+    progs = item.get("programs") or []
+    dates = [p.get("program", {}).get("releaseDate") for p in progs]
+    dates = [d for d in dates if d is not None]
+    if dates:
+        return min(dates)
+    years = [p.get("program", {}).get("year") for p in progs]
+    years = [y for y in years if y]
+    if years:
+        from datetime import datetime, timezone
+        return datetime(min(years), 1, 1, tzinfo=timezone.utc).timestamp() * 1000
+    return float("inf")
+
+
 def build_schedule(shuffle_type, resolved_items, pad_ms=0, playback=None):
     """Build a rolling random schedule.
 
@@ -455,12 +482,32 @@ def build_schedule(shuffle_type, resolved_items, pad_ms=0, playback=None):
     - {"structure": "interleaved", "episodes_per_block": N} reweights the random
       slots so movies play chronological at weight n_shows and show slots use "next"
       at weight N — on average N episodes air between consecutive movies.
-    - {"structure": "timeline"} is handled in Task 2 (manual lineup).
+    - {"structure": "timeline"} posts a Tunarr manual lineup in strict release order:
+      items sorted by premiere (movie releaseDate; show's earliest episode date, year
+      fallback, unknown → +inf); shows flattened in season/episode order at their
+      premiere position. Commercials padding is a no-op in v1 (manual lineups
+      don't auto-pad).
     - None (default) = unchanged legacy behavior (all weights 1).
     """
     all_programs = [p for item in resolved_items for p in item["programs"]]
     if not all_programs:
         return None
+
+    if (playback or {}).get("structure") == "timeline":
+        # Strict release order as ONE looping manual lineup: each item at its
+        # premiere position; a show's full run plays there in season/episode order.
+        # Manual lineups don't auto-pad, so commercials padding is ignored here (v1).
+        lineup = []
+        for item in sorted(resolved_items,
+                           key=lambda it: (_item_premiere_ms(it),
+                                           (it.get("title") or "").lower())):
+            programs = item["programs"]
+            if item["type"] == "TV":
+                programs = sorted(programs, key=_episode_sort_key)
+            for p in programs:
+                lineup.append({"type": "content", "id": p["id"],
+                               "duration": int(p.get("program", {}).get("duration") or 0) or 1})
+        return {"type": "manual", "lineup": lineup, "append": False}
 
     is_ordered = shuffle_type == "ordered"
     is_block = shuffle_type == "block"

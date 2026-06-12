@@ -10,10 +10,13 @@ def _movie_item(title, pid, release_ms=None, duration=5400000):
 
 
 def _show_item(title, show_id, episodes):
-    """episodes: list of (pid, season, ep, release_ms)"""
+    """episodes: list of (pid, season, ep, release_ms)
+    Uses real Tunarr field names: season={index: N} and episodeNumber.
+    """
     return {"type": "TV", "title": title, "showId": show_id, "programs": [
         {"id": pid, "program": {"title": f"{title} s{s}e{e}", "duration": 1800000,
-                                "seasonNumber": s, "episode": e, "releaseDate": rms}}
+                                "season": {"index": s}, "episodeNumber": e,
+                                "releaseDate": rms}}
         for pid, s, e, rms in episodes]}
 
 
@@ -75,3 +78,42 @@ def test_no_playback_is_byte_identical_to_today():
     assert strip(a) == strip(b)
     sl = strip(a)["schedule"]["slots"]
     assert all(x["weight"] == 1 for x in sl)      # today's weights untouched
+
+
+# ── timeline ──────────────────────────────────────────────────────────────────
+
+def test_timeline_builds_manual_lineup_in_premiere_order():
+    items = [
+        _movie_item("Late Movie", "m2", 900),
+        _show_item("Mid Show", "sx", [("e2", 1, 2, 510), ("e1", 1, 1, 500)]),
+        _movie_item("Early Movie", "m1", 100),
+    ]
+    sched = channel_engine.build_schedule("ordered", items,
+                                          playback={"structure": "timeline"})
+    assert sched["type"] == "manual"
+    assert sched["append"] is False
+    ids = [li["id"] for li in sched["lineup"]]
+    # Early Movie (100) → Mid Show premiere (500; episodes in s/e order) → Late Movie (900)
+    assert ids == ["m1", "e1", "e2", "m2"]
+    assert all(li["type"] == "content" for li in sched["lineup"])
+    assert all(isinstance(li["duration"], int) and li["duration"] > 0
+               for li in sched["lineup"])
+
+
+def test_timeline_show_without_releasedate_sorts_by_year_then_end():
+    items = [
+        _movie_item("Movie 1990", "m1", 700000000000),  # ~1992 in ms — fine, just ordered
+        {"type": "TV", "title": "Undated Show", "showId": "sz", "programs": [
+            {"id": "z1", "program": {"title": "Undated s1e1", "duration": 1800000,
+                                     "season": {"index": 1}, "episodeNumber": 1,
+                                     "releaseDate": None, "year": None}}]},
+    ]
+    sched = channel_engine.build_schedule("ordered", items,
+                                          playback={"structure": "timeline"})
+    ids = [li["id"] for li in sched["lineup"]]
+    assert ids == ["m1", "z1"]  # undated content sorts to the end, never crashes
+
+
+def test_timeline_empty_items_returns_none():
+    assert channel_engine.build_schedule(
+        "ordered", [], playback={"structure": "timeline"}) is None
