@@ -285,3 +285,15 @@ superseded**: the unified re-resolve model (no `recipe.type`) and the
 no-writeback/diff-vs-Tunarr design above are the permanent approach. That file has
 been retired; its still-relevant ideas (agnosticism, "What This Is Not") are folded
 in above.
+
+## Franchise refs (Phase 2a, 2026-06)
+
+`{"match": "franchise", "name": …}` joins `title_contains` as the second live ref type.
+Rationale: title matching cannot express franchises whose members share no words (MCU).
+Membership is read from the TMDB/Wikidata caches via `channel_engine.load_franchise_index`
+(TMDB wins name collisions, same rule as the Planner merge) and resolved by
+`match_franchise`, which mirrors `match_titles`' contract — (resolved, preview), shows sort
+after movies in release order. The scheduler is unchanged: refs resolve through
+`resolve_content`, the diff/patch cycle is ref-agnostic. Rejected: embedding TMDB/Wikidata
+IDs in the ref (cache is name-keyed; IDs differ across sources), scheduler-triggered cache
+refresh (circular import with the router layer; revisit in 2b if staleness bites).
