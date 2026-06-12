@@ -297,3 +297,13 @@ after movies in release order. The scheduler is unchanged: refs resolve through
 `resolve_content`, the diff/patch cycle is ref-agnostic. Rejected: embedding TMDB/Wikidata
 IDs in the ref (cache is name-keyed; IDs differ across sources), scheduler-triggered cache
 refresh (circular import with the router layer; revisit in 2b if staleness bites).
+
+### Playback structure (Phase 2b)
+
+Interleaved = random-slot weighting (movie slot chronological at weight n_shows, show slots
+"next" at weight N) — an average-N approximation, accepted over exact alternation because it
+reuses Tunarr's scheduler verbatim. Timeline = manual lineup (the only Tunarr type that can
+express strict cross-media release order); the live diff is unaffected because
+read_channel_programming extracts content ids from either lineup shape. Rejected: exact
+movie/episode alternation via generated manual lineups for interleaved too (loses Tunarr's
+rolling-window randomization and 30-day horizon for no user-visible gain).

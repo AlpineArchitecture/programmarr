@@ -298,6 +298,13 @@ Channels-editor icon control). `fetch_images.py` skips pinned channels and never
 this field; removing it (the editor's "Reset to automatic") returns the channel to the
 automatic art pass.
 
+**Playback structure (optional).** `"playback": {"structure": "interleaved"|"timeline",
+"episodes_per_block": 4}` controls cross-media scheduling: *interleaved* keeps movies in
+watch order with ~N-episode blocks between (random-slot weights); *timeline* posts a manual
+Tunarr lineup in strict release order (show runs air at their premiere position; commercials
+padding is a no-op there). Absent = today's shuffle behavior. Live franchise channels compose
+with interleaved/4 by default; editable per channel in the Channels editor.
+
 ## API Endpoints
 
 All endpoint tables — **Pipeline**, **Recipe**, **Tunarr**, **TMDB**, **Plex** — live in
@@ -446,7 +453,7 @@ Planner's scan triggers). Authored by the Planner's per-franchise **"Keep update
 (`/pipeline/compose` computes `exclude` from unchecked members — the card's member list is
 the author-time preview). Cache-miss at compose time falls back to a static channel; at
 resolve time it counts as matched-nothing, and the refuse-to-wipe guards keep the channel
-intact.
+intact. Live franchise channels carry `playback: interleaved` by default (see channels.json schema).
 
 **Moving parts** (scheduler loop, `channel_engine` updaters, `recipes_router`, the `Channels.tsx`
 authoring UI and status cards), full rationale, rejected alternatives, and history:
