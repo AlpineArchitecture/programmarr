@@ -1,6 +1,6 @@
 import {
   ActionIcon, Badge, Box, Button, Card, Checkbox, Divider, Group,
-  Loader, Modal, ScrollArea, Select, Stack, Switch, Text, TextInput, Title,
+  Loader, Modal, NumberInput, ScrollArea, Select, Stack, Switch, Text, TextInput, Title,
   Tooltip,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
@@ -189,6 +189,10 @@ function ChannelModal({
   const [commPad, setCommPad] = useState('5');
   const [fillerLists, setFillerLists] = useState<FillerList[]>([]);
 
+  // Playback structure
+  const [pbStructure, setPbStructure] = useState<string>('default');
+  const [pbEpisodes, setPbEpisodes] = useState<string | number>(4);
+
   // Channel icon
   const [iconBusy, setIconBusy] = useState<string | null>(null);
   const [iconUrl, setIconUrl] = useState('');
@@ -213,6 +217,9 @@ function ChannelModal({
 
     setIconUrl(channel.icon?.url ?? '');
     setCustomIconUrl('');
+
+    setPbStructure(channel.playback?.structure ?? 'default');
+    setPbEpisodes(channel.playback?.episodes_per_block ?? 4);
 
     const mref = channel.content.find(isMatchRef);
     setMatchRef(mref ? { value: mref.value, order: mref.order || 'release_date', exclude: mref.exclude || [] } : null);
@@ -257,6 +264,12 @@ function ChannelModal({
         pad_minutes: Number(commPad),
       };
     }
+    if (pbStructure === 'interleaved') {
+      payload.playback = { structure: 'interleaved', episodes_per_block: Number(pbEpisodes) || 4 };
+    } else if (pbStructure === 'timeline') {
+      payload.playback = { structure: 'timeline' };
+    }
+    // 'default' → no playback key at all
     await api.updateChannel(channel!.number, payload);
   }
 
@@ -455,6 +468,25 @@ function ChannelModal({
               />
             </Group>
           )
+        )}
+
+        <Divider label="Playback structure" labelPosition="left" />
+        <Select
+          size="xs"
+          value={pbStructure}
+          onChange={(v) => setPbStructure(v ?? 'default')}
+          data={[
+            { value: 'default', label: 'Standard (use shuffle setting)' },
+            { value: 'interleaved', label: 'Interleaved — movies in order, episode blocks between' },
+            { value: 'timeline', label: 'Timeline — strict release order' },
+          ]}
+        />
+        {pbStructure === 'interleaved' && (
+          <NumberInput size="xs" label="Episodes per block" min={1} max={12}
+                       value={pbEpisodes} onChange={setPbEpisodes} />
+        )}
+        {pbStructure === 'timeline' && (
+          <Text size="xs" c="dimmed">Commercial padding is not applied in timeline mode.</Text>
         )}
 
         {channel && (

@@ -180,6 +180,7 @@ export interface FillerList { id: string; name: string; contentCount: number }
 // Commercials: a channel can pull from a Tunarr filler list, played in gaps
 // between shows (pad_minutes controls the gap size). Absent = commercials off.
 export interface Commercials { filler_list_id: string; filler_list_name?: string; pad_minutes?: number }
+export interface PlaybackSetting { structure: 'interleaved' | 'timeline'; episodes_per_block?: number }
 export interface MatchRef { match: 'title_contains'; value: string; order?: string | null; exclude?: string[] }
 export interface FranchiseRef { match: 'franchise'; name: string; order?: string | null; exclude?: string[] }
 export type ContentItem = string | { collection: string } | MatchRef | FranchiseRef;
@@ -198,6 +199,7 @@ export interface Channel {
   live?: boolean;
   commercials?: Commercials;
   icon?: ChannelIcon;
+  playback?: PlaybackSetting;
 }
 
 // ── Live channels (recipes) ──
