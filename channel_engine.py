@@ -443,13 +443,20 @@ def resolve_content(content_list, movie_map, show_map,
 
 # ── Schedule builder ───────────────────────────────────────────────────────────
 
-def build_schedule(shuffle_type, resolved_items, pad_ms=0):
+def build_schedule(shuffle_type, resolved_items, pad_ms=0, playback=None):
     """Build a rolling random schedule.
 
     pad_ms > 0 rounds each program up to the next pad_ms boundary, opening a flex
     gap after it (flexPreference="end"). That gap is what the channel's attached
     filler list ("commercials") fills at playback — see the Commercials feature.
     pad_ms == 0 (default) keeps episodes back-to-back, unchanged from before.
+
+    playback is the optional per-channel structure dict:
+    - {"structure": "interleaved", "episodes_per_block": N} reweights the random
+      slots so movies play chronological at weight n_shows and show slots use "next"
+      at weight N — on average N episodes air between consecutive movies.
+    - {"structure": "timeline"} is handled in Task 2 (manual lineup).
+    - None (default) = unchanged legacy behavior (all weights 1).
     """
     all_programs = [p for item in resolved_items for p in item["programs"]]
     if not all_programs:
@@ -486,6 +493,18 @@ def build_schedule(shuffle_type, resolved_items, pad_ms=0):
             "weight": 1,
             "order": "chronological" if is_ordered else "shuffle",
         })
+
+    structure = (playback or {}).get("structure")
+    if structure == "interleaved":
+        episodes_per_block = max(1, int((playback or {}).get("episodes_per_block") or 4))
+        show_slots = [s for s in slots if s["type"] == "show"]
+        for s in show_slots:
+            s["order"] = "next"
+            s["weight"] = episodes_per_block
+        for s in slots:
+            if s["type"] == "movie":
+                s["order"] = "chronological"
+                s["weight"] = max(1, len(show_slots))
 
     return {
         "type": "random",
