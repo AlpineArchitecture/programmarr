@@ -115,8 +115,8 @@ services:
 ## Screenshots
 
 <div align="center">
-  <img src="docs/dashboard.png" alt="Dashboard showing 81 live channels with Tunarr and Plex online" width="100%" />
-  <p><em>Dashboard — live view of all 81 channels with Tunarr and Plex connection status</em></p>
+  <img src="docs/dashboard.png" alt="Dashboard showing the EPG guide grid with 27 channels, Tunarr and Plex online, and auto-updates panel" width="100%" />
+  <p><em>Dashboard — EPG guide grid, connection status, and live auto-update controls</em></p>
 </div>
 
 <br />
@@ -124,18 +124,18 @@ services:
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/onboarding.png" alt="First-run onboarding wizard" width="100%" />
-      <p align="center"><em>First-run setup wizard — credentials and connections in two steps</em></p>
+      <img src="docs/run.png" alt="Build Channels stepper — Setup step showing Nuke vs Add/Edit deploy mode and pipeline options" width="100%" />
+      <p align="center"><em>Build Channels — choose Nuke or Add/Edit mode, then scan → Planner → deploy in a guided stepper</em></p>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/run.png" alt="Run Pipeline stepper" width="100%" />
-      <p align="center"><em>Run — compose a curated lineup in the Planner, then deploy; live output streams to the browser</em></p>
+      <img src="docs/channels.png" alt="Channels list showing 27 managed channels with channel numbers and edit controls" width="100%" />
+      <p align="center"><em>Channels — browse, edit, and delete all managed channels; click any row to open the editor</em></p>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/channels.png" alt="Channels editor listing all channels with shuffle mode and item count" width="100%" />
-      <p align="center"><em>Channel editor — view, edit, and delete channels directly in the browser</em></p>
+      <img src="docs/onboarding.png" alt="First-run onboarding wizard" width="100%" />
+      <p align="center"><em>First-run setup wizard — credentials and connections in two steps</em></p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/settings.png" alt="Settings page with Tunarr URL, Plex URL, TMDB key, and auth fields" width="100%" />
@@ -146,7 +146,7 @@ services:
 
 ---
 
-## The Planner 🆕
+## The Planner
 
 The heart of Programmarr. Instead of one mushy `Comedy (140)` channel, you build a lineup that feels **hand-programmed** — and you do it in a few clicks.
 
