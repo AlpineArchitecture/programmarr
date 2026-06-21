@@ -10,12 +10,6 @@
     "tunarr_channel_group": "programmarr",
     "tunarr_stream_mode": "hls",
 
-    "_channel_blocks": "Per-category block sizes — how many channel numbers each category reserves. Omit for defaults (10/10/20/20/10). Scale a category up for a large library. Editable in Settings.",
-    "channel_blocks": {
-        "marathon": 10,
-        "tv_block": 10,
-        "movie": 20,
-        "franchise": 20,
-        "specialty": 10
-    }
+    "_channel_order": "Category order for sequential channel numbering. Channels are tight-packed from 1 in this order — no block sizes, no gaps. Omit for the default order. Editable in Settings → Channel Numbering.",
+    "channel_order": ["marathon", "tv_block", "tv_movie_mix", "movie", "entity", "network", "programming_block", "franchise", "specialty"]
 }

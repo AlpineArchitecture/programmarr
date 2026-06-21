@@ -224,12 +224,13 @@ These optional keys can be added directly to `config.json` (they're not in the U
 
 ### Channel Numbering
 
-Channels are grouped into five blocks — TV Marathons, TV Blocks, Movie Channels, Franchise &
-Series, Specialty — placed one after another. **Settings → Channel Numbering** lets you set how
-many channel numbers each block reserves (defaults `10/10/20/20/10`); enlarge a block to fit
-more channels if you have a big library. Numbering on a fresh deploy starts at channel **1**, and
-keeping existing channels shifts new ones above the highest you kept. (Stored as `channel_blocks`
-in `config.json`.)
+Channels are numbered **sequentially from 1**, tight-packed in category order — no fixed block
+sizes, no gaps. Categories run in this order: TV Marathons → TV Blocks → TV & Movie Mix → Movie
+Channels → Studios/Directors/Actors → Networks → Classic TV Blocks → Franchise & Series →
+Specialty. Empty categories consume no numbers. **Settings → Channel Numbering** lets you drag
+the categories into whatever order you prefer. Numbering on a fresh deploy starts at channel
+**1**; keeping existing channels shifts new ones above the highest you kept. (Stored as
+`channel_order`, a list of category keys, in `config.json` — omit it for the default order.)
 
 ### Commercials
 
@@ -239,13 +240,16 @@ Any channel can play commercials in the gaps between shows. In Tunarr, create a 
 
 ## CLI (advanced)
 
-If you prefer the terminal, all the same functionality is available via `programmarr.py`:
+If you prefer the terminal, everything the web app does is available from the command line — no
+Docker, no extra server. The Python scripts have zero dependencies beyond the standard library.
 
 ```bash
 python programmarr.py
 ```
 
-The Python scripts have zero dependencies beyond the standard library and work standalone without Docker.
+**→ Full walkthrough: [`docs/cli.md`](docs/cli.md)** — the interactive menu, calling the raw
+scripts directly (cron-friendly), and editing `config.json` by hand for advanced keys like
+`tunarr_stream_mode` and `tunarr_channel_group`.
 
 ---
 

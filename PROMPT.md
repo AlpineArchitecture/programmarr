@@ -21,9 +21,10 @@ and uses the context window more efficiently.
 Paste the prompt, then paste the full contents of `plex_library.csv` directly
 after it. Works with any LLM or interface that doesn't support file uploads.
 
-> **Note on the Channel Numbering Scheme below:** the ranges shown are the defaults. When you
-> copy the prompt from the web app, it regenerates that section to match your configured block
-> sizes (Settings → Channel Numbering) and start number. The static text here is what the CLI uses.
+> **Note on the Channel Numbering Scheme below:** the category order shown is the default. When
+> you copy the prompt from the web app, it regenerates that section to match your configured
+> category order (Settings → Channel Numbering) and start number. The static text here is what
+> the CLI uses.
 
 ---
 
@@ -40,14 +41,20 @@ You are a TV channel programmer. I have a self-hosted media server with the libr
 
 ## Channel Numbering Scheme
 
-Assign channel numbers following this cable TV block structure:
-- **10–19**: TV Marathons — 24/7 single-show loops (needs 50+ episodes to qualify)
-- **20–29**: TV Blocks — themed multi-show rotations (era blocks, genre blocks, etc.)
-- **30–49**: Movie Channels — genre and decade-based pools
-- **50–69**: Franchise & Curated Series — ordered collections (film series in release order, etc.)
-- **70–79**: Specialty — single-movie loops, holiday, niche themes
+Number channels **sequentially starting at 1**, tight-packed in this category order — no gaps,
+no reserved ranges. A category with no channels is simply skipped (it consumes no numbers).
 
-Keep numbers sequential within each block. Leave gaps for future additions.
+1. **TV Marathons** — 24/7 single-show loops (needs 50+ episodes to qualify)
+2. **TV Blocks** — themed multi-show rotations (era blocks, genre blocks, etc.)
+3. **TV & Movie Mix** — mixed-genre channels spanning shows and films
+4. **Movie Channels** — genre and decade-based pools
+5. **Studios / Directors / Actors** — channels curated by creator or studio
+6. **Networks** — all shows from a single TV network
+7. **Classic TV Blocks** — historical lineups (TGIF, Must See TV, etc.)
+8. **Franchise & Series** — ordered collections (film series in release order, etc.)
+9. **Specialty** — single-movie loops, holiday, niche themes
+
+Assign every channel the next free number — e.g. 12 marathons take 1–12, then TV Blocks start at 13.
 
 ## Shuffle Types
 
@@ -61,9 +68,9 @@ Each channel must have one of these shuffle types:
 Output one channel per line as a JSON object (JSONL). No wrapper object, no markdown fences, no commentary between lines — just one `{...}` per line.
 
 ```
-{"number": 10, "name": "Breaking Bad Marathon", "shuffle": "ordered", "content": ["Breaking Bad"]}
-{"number": 20, "name": "Crime TV Block", "shuffle": "block", "content": ["The Wire", "Ozark", "Justified"]}
-{"number": 30, "name": "80s Action Movies", "shuffle": "shuffle", "content": ["Die Hard", "Lethal Weapon", "Predator"]}
+{"number": 1, "name": "Breaking Bad Marathon", "shuffle": "ordered", "content": ["Breaking Bad"]}
+{"number": 2, "name": "Crime TV Block", "shuffle": "block", "content": ["The Wire", "Ozark", "Justified"]}
+{"number": 3, "name": "80s Action Movies", "shuffle": "shuffle", "content": ["Die Hard", "Lethal Weapon", "Predator"]}
 ```
 
 Each line must have exactly these fields:
