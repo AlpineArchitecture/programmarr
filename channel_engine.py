@@ -152,14 +152,27 @@ def build_library_index(tunarr_url):
 
 # ── Title resolution ───────────────────────────────────────────────────────────
 
+def _playable_count(programs):
+    return sum(1 for p in programs if p.get("program", {}).get("state") != "missing")
+
+
 def resolve_title(title, movie_map, show_map):
     key = title.lower().strip()
-    if key in movie_map:
-        p = movie_map[key]
-        return {"type": "Movie", "title": title, "programs": [p]}
-    if key in show_map:
-        s = show_map[key]
-        return {"type": "TV", "title": s["title"], "showId": s["showId"], "programs": s["programs"]}
+    movie = movie_map.get(key)
+    show = show_map.get(key)
+    # Same exact title for a movie AND a series (e.g. the 2017 "Baywatch" film vs the
+    # 1989 series). A plain title can't disambiguate, so prefer whichever has more
+    # PLAYABLE programs — the same tie-break build_library_index uses for dupes. A real
+    # series (many episodes) beats a lone movie; an all-missing series yields to it.
+    if movie and show:
+        if _playable_count(show["programs"]) >= _playable_count([movie]):
+            movie = None
+        else:
+            show = None
+    if movie is not None:
+        return {"type": "Movie", "title": title, "programs": [movie]}
+    if show is not None:
+        return {"type": "TV", "title": show["title"], "showId": show["showId"], "programs": show["programs"]}
     return None
 
 
