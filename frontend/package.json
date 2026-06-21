@@ -1,6 +1,6 @@
 {
   "name": "programmarr",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,7 +11,6 @@
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
-    "@mantine/code-highlight": "^7.11.0",
     "@mantine/core": "^7.11.0",
     "@mantine/dropzone": "^7.11.0",
     "@mantine/hooks": "^7.11.0",

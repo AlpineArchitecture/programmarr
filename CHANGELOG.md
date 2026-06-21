@@ -4,6 +4,24 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.1] — 2026-06-20
+
+### Fixed
+
+- **Title-collision resolution.** When a library holds a movie and a TV series with the
+  exact same title (e.g. the 2017 *Baywatch* film and the 1989 series), `resolve_title`
+  picked the movie first and returned unconditionally — so a marathon channel could loop
+  a single film instead of the series. Resolution now prefers whichever copy has more
+  *playable* programs (the same tie-break `build_library_index` uses for duplicate shows):
+  a real series beats a lone movie; an all-missing series still yields to the movie.
+  Applies to every path that resolves titles (initial deploy, live re-resolve,
+  surgical/apply).
+
+### Changed
+
+- **Dependency cleanup.** Dropped unused `@mantine/code-highlight` (frontend) and
+  `aiofiles` (backend) — neither was imported anywhere.
+
 ## [0.7.0] — 2026-06-11
 
 ### Added
