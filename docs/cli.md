@@ -78,6 +78,8 @@ export.py  →  generate_no_ai.py   →  create.py  →  fetch_images.py  →  s
 
 ### Example: nightly no-AI rebuild via cron
 
+Save this as `rebuild.sh` in your install dir and `chmod +x rebuild.sh`:
+
 ```bash
 #!/usr/bin/env bash
 cd /opt/programmarr
@@ -121,6 +123,10 @@ Keys like the channel stream mode and the Tunarr group aren't in the setup wizar
 - **`channel_order`** — array of category keys controlling numbering order, e.g.
   `["marathon","tv_block","movie","franchise","specialty"]`. Omit for the default order. See
   [Channel Numbering](../README.md#channel-numbering).
+
+> **One Plex server or several?** The example above uses the single-server `plex_url` + `plex_token`
+> form (what the setup wizard writes). For multiple Plex servers, use a `plex_servers` array instead —
+> see [`config.json.example`](../config.json.example). Either form works.
 
 The full key list is in [`config.json.example`](../config.json.example) and the README's
 [Advanced Configuration](../README.md#advanced-configuration) table.
