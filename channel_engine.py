@@ -182,12 +182,26 @@ def _no_plex_source_error(tunarr_url):
         # Capability detection rather than a version gate: a missing endpoint is
         # the thing that actually breaks us, and it's directly observable —
         # guessing a minimum version number would be less accurate, not more.
-        if _endpoint_status(tunarr_url, "/api/media-sources") == 404:
+        status = _endpoint_status(tunarr_url, "/api/media-sources")
+        if status == 404:
             return ChannelEngineError(
                 "This Tunarr does not have the /api/media-sources endpoint, which "
                 "Programmarr needs to read your libraries. That endpoint arrived in "
                 "Tunarr 1.x, so this server is most likely too old — please update "
                 "Tunarr." + _version_suffix(tunarr_url)
+            )
+        if status in (401, 403):
+            # We know exactly what's wrong here, so don't make them check three
+            # things. Distinguish "you set no credentials" from "yours are wrong".
+            if _TUNARR_AUTH:
+                return ChannelEngineError(
+                    f"Tunarr rejected the username and password ({status}). Check "
+                    "tunarr_username / tunarr_password in Settings -> Connections."
+                )
+            return ChannelEngineError(
+                f"This Tunarr requires a username and password ({status}), and none "
+                "are configured. Set tunarr_username / tunarr_password in "
+                "Settings -> Connections."
             )
         return ChannelEngineError(
             "Could not read media sources from Tunarr — check that tunarr_url is "

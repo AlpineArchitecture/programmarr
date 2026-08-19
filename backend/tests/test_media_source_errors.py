@@ -179,3 +179,40 @@ def test_get_tunarr_version_reads_the_tunarr_field(monkeypatch):
 def test_get_tunarr_version_tolerates_junk(monkeypatch):
     monkeypatch.setattr(channel_engine, "api", lambda u, m, p, **k: "not-a-dict")
     assert channel_engine.get_tunarr_version("http://tunarr") is None
+
+
+# ── 401 from Tunarr: say which of the two auth problems it is ─────────────────
+
+def test_401_with_no_credentials_says_to_set_them(monkeypatch):
+    monkeypatch.setattr(channel_engine, "api", lambda *a, **k: None)
+    monkeypatch.setattr(channel_engine, "_endpoint_status", lambda u, p, timeout=10: 401)
+    channel_engine.set_tunarr_auth()
+
+    with pytest.raises(channel_engine.ChannelEngineError) as e:
+        channel_engine.build_library_index("http://tunarr")
+    msg = str(e.value)
+    assert "requires a username and password" in msg
+    assert "none are configured" in msg
+
+
+def test_401_with_credentials_says_they_are_wrong(monkeypatch):
+    """Different advice: they HAVE credentials, so the fix is to correct them."""
+    monkeypatch.setattr(channel_engine, "api", lambda *a, **k: None)
+    monkeypatch.setattr(channel_engine, "_endpoint_status", lambda u, p, timeout=10: 401)
+    channel_engine.set_tunarr_auth("admin", "wrong")
+    try:
+        with pytest.raises(channel_engine.ChannelEngineError) as e:
+            channel_engine.build_library_index("http://tunarr")
+        assert "rejected the username and password" in str(e.value)
+    finally:
+        channel_engine.set_tunarr_auth()
+
+
+def test_403_is_treated_the_same_as_401(monkeypatch):
+    monkeypatch.setattr(channel_engine, "api", lambda *a, **k: None)
+    monkeypatch.setattr(channel_engine, "_endpoint_status", lambda u, p, timeout=10: 403)
+    channel_engine.set_tunarr_auth()
+
+    with pytest.raises(channel_engine.ChannelEngineError) as e:
+        channel_engine.build_library_index("http://tunarr")
+    assert "403" in str(e.value)
