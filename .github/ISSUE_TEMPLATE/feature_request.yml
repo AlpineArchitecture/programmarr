@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest an idea
+labels: ["needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: >
+        Describe the situation you're in, not just the feature. Knowing the
+        underlying problem often turns up a simpler answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you've tried or considered instead?

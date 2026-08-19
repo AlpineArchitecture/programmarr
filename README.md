@@ -19,27 +19,53 @@ You **compose** the lineup in a **Planner**: pick the genres, decades, studios, 
 
 Channels can also be **self-maintaining**: mark one "live" and Programmarr re-checks it against your library on a schedule and patches it in place — new episodes and new franchise films appear on their own, no redeploy.
 
-**Requires:** [Tunarr](https://github.com/chrisbenincasa/tunarr) + Plex
+**Requires:** [Tunarr](https://github.com/chrisbenincasa/tunarr) **1.x** + **Plex**
+
+> **Plex only.** Programmarr reads your library metadata from the Plex API, so it needs a
+> Plex-backed source in Tunarr. Jellyfin and Emby aren't supported yet — if a Tunarr has no
+> Plex source, Programmarr will tell you so rather than failing mysteriously.
+> Interested in Jellyfin support? Say so on
+> [the tracking issue](https://github.com/AlpineArchitecture/programmarr/issues/36) — demand decides priority.
 
 ---
 
 ## Quick Start
 
-### 1. Pull and start
+### 1. Create `docker-compose.yml`
+
+```yaml
+services:
+  programmarr:
+    image: ghcr.io/alpinearchitecture/programmarr:latest
+    container_name: programmarr
+    restart: unless-stopped
+    ports:
+      - "7979:7979"
+    volumes:
+      - ./data:/data
+```
+
+### 2. Start it
 
 ```bash
 docker compose up -d
 ```
 
-That's it — the image is pre-built on [GHCR](https://github.com/AlpineArchitecture/programmarr/pkgs/container/programmarr). No local build step needed.
+That's it — the image is pre-built on [GHCR](https://github.com/AlpineArchitecture/programmarr/pkgs/container/programmarr). No local build step needed, and nothing to clone.
 
-### 2. Open the UI
+### 3. Open the UI
 
 ```
 http://<your-server-ip>:7979
 ```
 
-First run shows an onboarding wizard — create a login, enter your Tunarr and Plex URLs, done.
+First run shows an onboarding wizard — create a login, enter your Tunarr and Plex URLs, and hit
+**Test connections** to confirm Programmarr can actually reach both before you go any further.
+
+> **Heads up on your first deploy.** Programmarr's default deploy mode replaces the channels it
+> manages. If you already have a hand-built Tunarr lineup, use **Add/Edit** mode rather than
+> **Nuke**. Either way, Programmarr writes a `tunarr_backup_*.json` snapshot into your data
+> directory before deleting anything.
 
 ### TrueNAS
 

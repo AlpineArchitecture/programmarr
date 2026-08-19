@@ -9,3 +9,4 @@ Start at the [project README](../README.md) for install + quick start. These doc
 | [live-channels-design.md](live-channels-design.md) | How auto-updating "live" channels work — scheduler, in-place updates, rationale. |
 | [tunarr-commercials-findings.md](tunarr-commercials-findings.md) | What does and doesn't work for commercials/filler in Tunarr (QSV mid-roll caveat). |
 | [ideas.md](ideas.md) | Planned/unbuilt ideas — not yet in the product. |
+| [archive/](archive/) | Completed build plans, kept for context. Historical — not current instructions. |

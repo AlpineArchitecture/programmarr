@@ -1,0 +1,93 @@
+name: Bug report
+description: Something isn't working
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this.
+
+        **Most issues come down to versions or connection settings**, so the first
+        few fields matter more than they look. You can find the Tunarr version on
+        Programmarr's Dashboard, next to the Tunarr connection status.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See error
+    validations:
+      required: true
+
+  - type: input
+    id: programmarr-version
+    attributes:
+      label: Programmarr version
+      description: Shown in the bottom-left of the sidebar (e.g. 0.8.0)
+    validations:
+      required: true
+
+  - type: input
+    id: tunarr-version
+    attributes:
+      label: Tunarr version
+      description: Shown on the Programmarr Dashboard next to the Tunarr status
+    validations:
+      required: true
+
+  - type: dropdown
+    id: media-server
+    attributes:
+      label: What is your Tunarr media source?
+      description: Programmarr currently requires Plex.
+      options:
+        - Plex
+        - Jellyfin
+        - Emby
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: How are you running Programmarr?
+      options:
+        - Docker (docker compose)
+        - TrueNAS
+        - Unraid
+        - Local / development
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+        The inline terminal output from the failing step, or a file from the Logs
+        page. Please redact your Plex token and any server addresses you'd rather
+        not share.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I've confirmed Tunarr itself is reachable and working
+          required: true
+        - label: I've removed my Plex token and any private URLs from the logs above
+          required: true

@@ -55,9 +55,9 @@ data/             Bind-mounted volume — config.json, channels.json, plex_libra
 
 **Key design decisions (non-obvious — don't undo these):**
 - Pipeline scripts (`export.py`, `create.py`, etc.) run as subprocesses with `cwd=DATA_DIR` so their relative file opens work unmodified.
-- SSE (Server-Sent Events) streams subprocess stdout line-by-line to the browser inline terminal.
+- SSE (Server-Sent Events) streams subprocess stdout line-by-line to the browser inline terminal. `_stream` **must always end in a `done` event** — the UI spins until it sees one, so a failed subprocess launch, a dead pipe, or an unwritable log each yield `done` (with `returncode: -1` for the first two) rather than killing the generator mid-response.
 - Auth middleware reads `config.json` on every request — no restart needed to enable/disable auth.
-- Onboarding shows automatically when `config_status.configured` is false (no Tunarr/Plex/token set).
+- Onboarding shows automatically when `config_status.configured` is false (no Tunarr/Plex/token set). It offers **Test connections** (`POST /api/test-connection`), which validates the typed-but-unsaved values — saving alone never contacts Tunarr or Plex, so without this a typo'd URL produced a green "Setup complete". A failed test warns but still lets the user continue ("Continue anyway") — never trap someone behind a probe.
 - **Dashboard** shows an EPG guide grid (fetched via `GET /api/guide` → Tunarr XMLTV). Clicking a channel navigates to its editor.
 - **Channels page** lists channels from the live Tunarr API (`GET /api/tunarr/channels`); clicking a row fetches the full `channels.json` entry and opens the editor. Channels in Tunarr with no `channels.json` entry show as **"Not managed by Programmarr"** (read-only orphans).
 - **Save and Apply** (`POST /api/channels/{number}/apply`) saves a channel edit to `channels.json` and pushes it to Tunarr in place — preserving the Tunarr id and Plex DVR mapping. This is the Channels-page equivalent of the scheduler's per-channel update, but available for any channel (not just live ones).
@@ -90,10 +90,14 @@ Open **http://localhost:5173** (not 7979). Vite serves the SPA with HMR and prox
 
 **Parity loop — Docker (run before shipping):**
 ```powershell
-docker compose build && docker compose up    # localhost:7979
+docker build -t programmarr:local .
+docker run --rm -p 7979:7979 -v ${PWD}/data:/data programmarr:local   # localhost:7979
 ```
-`docker-compose.yml` mounts `./data` as a volume so config/channels/csv persist. Rebuild to
-pick up code changes. `backend/static/` is **gitignored** — the Dockerfile builds the frontend
+**Not `docker compose build`** — the committed `docker-compose.yml` is the *user-facing* file
+(it pulls `ghcr.io/.../programmarr:latest` and has no `build:` section), so `compose build`
+reports "No services to build" and silently tests nothing. It matches what README tells users
+to paste; keep it that way. `./data` is mounted as a volume so config/channels/csv persist.
+Rebuild to pick up code changes. `backend/static/` is **gitignored** — the Dockerfile builds the frontend
 inside the image (`npm run build` during `docker build`); **never commit files under `backend/static/`.**
 
 **Tests:**
@@ -139,7 +143,8 @@ See `config.json.example` for the full shape. Keys:
 - `tmdb_api_key` — optional; used by `fetch_images.py` for verified TMDB logo lookups.
   Without it, every channel gets a generated badge instead (icons still work). Free key at
   https://www.themoviedb.org/settings/api
-- `auth_username` / `auth_password` — optional HTTP Basic Auth. **Both blank = auth disabled.** When set, every backend request requires them.
+- `auth_username` / `auth_password` — optional HTTP Basic Auth **for Programmarr itself**. **Both blank = auth disabled.** When set, every backend request requires them.
+- `tunarr_username` / `tunarr_password` — optional credentials for **Tunarr's own** basic auth (Tunarr #1865). Blank = Tunarr is open. Editable in Settings → Connections; the password masks like other secrets. Every Tunarr call in every module goes through `channel_engine.tunarr_headers()` — **never hand-roll headers for a Tunarr request**, or auth works in some code paths and not others (`test_tunarr_auth.py` guards this).
 - `recipes_enabled` (bool, default `false`), `recipe_interval_hours` (number, default `12`) — live-channel scheduler (see Live Channels).
 - `tunarr_channel_group` (string, optional) — Tunarr `groupTitle` for all created channels (default `"tunarr"`).
 - `tunarr_stream_mode` (string, optional) — Tunarr `streamMode`, lowercase enum: `hls`|`hls_slower`|`mpegts`|`hls_direct`|`hls_direct_v2` (default `"hls"`). Applied by `create.py` at channel creation; **not** exposed in the UI.
@@ -159,8 +164,8 @@ and the code — don't restate them here.
 - **`generate_no_ai.py`** — builds a starter `channels.json` from CSV metadata (decade + genre movie channels, 50+ episode TV marathons; placeholders for franchise/specialty). Numbers channels sequentially using `channel_blocks.assign_numbers` + `channel_blocks.resolve_order`; `--order KEY,KEY,…` overrides category order; `--start N` sets the first number.
 - **`channel_blocks.py`** — shared, **pure, importable** channel-numbering logic (no `config.json`/argv). `assign_numbers(order, counts, start)` packs categories tight sequentially; `resolve_order(configured)` validates/fills the configured order against `CANONICAL_ORDER`. Single source of truth for compose, the LLM prompt, and `generate_no_ai`. **Must stay in the Dockerfile `COPY` line.**
 - **`generate_from_collections.py`** — one channel per Plex collection via `{"collection":"Name"}`. Manages the collection block (default ch 80+): keeps everything below `--base`, regenerates from `--base` up. Re-run any time Kometa changes collections.
-- **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**. `build_library_index` indexes **all** enabled movie and shows libraries (not just the first — a Plex server can expose several, e.g. `TV Shows` + `Cartoons`), and indexes a show that appears in more than one library **once**, preferring the copy with the most playable (non-`missing`) episodes so a dead duplicate can't shadow the real one or inflate the live-diff into churn.
-- **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels.
+- **`channel_engine.py`** — shared, **pure, importable** resolution engine (no `config.json`/argv/`sys.exit`), so it's safe to import into the long-lived FastAPI process. Holds the resolution helpers, franchise `match_titles` (word-boundary), and the in-place live-channel updaters (`read_channel_programming`, `update_channel_in_place`). Imported by `create.py` at runtime and in-process by `recipes_router.py` — **must stay in the Dockerfile `COPY` line**. `build_library_index` indexes **all** enabled movie and shows libraries (not just the first — a Plex server can expose several, e.g. `TV Shows` + `Cartoons`), and indexes a show that appears in more than one library **once**, preferring the copy with the most playable (non-`missing`) episodes so a dead duplicate can't shadow the real one or inflate the live-diff into churn. Tunarr auth lives here as module state (`set_tunarr_auth` / `set_tunarr_auth_from_config` / `tunarr_headers`) rather than a parameter on ~20 functions — callers pass the values in, so the no-`config.json` rule still holds; **every** caller that loads a config must call `set_tunarr_auth_from_config(cfg)` before hitting Tunarr. `build_library_index` distinguishes a **failed** library fetch from an **empty** one: all libraries failing raises rather than returning an empty index (which would otherwise deploy channels with no content); a partial failure warns and continues.
+- **`create.py`** — thin CLI wrapper around `channel_engine`. Reads `channels.json`, indexes the Tunarr library (case-insensitive exact title match), and deploys (delete-then-create; `--from N` scopes, `--protect N1,N2` preserves specific channels). Builds 30-day rolling random schedules (no dead air). The delete/recreate path is **initial-deploy only** — never for live channels. Before any destructive delete it writes a timestamped `tunarr_backup_*.json` (channel + raw `/programming` payload, last 10 kept) — the only way back from a wipe of a lineup Programmarr didn't create. Probe runs never write one.
 - **`fetch_images.py`** — sets every channel's Tunarr icon. Verified TMDB logos for
   solo-title/marathon/franchise/network/studio channels (the result's name must match the
   query after normalization — never `results[0]`); generated badge art for every other kind
