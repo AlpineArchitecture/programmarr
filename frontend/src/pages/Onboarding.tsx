@@ -4,11 +4,12 @@ import {
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
-  IconArrowDown, IconArrowUp, IconBroadcast, IconCheck,
+  IconAlertTriangle, IconArrowDown, IconArrowUp, IconBroadcast, IconCheck,
   IconLock, IconPlugConnected, IconSortAscending, IconArrowRight,
 } from '@tabler/icons-react';
 import { useState } from 'react';
 import { api } from '../api/client';
+import type { ConnStatus } from '../api/client';
 
 interface Props {
   onComplete: () => void;
@@ -90,6 +91,34 @@ export default function Onboarding({ onComplete }: Props) {
   const [plexUrl, setPlexUrl] = useState('http://');
   const [plexToken, setPlexToken] = useState('');
   const [tmdbKey, setTmdbKey] = useState('');
+  const [tunarrUser, setTunarrUser] = useState('');
+  const [tunarrPass, setTunarrPass] = useState('');
+
+  // Connection test — onboarding used to save without ever contacting Tunarr or
+  // Plex, so a typo produced a green "Setup complete" and a broken install.
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<
+    { tunarr?: ConnStatus; plex?: ConnStatus } | null
+  >(null);
+  const testPassed = !!testResult?.tunarr?.ok && !!testResult?.plex?.ok;
+
+  async function testConnections() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult(await api.testConnection({
+        tunarr_url: tunarrUrl.trim(),
+        tunarr_username: tunarrUser.trim(),
+        tunarr_password: tunarrPass,
+        plex_url: plexUrl.trim(),
+        plex_token: plexToken.trim(),
+      }));
+    } catch (e: any) {
+      setTestResult({ tunarr: { ok: false, url: '', error: e.message } });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   // Step 2 — Category order
   const [channelOrder, setChannelOrder] = useState<string[]>(CANONICAL_ORDER);
@@ -106,6 +135,8 @@ export default function Onboarding({ onComplete }: Props) {
         channel_order: channelOrder,
       };
       if (tmdbKey.trim()) config.tmdb_api_key = tmdbKey.trim();
+      if (tunarrUser.trim()) config.tunarr_username = tunarrUser.trim();
+      if (tunarrPass) config.tunarr_password = tunarrPass;
       if (username.trim() && password) {
         config.auth_username = username.trim();
         config.auth_password = password;
@@ -248,20 +279,68 @@ export default function Onboarding({ onComplete }: Props) {
                 value={tmdbKey}
                 onChange={(e) => setTmdbKey(e.currentTarget.value)}
               />
+              <TextInput
+                label="Tunarr Username"
+                description="Optional — only if you turned on Tunarr's own password protection"
+                placeholder="Leave blank if Tunarr has no login"
+                value={tunarrUser}
+                onChange={(e) => setTunarrUser(e.currentTarget.value)}
+              />
+              <PasswordInput
+                label="Tunarr Password"
+                placeholder="Leave blank if Tunarr has no login"
+                value={tunarrPass}
+                onChange={(e) => setTunarrPass(e.currentTarget.value)}
+              />
 
               <Divider />
+
+              <Button
+                variant="light"
+                color="orange"
+                loading={testing}
+                disabled={!tunarrUrl.trim() || !plexUrl.trim() || !plexToken.trim()}
+                onClick={testConnections}
+              >
+                Test connections
+              </Button>
+
+              {testResult && (
+                <Stack gap="xs">
+                  {(['tunarr', 'plex'] as const).map((k) => {
+                    const r = testResult[k];
+                    if (!r) return null;
+                    return (
+                      <Alert
+                        key={k}
+                        color={r.ok ? 'green' : 'red'}
+                        icon={r.ok ? <IconCheck size={16} /> : <IconAlertTriangle size={16} />}
+                        p="xs"
+                      >
+                        <Text size="sm" fw={600}>
+                          {k === 'tunarr' ? 'Tunarr' : 'Plex'}: {r.ok ? 'Connected' : 'Failed'}
+                        </Text>
+                        {!r.ok && r.error && (
+                          <Text size="xs" c="dimmed">{r.error}</Text>
+                        )}
+                      </Alert>
+                    );
+                  })}
+                </Stack>
+              )}
 
               <Group justify="space-between">
                 <Button variant="subtle" color="gray" onClick={() => setStep(0)}>
                   Back
                 </Button>
                 <Button
-                  color="orange"
+                  color={testResult && !testPassed ? 'gray' : 'orange'}
+                  variant={testResult && !testPassed ? 'light' : 'filled'}
                   rightSection={<IconArrowRight size={16} />}
                   disabled={!tunarrUrl.trim() || !plexUrl.trim() || !plexToken.trim()}
                   onClick={() => setStep(2)}
                 >
-                  Next
+                  {testResult && !testPassed ? 'Continue anyway' : 'Next'}
                 </Button>
               </Group>
             </Stack>

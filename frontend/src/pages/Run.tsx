@@ -1439,7 +1439,20 @@ function PlannerStep({ planner, setPlanner, setup, aiExtras, setAiExtras, onDone
           })()}
           {(f.marathons?.length ?? 0) === 0 && (f.tv_genres?.length ?? 0) === 0 &&
            (f.networks?.length ?? 0) === 0 && programmingBlocks.length === 0 && !tvmazeScanRunning && (
-            <Text size="sm" c="dimmed">No TV channels available — run Export to scan your library.</Text>
+            // Three genuinely different situations that all used to render the same
+            // "run Export" line — misleading for anyone who HAS exported.
+            (f.tv_shows ?? 0) === 0 ? (
+              <Text size="sm" c="dimmed">
+                No TV shows found in your library, so there are no TV channels to build.
+                Everything you need is in the Movies section below.
+              </Text>
+            ) : (
+              <Text size="sm" c="dimmed">
+                Found {f.tv_shows} TV {f.tv_shows === 1 ? 'show' : 'shows'}, but none qualify yet:
+                marathons need 50+ episodes, and genre blocks, networks and classic blocks each
+                need at least 3 matching shows.
+              </Text>
+            )
           )}
         </Stack>
       </AccordionSection>

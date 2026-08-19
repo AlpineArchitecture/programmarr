@@ -112,6 +112,7 @@ export default function Settings() {
   const [values, setValues] = useState({
     tunarr_url: '', plex_url: '', plex_token: '',
     tmdb_api_key: '', auth_username: '', auth_password: '',
+    tunarr_username: '', tunarr_password: '',
     update_check_enabled: true,
   });
   const [saving, setSaving] = useState(false);
@@ -134,6 +135,8 @@ export default function Settings() {
         tmdb_api_key:  cfg.tmdb_api_key  || '',
         auth_username: cfg.auth_username || '',
         auth_password: cfg.auth_password || '',
+        tunarr_username: cfg.tunarr_username || '',
+        tunarr_password: cfg.tunarr_password || '',
         update_check_enabled: cfg.update_check_enabled !== false,
       });
       const stored: string[] = cfg.channel_order || [];
@@ -199,6 +202,19 @@ export default function Settings() {
             placeholder="http://192.168.1.10:8000"
             value={values.tunarr_url}
             onChange={(e) => set('tunarr_url', e.currentTarget.value)}
+          />
+          <TextInput
+            label="Tunarr Username (optional)"
+            description="Only if you enabled Tunarr's own basic auth. Leave blank if your Tunarr is open."
+            placeholder="Leave blank if Tunarr has no auth"
+            value={values.tunarr_username}
+            onChange={(e) => set('tunarr_username', e.currentTarget.value)}
+          />
+          <PasswordInput
+            label="Tunarr Password (optional)"
+            placeholder={isMasked(values.tunarr_password) ? 'Password saved — enter new value to change' : "Leave blank if Tunarr has no auth"}
+            value={isMasked(values.tunarr_password) ? '' : values.tunarr_password}
+            onChange={(e) => set('tunarr_password', e.currentTarget.value || MASK)}
           />
           <TextInput
             label="Your Plex URL"

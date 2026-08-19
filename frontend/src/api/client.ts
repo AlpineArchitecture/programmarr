@@ -18,6 +18,15 @@ export const api = {
 
   getStatus: () =>
     req<{ tunarr: ConnStatus; plex: ConnStatus }>('/status'),
+  // Tests credentials the user has typed but not yet saved — onboarding needs to
+  // validate before writing, or a typo'd URL produces a green "Setup complete".
+  testConnection: (data: {
+    tunarr_url?: string; tunarr_username?: string; tunarr_password?: string;
+    plex_url?: string; plex_token?: string;
+  }) =>
+    req<{ tunarr?: ConnStatus; plex?: ConnStatus }>('/test-connection', {
+      method: 'POST', body: JSON.stringify(data),
+    }),
   updateCheck: (current: string) =>
     req<UpdateInfo>(`/update-check?current=${encodeURIComponent(current)}`),
   getTunarrChannels: () => req<TunarrChannel[]>('/tunarr/channels'),
