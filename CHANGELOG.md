@@ -4,6 +4,85 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] — 2026-08-19
+
+Hardening release ahead of going public. Programmarr had only ever run against its
+author's Plex and Tunarr; this release is the result of auditing it for everything that
+breaks, misleads, or silently does nothing on *somebody else's* setup.
+
+### Added
+
+- **Tunarr basic auth support.** Tunarr gained optional HTTP basic auth on its API;
+  Programmarr sent no credentials at all, so a locked-down Tunarr failed everywhere.
+  New `tunarr_username` / `tunarr_password` config keys, editable in
+  Settings → Connections (and in onboarding). Every Tunarr call in every module now
+  goes through one shared header builder, so enabling auth can't half-work.
+- **Test connections in onboarding** (`POST /api/test-connection`). Saving config never
+  contacted Tunarr or Plex, so a typo'd URL produced a green "Setup complete" and a
+  broken install. The wizard now validates what you typed *before* writing it. A failed
+  test warns but still lets you continue — it informs, it doesn't gatekeep.
+- **Pre-delete lineup backups.** Deploy can delete Tunarr channels, which is
+  irreversible. Programmarr now writes a gzipped snapshot of everything it's about to
+  remove — each channel plus its full programming — to `tunarr_backup_*.json.gz` in your
+  data directory before the first delete. The 3 most recent are kept; dry runs write
+  nothing. See the new **Backups** section in the README.
+- **Tunarr version reporting.** The Dashboard's connection status now includes Tunarr's
+  self-reported version, so bug reports can state it without digging.
+- **Issue templates and Discussions**, so bug reports arrive with the version and log
+  information needed to actually act on them.
+
+### Fixed
+
+- **Channel numbering order was ignored by the AI path.** `PROMPT.md` had been rewritten
+  to a numbered list while the code still matched the old wording, so the function that
+  rewrites the numbering scheme was silently doing nothing — the LLM always received the
+  *default* category order regardless of Settings → Channel Numbering. A non-match now
+  warns loudly instead of passing the content through unchanged.
+- **Pre-1970 films were invisible to the decade facet.** Decade buckets started at 1970,
+  so a classic-film collection contributed nothing at all. Buckets now run from the
+  1920s. (On the author's library this made 132 previously-unreachable films eligible for
+  decade channels.) New labels are spelled in full — "1950s", not "50s", which would be
+  ambiguous beside "2020s". Existing 70s/80s/90s labels are unchanged, so current channel
+  names and saved planner state keep matching.
+- **A failed library fetch looked like an empty library.** Every API error collapsed to
+  "no results", so an outage reported "Indexed 0 movies" and would deploy channels with
+  nothing on them. Failures are now distinguished from genuinely empty libraries: all
+  libraries failing raises, a partial failure warns and continues.
+- **Misleading errors for unsupported setups.** "No Plex source found in Tunarr" covered
+  four unrelated situations and sent Jellyfin users off debugging Plex. Now each is named
+  specifically: an unreachable Tunarr, a Tunarr with no media sources, a non-Plex source
+  ("Found: jellyfin"), a Tunarr too old to have the required endpoint, and — separately —
+  credentials that are missing versus credentials that are wrong.
+- **A broken pipeline run hung the UI forever.** The progress stream ends on a completion
+  event; anything failing after the response started (a subprocess that won't launch, a
+  dead pipe, an unwritable log) killed the stream with no error and no exit code, leaving
+  a spinner. Every failure path now terminates properly.
+- **An empty library picker with no explanation.** A Plex failure while listing libraries
+  was swallowed by a comment claiming the UI showed the error elsewhere. It didn't.
+- **A wrong Plex token could pass the connection test.** Many self-hosted Plex servers
+  allow unauthenticated access on the local network, so *every* local request succeeds —
+  even with no token. That result is now flagged as unverified rather than reported as a
+  validated token.
+- **Empty Planner sections now say why.** "No TV channels available — run Export" was
+  shown for three different situations, including to users who had already exported. A
+  movies-only library is now told plainly there are no TV channels to build; a library
+  with shows that don't qualify gets the actual thresholds named.
+
+### Changed
+
+- Deploy-time backups are gzipped and retention is 3 rather than 10. Measured on a real
+  156-channel server: 151 MB raw, 12 MB compressed — at the old retention that was 1.5 GB
+  quietly accumulating in a data directory.
+- README quick start now includes the compose file inline; previously only the TrueNAS
+  section had one, so anyone who hadn't cloned the repo had nothing to run. Requirements
+  now state Tunarr 1.x + Plex explicitly, and that Jellyfin/Emby are not supported.
+
+### Notes
+
+Plex remains required. If you'd like Jellyfin or Emby support, add a reaction to
+[#36](https://github.com/AlpineArchitecture/programmarr/issues/36) — demand decides
+priority.
+
 ## [0.7.1] — 2026-06-20
 
 ### Fixed
