@@ -313,7 +313,7 @@ export default function Onboarding({ onComplete }: Props) {
                     return (
                       <Alert
                         key={k}
-                        color={r.ok ? 'green' : 'red'}
+                        color={!r.ok ? 'red' : r.note ? 'yellow' : 'green'}
                         icon={r.ok ? <IconCheck size={16} /> : <IconAlertTriangle size={16} />}
                         p="xs"
                       >
@@ -322,6 +322,9 @@ export default function Onboarding({ onComplete }: Props) {
                         </Text>
                         {!r.ok && r.error && (
                           <Text size="xs" c="dimmed">{r.error}</Text>
+                        )}
+                        {r.ok && r.note && (
+                          <Text size="xs" c="dimmed">{r.note}</Text>
                         )}
                       </Alert>
                     );

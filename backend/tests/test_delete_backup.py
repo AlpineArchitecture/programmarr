@@ -7,6 +7,7 @@ including each channel's raw programming payload, not just program ids — befor
 the first DELETE goes out. Probe runs must never write one.
 """
 
+import gzip
 import json
 import sys
 from pathlib import Path
@@ -48,10 +49,11 @@ def test_backup_written_before_delete(tmp_path, monkeypatch):
 
     create.delete_channels("http://tunarr", probe=False)
 
-    backups = list(tmp_path.glob("tunarr_backup_*.json"))
+    backups = list(tmp_path.glob("tunarr_backup_*.json.gz"))
     assert len(backups) == 1, "a destructive delete must leave exactly one snapshot"
 
-    data = json.loads(backups[0].read_text(encoding="utf-8"))
+    with gzip.open(backups[0], "rt", encoding="utf-8") as fh:
+        data = json.load(fh)
     assert len(data["channels"]) == 2
     names = {c["channel"]["name"] for c in data["channels"]}
     assert names == {"Sitcom Marathon", "80s Action"}
@@ -71,7 +73,7 @@ def test_probe_writes_no_backup(tmp_path, monkeypatch):
 
     create.delete_channels("http://tunarr", probe=True)
 
-    assert not list(tmp_path.glob("tunarr_backup_*.json"))
+    assert not list(tmp_path.glob("tunarr_backup_*.json.gz"))
     assert not [c for c in calls if c[0] == "DELETE"]
 
 
@@ -96,9 +98,9 @@ def test_rotation_keeps_last_n(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(create, "BACKUP_KEEP", 3)
     for i in range(5):
-        (tmp_path / f"tunarr_backup_2020010{i}T000000Z.json").write_text("{}", encoding="utf-8")
+        (tmp_path / f"tunarr_backup_2020010{i}T000000Z.json.gz").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(create, "api", fake_api([]))
 
     create.backup_channels("http://tunarr", CHANNELS)
 
-    assert len(list(tmp_path.glob("tunarr_backup_*.json"))) == 3
+    assert len(list(tmp_path.glob("tunarr_backup_*.json.gz"))) == 3

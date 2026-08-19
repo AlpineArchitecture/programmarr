@@ -10,7 +10,7 @@ change; don't restate it back into `CLAUDE.md`.
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/status` | Connection status: `{tunarr:{ok,url,error?}, plex:{ok,url,error?}}` for the **saved** config. An HTTP error is `ok:false` — a 401 from an auth-protected Tunarr is a failure, not a healthy server |
-| POST | `/api/test-connection` | Body `{tunarr_url, tunarr_username, tunarr_password, plex_url, plex_token}`. Tests credentials the user has typed but has **not saved** — this is what lets Onboarding refuse to green-light a typo. Only the sides supplied are tested. A secret sent as the mask falls back to the stored value. Never leaves the tested credential applied to the process |
+| POST | `/api/test-connection` | Body `{tunarr_url, tunarr_username, tunarr_password, plex_url, plex_token}`. Tests credentials the user has typed but has **not saved** — this is what lets Onboarding refuse to green-light a typo. Only the sides supplied are tested. A secret sent as the mask falls back to the stored value. Never leaves the tested credential applied to the process. Plex results may carry `token_unverified: true` + a `note` when the server allows unauthenticated local access — the library is readable but the token itself was not proven |
 | GET | `/api/guide` | Fetch and parse Tunarr's XMLTV feed. Returns `{channels:[{number,name,icon?}], programmes:[{number,start,stop,title,episode?}], error?}`. Channels sorted by number; timestamps as ISO 8601. Never throws — returns `error` field on failure. |
 | GET | `/api/tunarr/channels` | Live channel list from Tunarr: `[{number,name,id?}]` |
 | GET | `/api/tunarr/filler-lists` | Filler lists in Tunarr: `[{id,name,contentCount}]` — powers the Commercials picker |

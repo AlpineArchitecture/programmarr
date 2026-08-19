@@ -116,9 +116,25 @@ def check_plex(url: str, token: str) -> dict:
         return {"ok": False, "error": "No Plex URL given"}
     if not token:
         return {"ok": False, "error": "No Plex token given"}
-    # /library/sections proves the token works AND that there's a library to read,
-    # which is what Programmarr actually needs — a bare / accepts any token.
+    # /library/sections proves we can read the library, which is what Programmarr
+    # actually needs — a bare / accepts any token.
     result = {**probe(f"{url}/library/sections?X-Plex-Token={token}"), "url": url}
+
+    if result.get("ok"):
+        # Many self-hosted Plex servers have "Allow unauthenticated access on the
+        # local network" on, which makes EVERY local request succeed — including
+        # one with a garbage token. Reporting that as "token valid" would be a
+        # false green. One extra request tells us whether the token was actually
+        # the reason we got in.
+        no_token = probe(f"{url}/library/sections")
+        if no_token.get("ok"):
+            result["token_unverified"] = True
+            result["note"] = (
+                "Your Plex allows unauthenticated access from this network, so the "
+                "token itself could not be verified. Programmarr can read your "
+                "library either way — but double-check the token if you later "
+                "restrict local access."
+            )
     return result
 
 

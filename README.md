@@ -64,8 +64,8 @@ First run shows an onboarding wizard — create a login, enter your Tunarr and P
 
 > **Heads up on your first deploy.** Programmarr's default deploy mode replaces the channels it
 > manages. If you already have a hand-built Tunarr lineup, use **Add/Edit** mode rather than
-> **Nuke**. Either way, Programmarr writes a `tunarr_backup_*.json` snapshot into your data
-> directory before deleting anything.
+> **Nuke**. Either way, Programmarr snapshots your existing lineup before deleting anything —
+> see [Backups](#backups) below.
 
 ### TrueNAS
 
@@ -225,6 +225,32 @@ It ships **off**. Turn it on in **Settings → Live Channels**, flip the **"Auto
 - **Plex DVR sync** — maps new channels into the Plex Live TV guide automatically
 - **Channel editor** — edit names, numbers, shuffle mode, and content lists in the browser; mark channels live and build franchise auto-match rules
 - **Optional basic auth** — set a username/password if you expose the UI outside your LAN
+
+---
+
+## Backups
+
+Before Programmarr deletes any Tunarr channel, it writes a compressed snapshot of everything
+it's about to remove — each channel plus its full programming — to your data directory:
+
+```
+data/tunarr_backup_20260819T195358Z.json.gz
+```
+
+On a 156-channel server that's about 12 MB and takes ~20 seconds. The **3 most recent** are
+kept; older ones are removed automatically. Probe/dry runs never write one.
+
+**This is a safety net, not a feature** — there's no restore button yet. If you need to go
+back, the file is plain JSON once unzipped, containing everything Tunarr's API needs:
+
+```bash
+gunzip -c data/tunarr_backup_20260819T195358Z.json.gz > lineup.json
+```
+
+Each entry has the original `channel` object (including its Tunarr `id`) and the raw
+`programming` payload. If you ever need to recover a lineup, open an
+[issue](https://github.com/AlpineArchitecture/programmarr/issues) with that file's structure
+and I'll help — and if it happens to anyone, a proper restore command moves to the top of the list.
 
 ---
 

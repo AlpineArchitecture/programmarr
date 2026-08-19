@@ -115,3 +115,39 @@ def test_plex_check_uses_library_sections(monkeypatch):
 
     sr.check_plex("http://plex:32400", "tok")
     assert "/library/sections" in seen["url"]
+
+
+# ── LAN-permissive Plex: a green result that can't vouch for the token ────────
+
+def test_lan_permissive_plex_flags_unverified_token(monkeypatch):
+    """Many self-hosted Plex servers allow unauthenticated local access, so EVERY
+    local request succeeds — including one with a garbage token. Found on a real
+    server: check_plex returned ok for the string 'garbage'. Reporting that as a
+    validated token is a false green."""
+    monkeypatch.setattr(sr.urllib.request, "urlopen", urlopen_returning(200))
+
+    out = sr.check_plex("http://plex:32400", "garbage")
+    assert out["ok"] is True          # Programmarr CAN read the library
+    assert out["token_unverified"] is True
+    assert "could not be verified" in out["note"]
+
+
+def test_locked_down_plex_does_verify_the_token(monkeypatch):
+    """When Plex actually enforces the token, a successful call means something —
+    no caveat should be attached."""
+    def _f(req, timeout=None):
+        if "X-Plex-Token" not in req.full_url:
+            raise http_error(401)
+        return FakeResp(200)
+    monkeypatch.setattr(sr.urllib.request, "urlopen", _f)
+
+    out = sr.check_plex("http://plex:32400", "good-token")
+    assert out["ok"] is True
+    assert "token_unverified" not in out
+    assert "note" not in out
+
+
+def test_bad_token_on_a_locked_down_plex_fails(monkeypatch):
+    monkeypatch.setattr(sr.urllib.request, "urlopen", urlopen_raising(http_error(401)))
+    out = sr.check_plex("http://plex:32400", "bad")
+    assert out["ok"] is False

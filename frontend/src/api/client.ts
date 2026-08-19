@@ -172,7 +172,14 @@ export const api = {
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface PlexServer { name: string; url: string; token: string }
-export interface ConnStatus { ok: boolean; url: string; error?: string }
+export interface ConnStatus {
+  ok: boolean; url: string; error?: string;
+  version?: string | null;
+  // Set when Plex let us in WITHOUT a token (LAN-permissive server), so a
+  // green result does not actually vouch for the token.
+  token_unverified?: boolean;
+  note?: string;
+}
 export interface UpdateInfo {
   enabled: boolean;
   update_available?: boolean;

@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import glob
+import gzip
 import json
 import os
 import sys
@@ -52,7 +53,12 @@ def load_config():
 
 # ── Destructive-op backup ──────────────────────────────────────────────────────
 
-BACKUP_KEEP = 10
+# Measured on a real 156-channel Tunarr: the uncompressed snapshot was 151 MB
+# (full program metadata for ~1000 programs per channel). Ten of those would put
+# 1.5 GB in a user's data directory, so backups are gzipped (10x, ~1.4s) and we
+# keep fewer of them. 3 x ~15 MB is a safety net; 10 x 151 MB is a disk problem.
+BACKUP_KEEP = 3
+BACKUP_GLOB = "tunarr_backup_*.json.gz"
 
 
 def backup_channels(tunarr_url, channels):
@@ -77,21 +83,23 @@ def backup_channels(tunarr_url, channels):
             snapshot.append(entry)
 
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        path = f"tunarr_backup_{ts}.json"
-        with open(path, "w", encoding="utf-8") as f:
+        path = f"tunarr_backup_{ts}.json.gz"
+        # No indent: this file is read by a restore, not by a human, and pretty
+        # printing 150 MB of JSON buys nothing.
+        with gzip.open(path, "wt", encoding="utf-8") as f:
             json.dump({"saved_at": ts, "tunarr_url": tunarr_url,
-                       "channels": snapshot}, f, indent=2)
+                       "channels": snapshot}, f)
 
         # ponytail: keep the last N by filename (timestamps sort lexically); no
         # rotation config until someone asks for one.
-        old = sorted(glob.glob("tunarr_backup_*.json"))[:-BACKUP_KEEP]
-        for stale in old:
+        for stale in sorted(glob.glob(BACKUP_GLOB))[:-BACKUP_KEEP]:
             try:
                 os.remove(stale)
             except OSError:
                 pass
 
-        print(f"  Backed up {len(snapshot)} channels -> {os.path.abspath(path)}")
+        size_mb = os.path.getsize(path) / 1e6
+        print(f"  Backed up {len(snapshot)} channels ({size_mb:.1f} MB) -> {os.path.abspath(path)}")
         return path
     except Exception as e:
         print(f"  ! WARNING: could not write pre-delete backup: {e}")

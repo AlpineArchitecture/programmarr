@@ -2,6 +2,10 @@
 config.json
 config*.json
 channels.json
+# Pre-delete Tunarr lineup snapshots. ~12 MB each on a 156-channel server, and
+# CLI runs write them to the project root (Docker writes them under data/).
+tunarr_backup_*.json
+tunarr_backup_*.json.gz
 channels*.json
 *.csv
 backup_*.json
