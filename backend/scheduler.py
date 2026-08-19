@@ -141,6 +141,7 @@ def _run_cycle_blocking(apply: bool, only: int = None) -> dict:
     started = datetime.now(timezone.utc)
     cfg = _load_config()
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     plex_url = cfg.get("plex_url", "").rstrip("/")
     plex_token = cfg.get("plex_token", "")
 

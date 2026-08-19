@@ -103,6 +103,7 @@ async def apply_channel(number: int):
 
     cfg = _load_config()
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     plex_url = cfg.get("plex_url", "").rstrip("/")
     plex_token = cfg.get("plex_token", "")
     if not tunarr_url:
@@ -165,6 +166,7 @@ async def channel_icon(number: int, body: dict):
 
     cfg = _load_config()
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     if not tunarr_url:
         raise HTTPException(400, "Tunarr not configured")
 

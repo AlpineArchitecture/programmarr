@@ -11,6 +11,7 @@ delete/create, argparse) stay in create.py.
 No dependencies beyond the Python standard library.
 """
 
+import base64
 import json
 import os
 import re
@@ -51,10 +52,49 @@ def plex_get(base_url, token, path, timeout=60):
         return None
 
 
+# ── Tunarr auth ────────────────────────────────────────────────────────────────
+# Tunarr gained optional HTTP basic auth on its API (tunarr #1865). Threading a
+# credential parameter through every engine function that takes tunarr_url would
+# touch ~20 signatures, so it lives here as module state instead — still no
+# config.json read inside the engine (callers pass the values in).
+# ponytail: one Tunarr per process. If Programmarr ever drives two at once, this
+# becomes a per-url dict.
+_TUNARR_AUTH = None
+
+
+def set_tunarr_auth(username="", password=""):
+    """Set (or clear, with blanks) the basic-auth credential for Tunarr calls."""
+    global _TUNARR_AUTH
+    if username or password:
+        raw = f"{username}:{password}".encode()
+        _TUNARR_AUTH = "Basic " + base64.b64encode(raw).decode()
+    else:
+        _TUNARR_AUTH = None
+
+
+def set_tunarr_auth_from_config(cfg):
+    """Convenience for callers that already hold a loaded config dict."""
+    set_tunarr_auth(cfg.get("tunarr_username", ""), cfg.get("tunarr_password", ""))
+
+
+def tunarr_headers(extra=None):
+    """Standard headers for any Tunarr request, including auth when configured.
+
+    Every module that talks to Tunarr (engine, export, icons, status routes)
+    goes through this so enabling auth can't half-work.
+    """
+    headers = {"Accept": "application/json", "User-Agent": "Programmarr"}
+    if _TUNARR_AUTH:
+        headers["Authorization"] = _TUNARR_AUTH
+    if extra:
+        headers.update(extra)
+    return headers
+
+
 def api(tunarr_url, method, path, body=None, timeout=60):
     url = tunarr_url + path
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Accept": "application/json"}
+    headers = tunarr_headers()
     if data:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -75,7 +115,16 @@ def api(tunarr_url, method, path, body=None, timeout=60):
 
 def get_transcode_config(tunarr_url):
     configs = api(tunarr_url, "GET", "/api/transcode_configs") or []
-    return configs[0]["id"] if configs else None
+    if not configs:
+        return None
+    # ponytail: index 0 unless config.json names one. Tunarr 1.3+ users commonly
+    # have several (a 4K profile, a hardware profile) and silently picking the
+    # wrong one produces channels their box can't play — so at minimum, say which.
+    chosen = configs[0]
+    if len(configs) > 1:
+        print(f"  Note: {len(configs)} transcode configs in Tunarr; using "
+              f"'{chosen.get('name', chosen.get('id'))}'")
+    return chosen["id"]
 
 
 def get_plex_source(tunarr_url):
@@ -88,15 +137,90 @@ def get_plex_sources(tunarr_url):
     return [s for s in sources if s.get("type") == "plex"]
 
 
+def get_tunarr_version(tunarr_url):
+    """Tunarr's self-reported version string, or None if it won't say.
+
+    Diagnostics only — never gate on this. See _endpoint_status for why.
+    """
+    v = api(tunarr_url, "GET", "/api/version")
+    if isinstance(v, dict):
+        return v.get("tunarr") or None
+    return None
+
+
+def _endpoint_status(tunarr_url, path, timeout=10):
+    """HTTP status code for a bare GET, or None if the host didn't answer.
+
+    Used only on error paths, to tell "this Tunarr does not HAVE this endpoint"
+    (404) from "the call failed" — which api() flattens into the same None.
+    """
+    try:
+        req = urllib.request.Request(tunarr_url + path, headers=tunarr_headers())
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception:
+        return None
+
+
+def _version_suffix(tunarr_url):
+    v = get_tunarr_version(tunarr_url)
+    return f" (Tunarr reports version {v}.)" if v else ""
+
+
+def _no_plex_source_error(tunarr_url):
+    """Build an honest error for a Tunarr with no Plex media source.
+
+    Tunarr also supports jellyfin/emby/local sources. Programmarr's metadata
+    layer is Plex-only, so those users are genuinely unsupported — but telling
+    them "No Plex source found" reads like a broken Plex connection and sends
+    them debugging the wrong thing. Name what was actually there.
+    """
+    sources = api(tunarr_url, "GET", "/api/media-sources")
+    if sources is None:
+        # Capability detection rather than a version gate: a missing endpoint is
+        # the thing that actually breaks us, and it's directly observable —
+        # guessing a minimum version number would be less accurate, not more.
+        if _endpoint_status(tunarr_url, "/api/media-sources") == 404:
+            return ChannelEngineError(
+                "This Tunarr does not have the /api/media-sources endpoint, which "
+                "Programmarr needs to read your libraries. That endpoint arrived in "
+                "Tunarr 1.x, so this server is most likely too old — please update "
+                "Tunarr." + _version_suffix(tunarr_url)
+            )
+        return ChannelEngineError(
+            "Could not read media sources from Tunarr — check that tunarr_url is "
+            "correct and Tunarr is reachable (and that Tunarr basic auth, if you "
+            "enabled it, is configured in Programmarr's settings)."
+            + _version_suffix(tunarr_url)
+        )
+    if not sources:
+        return ChannelEngineError(
+            "Tunarr has no media sources configured. Add your Plex server in "
+            "Tunarr first (Settings -> Media Sources), then run Programmarr."
+        )
+    found = sorted({s.get("type", "unknown") for s in sources})
+    return ChannelEngineError(
+        "Programmarr currently requires a Plex-backed Tunarr source. "
+        f"Found: {', '.join(found)}. Jellyfin/Emby support is not implemented yet."
+    )
+
+
 def build_library_index(tunarr_url):
     plex_sources = get_plex_sources(tunarr_url)
     if not plex_sources:
-        raise ChannelEngineError("No Plex source found in Tunarr")
+        raise _no_plex_source_error(tunarr_url)
 
     movie_map = {}
     # title-key -> {title, by_lib: {lib_id: {showId, programs}}}
     # Collected across ALL Plex sources before picking the best copy per show.
     tv_candidates = {}
+    # api() reports every failure as None, and treating that as "no programs"
+    # turns an outage into a silent empty index — which downstream looks like a
+    # library with no content and would deploy channels with nothing on them.
+    failed_libs = []
+    attempted_libs = 0
 
     for source in plex_sources:
         source_name = source.get("name", "Plex")
@@ -110,7 +234,11 @@ def build_library_index(tunarr_url):
         if movie_libs:
             print(f"  Indexing movies ({source_name})...")
             for lib in movie_libs:
-                programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+                programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120)
+                if programs is None:
+                    failed_libs.append(f"{source_name}/{lib.get('name', lib['id'])}")
+                    continue
+                attempted_libs += 1
                 for p in programs:
                     title = p.get("program", {}).get("title", "")
                     if title:
@@ -121,7 +249,11 @@ def build_library_index(tunarr_url):
         if tv_libs:
             print(f"  Indexing TV shows ({source_name})...")
             for lib in tv_libs:
-                programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120) or []
+                programs = api(tunarr_url, "GET", f"/api/media-libraries/{lib['id']}/programs", timeout=120)
+                if programs is None:
+                    failed_libs.append(f"{source_name}/{lib.get('name', lib['id'])}")
+                    continue
+                attempted_libs += 1
                 for p in programs:
                     prog = p.get("program", {})
                     show = prog.get("show", {})
@@ -133,6 +265,19 @@ def build_library_index(tunarr_url):
                     c = tv_candidates.setdefault(key, {"title": title, "by_lib": {}})
                     entry = c["by_lib"].setdefault(lib["id"], {"showId": show_id, "programs": []})
                     entry["programs"].append(p)
+
+    if failed_libs and attempted_libs == 0:
+        raise ChannelEngineError(
+            "Could not read any library from Tunarr (" + ", ".join(failed_libs) + "). "
+            "Tunarr answered, but every library request failed — check that Tunarr is "
+            "healthy and finished scanning. Refusing to continue with an empty index."
+        )
+    if failed_libs:
+        print(f"  ! WARNING: {len(failed_libs)} librar"
+              f"{'y' if len(failed_libs) == 1 else 'ies'} could not be read and "
+              f"{'is' if len(failed_libs) == 1 else 'are'} missing from this index: "
+              + ", ".join(failed_libs))
+        print("  ! Channels built now may be missing content from those libraries.")
 
     print(f"  Indexed {len(movie_map)} movies")
 

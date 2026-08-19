@@ -112,27 +112,50 @@ async def _stream(script: str, args: list[str], tag: str) -> AsyncGenerator[str,
     yield f"data: {json.dumps({'type': 'start', 'cmd': ' '.join(cmd), 'log': log_path.name})}\n\n"
 
     lines: list[str] = []
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        cwd=str(DATA_DIR),
-        env=_env(),
-    )
 
-    async for raw in proc.stdout:  # type: ignore[union-attr]
-        line = raw.decode("utf-8", errors="replace").rstrip()
-        lines.append(line)
-        yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+    # The browser waits for a 'done' event to stop showing a running job. Anything
+    # that raises AFTER the response has started (a missing interpreter, a bad
+    # SCRIPTS_DIR, an unwritable log dir) kills the generator mid-stream and the UI
+    # hangs forever with no error and no return code — so every failure below must
+    # still end in 'done'.
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(DATA_DIR),
+            env=_env(),
+        )
+    except Exception as e:
+        msg = f"Could not start {script}: {e}"
+        yield f"data: {json.dumps({'type': 'line', 'text': msg})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'returncode': -1, 'error': msg})}\n\n"
+        return
 
-    await proc.wait()
+    try:
+        async for raw in proc.stdout:  # type: ignore[union-attr]
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            lines.append(line)
+            yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+        await proc.wait()
+    except Exception as e:
+        msg = f"{script} stream failed: {e}"
+        yield f"data: {json.dumps({'type': 'line', 'text': msg})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'returncode': -1, 'error': msg})}\n\n"
+        return
 
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write(f"# {tag} — {datetime.now().isoformat()}\n")
-        f.write(f"# {' '.join(cmd)}\n\n")
-        f.write("\n".join(lines))
+    log_name = log_path.name
+    try:
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"# {tag} — {datetime.now().isoformat()}\n")
+            f.write(f"# {' '.join(cmd)}\n\n")
+            f.write("\n".join(lines))
+    except Exception as e:
+        # A log we couldn't write must not sink a run that actually succeeded.
+        log_name = ""
+        yield f"data: {json.dumps({'type': 'line', 'text': f'! Could not write log: {e}'})}\n\n"
 
-    yield f"data: {json.dumps({'type': 'done', 'returncode': proc.returncode, 'log': log_path.name})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'returncode': proc.returncode, 'log': log_name})}\n\n"
 
 
 def _sse(gen: AsyncGenerator[str, None]) -> StreamingResponse:
@@ -168,10 +191,12 @@ def list_libraries():
     plex_url   = cfg.get("plex_url", "").rstrip("/").lower()
     plex_token = cfg.get("plex_token", "")
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     if not plex_url or not plex_token:
         raise HTTPException(400, "Plex not configured")
 
     result = []
+    plex_error = ""
 
     # ── Primary Plex sections (via Plex API, key prefixed "plex:") ─────────────
     srv_name = (cfg.get("plex_servers") or [{}])[0].get("name", "Your Library")
@@ -182,8 +207,13 @@ def list_libraries():
                 continue
             result.append({"key": f"plex:{s['key']}", "title": s["title"],
                             "type": s["type"], "server": srv_name})
-    except Exception:
-        pass  # unreachable — UI shows error from libError fallback
+    except urllib.error.HTTPError as e:
+        plex_error = (f"Plex rejected the token ({e.code}) — check plex_token in Settings."
+                      if e.code in (401, 403) else f"Plex returned HTTP {e.code}.")
+    except Exception as e:
+        # Was `pass` with a comment claiming the UI shows the error elsewhere; it
+        # doesn't — the user just got an empty picker with no explanation.
+        plex_error = f"Could not reach Plex at {plex_url}: {e}"
 
     # ── All other Tunarr-connected sources (key prefixed "tunarr:") ────────────
     if tunarr_url:
@@ -202,6 +232,11 @@ def list_libraries():
                     continue
                 result.append({"key": f"tunarr:{lib['id']}", "title": lib.get("name", lib["id"]),
                                 "type": lib_type, "server": source_name})
+
+    # Nothing to show AND a known reason: say the reason instead of rendering an
+    # empty picker the user can't act on.
+    if not result and plex_error:
+        raise HTTPException(502, plex_error)
 
     return result
 
@@ -282,7 +317,17 @@ CANONICAL_GENRES = [
     ("Sci-Fi", "Science Fiction"), ("Drama", "Drama"),
     ("Animation", "Animation"), ("Documentary", "Documentary"),
 ]
+# Buckets start in the 1920s: a classic-film library contributed NOTHING to the
+# decade facet when this began at 1970 — every pre-1970 title silently fell out of
+# _decade_start and the user saw no decade channels for half their collection.
+# Only decades that actually have titles are offered, so the extra buckets are free.
+# Pre-1970 labels are spelled in full ("1950s") rather than "50s" — "20s" next to
+# "2020s" would be genuinely ambiguous in a channel name. The 70s/80s/90s labels
+# are left exactly as they were so existing channel names and saved planner state
+# keep matching.
 DECADE_BUCKETS = [
+    ("1920s", 1920, 1929), ("1930s", 1930, 1939), ("1940s", 1940, 1949),
+    ("1950s", 1950, 1959), ("1960s", 1960, 1969),
     ("70s", 1970, 1979), ("80s", 1980, 1989), ("90s", 1990, 1999),
     ("2000s", 2000, 2009), ("2010s", 2010, 2019), ("2020s", 2020, 2029),
 ]
@@ -1485,9 +1530,11 @@ _BLOCK_DESC = {
     "franchise":         "Franchise & Curated Series — ordered collections (film series in release order, etc.)",
     "specialty":         "Specialty — single-movie loops, holiday, niche themes",
 }
-# Matches the bullet list under the scheme heading, regardless of the ranges in it.
+# Matches the ordered category list under "## Channel Numbering Scheme" in PROMPT.md,
+# regardless of the numbers/labels in it. PROMPT.md's static list is only the default;
+# this is what rewrites it to the user's configured channel_order.
 _SCHEME_BULLETS_RE = re.compile(
-    r"(Assign channel numbers following this cable TV block structure:\n)(?:-[^\n]*\n)+"
+    r"^(?:\d+\. \*\*[^\n]*\n)+", re.MULTILINE
 )
 
 
@@ -1527,7 +1574,12 @@ def _regen_numbering_scheme(content: str, start: int) -> str:
         f"- **{numbers[k][0]}+**: {_BLOCK_DESC.get(k, channel_blocks.BLOCK_LABELS.get(k, k))}"
         for k in cfg_order if k in numbers
     )
-    content = _SCHEME_BULLETS_RE.sub(lambda m: m.group(1) + bullets + "\n", content)
+    content, _n = _SCHEME_BULLETS_RE.subn(bullets + "\n", content, count=1)
+    if not _n:
+        # A silent no-op here means the LLM is told the DEFAULT order while the user
+        # configured a different one - exactly the drift this function exists to stop.
+        print("WARNING: PROMPT.md numbering-scheme list not found; "
+              "channel_order is not being reflected in the prompt.")
     # Update JSONL example numbers using the first three occupied positions.
     occupied = [numbers[k][0] for k in cfg_order if k in numbers]
     if len(occupied) >= 1:
@@ -2429,6 +2481,7 @@ async def run_surgical_deploy():
 
     cfg = _load_config()
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     plex_url = cfg.get("plex_url", "").rstrip("/")
     plex_token = cfg.get("plex_token", "")
     if not tunarr_url:

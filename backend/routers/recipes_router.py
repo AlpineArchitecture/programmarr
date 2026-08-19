@@ -63,6 +63,7 @@ def preview_recipe(req: PreviewRequest):
 
     cfg = _load_config()
     tunarr_url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     if not tunarr_url:
         raise HTTPException(400, "Tunarr not configured")
 

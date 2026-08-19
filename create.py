@@ -13,7 +13,9 @@ Usage:
 """
 
 import argparse
+import glob
 import json
+import os
 import sys
 import time
 import uuid
@@ -21,6 +23,7 @@ from datetime import datetime, timezone
 
 from channel_engine import (
     ChannelEngineError,
+    set_tunarr_auth_from_config,
     SHUFFLE_MAP,
     api,
     build_library_index,
@@ -47,6 +50,55 @@ def load_config():
         sys.exit(1)
 
 
+# ── Destructive-op backup ──────────────────────────────────────────────────────
+
+BACKUP_KEEP = 10
+
+
+def backup_channels(tunarr_url, channels):
+    """Dump channels + their raw programming to a timestamped file before deleting.
+
+    This is the only safety net for an irreversible wipe: a user who points
+    Programmarr at a Tunarr with a hand-built lineup and hits Deploy would
+    otherwise lose it with no way back. We store the raw
+    /api/channels/{id}/programming payload (not just program ids) so the file is
+    actually enough to rebuild from.
+
+    Never raises — a backup failure must not be the thing that blocks a deploy,
+    but it IS reported loudly so the user can decide to stop.
+    """
+    try:
+        snapshot = []
+        for ch in channels:
+            entry = {"channel": ch}
+            prog = api(tunarr_url, "GET", f"/api/channels/{ch['id']}/programming")
+            if prog is not None:
+                entry["programming"] = prog
+            snapshot.append(entry)
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        path = f"tunarr_backup_{ts}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"saved_at": ts, "tunarr_url": tunarr_url,
+                       "channels": snapshot}, f, indent=2)
+
+        # ponytail: keep the last N by filename (timestamps sort lexically); no
+        # rotation config until someone asks for one.
+        old = sorted(glob.glob("tunarr_backup_*.json"))[:-BACKUP_KEEP]
+        for stale in old:
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+
+        print(f"  Backed up {len(snapshot)} channels -> {os.path.abspath(path)}")
+        return path
+    except Exception as e:
+        print(f"  ! WARNING: could not write pre-delete backup: {e}")
+        print("  ! Deleting anyway — stop now (Ctrl-C) if you need these channels.")
+        return None
+
+
 # ── Channel operations ─────────────────────────────────────────────────────────
 
 def delete_channels(tunarr_url, probe, from_ch=None, protect=None):
@@ -64,6 +116,8 @@ def delete_channels(tunarr_url, probe, from_ch=None, protect=None):
     scope = f">= #{from_ch}" if from_ch is not None else "all"
     if targets:
         print(f"  Deleting {len(targets)} channels ({scope})...")
+        if not probe:
+            backup_channels(tunarr_url, targets)
         for ch in targets:
             if probe:
                 print(f"    [PROBE] Would delete #{ch['number']} {ch['name']}")
@@ -139,6 +193,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config()
+    set_tunarr_auth_from_config(cfg)
     tunarr_url = cfg["tunarr_url"].rstrip("/")
     plex_url = cfg.get("plex_url", "").rstrip("/")
     plex_token = cfg.get("plex_token", "")

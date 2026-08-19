@@ -6,6 +6,10 @@
     ],
     "tmdb_api_key": "your-tmdb-api-key-here",
 
+    "_tunarr_auth": "Only if you enabled Tunarr's OWN basic auth. Blank/absent = Tunarr is open. Distinct from auth_username/auth_password, which guard Programmarr itself.",
+    "tunarr_username": "",
+    "tunarr_password": "",
+
     "_advanced": "Optional keys below — most users can omit them. See README 'Advanced Configuration'.",
     "tunarr_channel_group": "programmarr",
     "tunarr_stream_mode": "hls",

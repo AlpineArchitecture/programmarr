@@ -8,6 +8,13 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter
+from pydantic import BaseModel
+
+import sys
+_ROOT = str(Path(__file__).resolve().parents[2])
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+import channel_engine  # noqa: E402
 
 GITHUB_LATEST_RELEASE = (
     "https://api.github.com/repos/AlpineArchitecture/programmarr/releases/latest"
@@ -60,20 +67,66 @@ def load_config() -> dict:
         return {}
 
 
-def probe(url: str) -> dict:
+def probe(url: str, tunarr: bool = False) -> dict:
+    """Reach a URL and judge whether it actually answered usefully.
+
+    An HTTP error is NOT success. This used to return ok:True for any response
+    including 401, which reported an auth-protected Tunarr as healthy — harmless
+    before Tunarr had auth, actively misleading now that it does.
+    """
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        headers = channel_engine.tunarr_headers() if tunarr else {}
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as r:
             return {"ok": True, "status": r.status}
     except urllib.error.HTTPError as e:
-        return {"ok": True, "status": e.code}
+        if e.code in (401, 403):
+            hint = ("Tunarr requires a username and password — set them in "
+                    "Settings -> Connections.") if tunarr else \
+                   "Plex rejected the token."
+            return {"ok": False, "status": e.code, "error": f"Authentication failed ({e.code}). {hint}"}
+        return {"ok": False, "status": e.code, "error": f"HTTP {e.code} from {url}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+def check_tunarr(url: str, username: str = "", password: str = "") -> dict:
+    """Test a Tunarr URL + optional credentials WITHOUT reading saved config.
+
+    Onboarding needs to validate what the user just typed, before anything is
+    written — otherwise a typo'd URL produces a green 'Setup complete'.
+    """
+    url = (url or "").rstrip("/")
+    if not url:
+        return {"ok": False, "error": "No Tunarr URL given"}
+    prior = channel_engine._TUNARR_AUTH
+    try:
+        channel_engine.set_tunarr_auth(username, password)
+        result = {**probe(f"{url}/api/channels", tunarr=True), "url": url}
+    finally:
+        # Never let a connection test leave the process authenticated as
+        # whatever was being tried.
+        channel_engine._TUNARR_AUTH = prior
+    return result
+
+
+def check_plex(url: str, token: str) -> dict:
+    url = (url or "").rstrip("/")
+    if not url:
+        return {"ok": False, "error": "No Plex URL given"}
+    if not token:
+        return {"ok": False, "error": "No Plex token given"}
+    # /library/sections proves the token works AND that there's a library to read,
+    # which is what Programmarr actually needs — a bare / accepts any token.
+    result = {**probe(f"{url}/library/sections?X-Plex-Token={token}"), "url": url}
+    return result
 
 
 @router.get("/status")
 def get_status():
     cfg = load_config()
     tunarr = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     plex = cfg.get("plex_url", "").rstrip("/")
     token = cfg.get("plex_token", "")
 
@@ -81,11 +134,50 @@ def get_status():
     pr = {"ok": False, "error": "Not configured", "url": plex}
 
     if tunarr:
-        tr = {**probe(f"{tunarr}/api/channels"), "url": tunarr}
+        tr = {**probe(f"{tunarr}/api/channels", tunarr=True), "url": tunarr}
+        if tr.get("ok"):
+            # Surfaced so a bug report can state it without the user digging —
+            # the issue template asks for it.
+            tr["version"] = channel_engine.get_tunarr_version(tunarr)
     if plex and token:
         pr = {**probe(f"{plex}/?X-Plex-Token={token}"), "url": plex}
 
     return {"tunarr": tr, "plex": pr}
+
+
+class ConnectionTest(BaseModel):
+    tunarr_url: str = ""
+    tunarr_username: str = ""
+    tunarr_password: str = ""
+    plex_url: str = ""
+    plex_token: str = ""
+
+
+@router.post("/test-connection")
+def test_connection(body: ConnectionTest):
+    """Validate credentials the user has typed but not yet saved.
+
+    Tests only the sides that were supplied, so onboarding can check Tunarr and
+    Plex independently as each is filled in.
+    """
+    from routers.config_router import MASK
+
+    cfg = load_config()
+    # The Settings form sends the mask for a secret the user didn't retype — test
+    # the stored value rather than literally trying to authenticate as "••••••••".
+    tunarr_pw = body.tunarr_password
+    if tunarr_pw == MASK:
+        tunarr_pw = cfg.get("tunarr_password", "")
+    plex_token = body.plex_token
+    if plex_token == MASK:
+        plex_token = cfg.get("plex_token", "")
+
+    out = {}
+    if body.tunarr_url:
+        out["tunarr"] = check_tunarr(body.tunarr_url, body.tunarr_username, tunarr_pw)
+    if body.plex_url or plex_token:
+        out["plex"] = check_plex(body.plex_url, plex_token)
+    return out
 
 
 def _fetch_latest_release() -> dict | None:
@@ -144,10 +236,13 @@ def update_check(current: str = ""):
 def tunarr_channels():
     cfg = load_config()
     url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     if not url:
         return []
     try:
-        with urllib.request.urlopen(f"{url}/api/channels", timeout=10) as r:
+        req = urllib.request.Request(f"{url}/api/channels",
+                                    headers=channel_engine.tunarr_headers())
+        with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
     except Exception:
         return []
@@ -209,10 +304,13 @@ def parse_guide_xml(xml_text: str) -> dict:
 def get_guide():
     cfg = load_config()
     url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     if not url:
         return {"channels": [], "programmes": [], "error": "Tunarr not configured"}
     try:
-        with urllib.request.urlopen(f"{url}/api/xmltv.xml", timeout=10) as r:
+        req = urllib.request.Request(f"{url}/api/xmltv.xml",
+                                    headers=channel_engine.tunarr_headers())
+        with urllib.request.urlopen(req, timeout=10) as r:
             xml_text = r.read().decode("utf-8", errors="replace")
         return parse_guide_xml(xml_text)
     except Exception as e:
@@ -228,10 +326,13 @@ def tunarr_filler_lists():
     """
     cfg = load_config()
     url = cfg.get("tunarr_url", "").rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     if not url:
         return []
     try:
-        with urllib.request.urlopen(f"{url}/api/filler-lists", timeout=10) as r:
+        req = urllib.request.Request(f"{url}/api/filler-lists",
+                                    headers=channel_engine.tunarr_headers())
+        with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
     except Exception:
         return []

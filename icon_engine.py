@@ -19,6 +19,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+import channel_engine
+
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
 
 _ARTICLES = re.compile(r"^(the|a|an)\s+")
@@ -37,8 +39,7 @@ def normalize_title(s):
 # ── HTTP ───────────────────────────────────────────────────────────────────────
 
 def http_get(url, timeout=15):
-    req = urllib.request.Request(
-        url, headers={"Accept": "application/json", "User-Agent": "Programmarr/1.0"})
+    req = urllib.request.Request(url, headers=channel_engine.tunarr_headers())
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
@@ -210,7 +211,7 @@ def _tunarr_put(tunarr_url, path, body):
     data = json.dumps(body).encode()
     req = urllib.request.Request(
         url, data=data, method="PUT",
-        headers={"Accept": "application/json", "Content-Type": "application/json"})
+        headers=channel_engine.tunarr_headers({"Content-Type": "application/json"}))
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read())
@@ -242,8 +243,8 @@ def upload_image_to_tunarr(tunarr_url, png_bytes, filename):
     )
     req = urllib.request.Request(
         tunarr_url + "/api/upload/image", data=body, method="POST",
-        headers={"Accept": "application/json",
-                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        headers=channel_engine.tunarr_headers(
+            {"Content-Type": f"multipart/form-data; boundary={boundary}"}))
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read())["fileUrl"]
 

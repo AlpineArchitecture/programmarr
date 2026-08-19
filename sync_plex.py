@@ -19,6 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import channel_engine
+
 CONFIG_FILE = "config.json"
 
 
@@ -65,8 +67,10 @@ def plex_put(plex_url, token, path, data):
 
 
 def tunarr_get(tunarr_url, path):
+    req = urllib.request.Request(tunarr_url + path,
+                                 headers=channel_engine.tunarr_headers())
     try:
-        with urllib.request.urlopen(tunarr_url + path, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=10) as r:
             return r.read().decode()
     except Exception as e:
         print(f"  ! Tunarr GET {path}: {e}")
@@ -157,6 +161,7 @@ def main():
 
     cfg = load_config()
     plex_url = cfg["plex_url"].rstrip("/")
+    channel_engine.set_tunarr_auth_from_config(cfg)
     tunarr_url = cfg["tunarr_url"].rstrip("/")
     token = cfg["plex_token"]
 

@@ -21,6 +21,10 @@ class ConfigModel(BaseModel):
     tmdb_api_key: str = ""
     auth_username: str = ""
     auth_password: str = ""
+    # Tunarr's own optional HTTP basic auth (tunarr #1865). Blank = Tunarr is open.
+    # Distinct from auth_username/auth_password, which guard Programmarr itself.
+    tunarr_username: str = ""
+    tunarr_password: str = ""
     # Ordered list of category keys controlling channel numbering order.
     # Empty ⇒ canonical default from channel_blocks.CANONICAL_ORDER at use time.
     channel_order: list = []
@@ -50,6 +54,8 @@ def get_config():
         config["plex_token"] = MASK
     if config.get("tmdb_api_key"):
         config["tmdb_api_key"] = MASK
+    if config.get("tunarr_password"):
+        config["tunarr_password"] = MASK
     if config.get("plex_servers"):
         config["plex_servers"] = [
             {**s, "token": MASK} if s.get("token") else s
@@ -62,7 +68,7 @@ def get_config():
 def save_config(config: ConfigModel):
     existing = load_config()
     data = config.model_dump()
-    for field in ("auth_password", "plex_token", "tmdb_api_key"):
+    for field in ("auth_password", "plex_token", "tmdb_api_key", "tunarr_password"):
         if data.get(field) == MASK:
             data[field] = existing.get(field, "")
     # Lists must bypass the falsy-prune below ([] is falsy but meaningful as "no change").

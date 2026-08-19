@@ -19,6 +19,8 @@ import sys
 import urllib.error
 import urllib.request
 
+import channel_engine
+
 CONFIG_FILE = "config.json"
 OUTPUT_FILE = "plex_library.csv"
 
@@ -73,7 +75,8 @@ def plex_get(base_url, token, path, timeout=60):
 
 
 def tunarr_get(base_url, path, timeout=60):
-    req = urllib.request.Request(base_url + path, headers={"Accept": "application/json"})
+    req = urllib.request.Request(base_url + path,
+                                 headers=channel_engine.tunarr_headers())
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
