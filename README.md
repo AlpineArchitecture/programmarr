@@ -160,8 +160,8 @@ services:
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/onboarding.png" alt="First-run onboarding wizard" width="100%" />
-      <p align="center"><em>First-run setup wizard — credentials and connections in two steps</em></p>
+      <img src="docs/onboarding.png" alt="First-run onboarding wizard, Connect step — Tunarr and Plex URLs, Plex token, optional TMDB key and optional Tunarr credentials, with a Test connections button" width="100%" />
+      <p align="center"><em>First-run setup wizard — three steps, and it tests your Tunarr and Plex connections before saving</em></p>
     </td>
     <td width="50%" valign="top">
       <img src="docs/settings.png" alt="Settings page with Tunarr URL, Plex URL, TMDB key, and auth fields" width="100%" />
