@@ -464,16 +464,9 @@ intact. Live franchise channels carry `playback: interleaved` by default (see ch
 authoring UI and status cards), full rationale, rejected alternatives, and history:
 [`docs/live-channels-design.md`](docs/live-channels-design.md).
 
-## Agent skills
+## Issues
 
-### Issue tracker
-
-Issues are tracked in GitHub Issues (`AlpineArchitecture/programmarr`) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Tracked in GitHub Issues (`AlpineArchitecture/programmarr`) via the `gh` CLI. Label
+vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`.
+Bug reports come in through `.github/ISSUE_TEMPLATE/`, which requires the Programmarr and
+Tunarr versions and the media-source type — the three fields that explain most reports.
