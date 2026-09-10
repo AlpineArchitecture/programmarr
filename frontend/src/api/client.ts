@@ -199,7 +199,8 @@ export interface Commercials { filler_list_id: string; filler_list_name?: string
 export interface PlaybackSetting { structure: 'interleaved' | 'timeline'; episodes_per_block?: number }
 export interface MatchRef { match: 'title_contains'; value: string; order?: string | null; exclude?: string[] }
 export interface FranchiseRef { match: 'franchise'; name: string; order?: string | null; exclude?: string[] }
-export type ContentItem = string | { collection: string } | MatchRef | FranchiseRef;
+// { movie } / { show }: a title pinned to one media type (a movie and a show can share a title).
+export type ContentItem = string | { collection: string } | { movie: string } | { show: string } | MatchRef | FranchiseRef;
 export function isMatchRef(c: ContentItem): c is MatchRef {
   return typeof c === 'object' && c !== null && 'match' in c;
 }

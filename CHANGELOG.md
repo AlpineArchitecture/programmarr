@@ -4,6 +4,17 @@ All notable changes to Programmarr are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the spirit of
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A movie and a show with the same title resolve to the right one** (#39). With both the
+  *Wonder Woman* film and the 1975 series in the library, a channel listing "Wonder Woman"
+  always got the series. Channel content can now pin a media type — `{"movie": "Title"}` or
+  `{"show": "Title"}` (type `{movie: Title}` in the Channels editor) — and the Planner writes
+  these automatically for any title that is both a movie and a show. Plain titles behave as
+  before.
+
 ## [0.8.0] — 2026-08-19
 
 Hardening release ahead of going public. Programmarr had only ever run against its

@@ -235,7 +235,10 @@ Content items can be plain title strings **or** Plex collection references
 (`{"collection": "Name"}`), freely mixed. Collection refs are expanded to member titles at
 deploy time via the Plex API; a not-found collection is warned and skipped. Plain titles must
 match Plex names exactly (case-insensitive). A title may appear on multiple channels —
-intentional. Live channels add one more content-ref type (`{"match": "title_contains", …}`),
+intentional. A title that exists as **both a movie and a show** resolves to whichever has
+more playable programs (a series beats a lone film) — pin it with a typed ref
+`{"movie": "Title"}` / `{"show": "Title"}` (editor syntax `{movie: Title}`). `/pipeline/compose`
+emits typed refs automatically for exactly those colliding titles (#39). Live channels add one more content-ref type (`{"match": "title_contains", …}`),
 documented under Live Channels.
 
 **Write-only-on-deploy invariant.** `channels.json` is the record of **deployed channels**

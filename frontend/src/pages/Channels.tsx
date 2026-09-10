@@ -227,7 +227,11 @@ function ChannelModal({
     setContent(
       channel.content
         .filter((c) => !isMatchRef(c) && !isFranchiseRef(c))
-        .map((c) => (typeof c === 'string' ? c : `{collection: ${(c as any).collection}}`))
+        .map((c) => {
+          if (typeof c === 'string') return c;
+          const [k, v] = Object.entries(c as Record<string, string>)[0];
+          return `{${k}: ${v}}`;
+        })
     );
   }, [channel]);
 
@@ -243,8 +247,8 @@ function ChannelModal({
 
   async function persist() {
     const rawContent: ContentItem[] = content.map((c) => {
-      const m = c.match(/^\{collection:\s*(.+)\}$/);
-      return m ? { collection: m[1] } : c;
+      const m = c.match(/^\{(collection|movie|show):\s*(.+)\}$/);
+      return m ? ({ [m[1]]: m[2].trim() } as ContentItem) : c;
     });
     if (matchRef) {
       rawContent.push({
@@ -363,7 +367,7 @@ function ChannelModal({
 
         <Group gap="xs">
           <TextInput
-            placeholder="Add title or {collection: Name}"
+            placeholder="Add title, {movie: Title}, {show: Title} or {collection: Name}"
             value={newItem}
             onChange={(e) => setNewItem(e.currentTarget.value)}
             onKeyDown={(e) => e.key === 'Enter' && addItem()}

@@ -49,3 +49,25 @@ def test_no_collision_unchanged():
     assert channel_engine.resolve_title("Big Movie", movie_map, show_map)["type"] == "Movie"
     assert channel_engine.resolve_title("Cheers", movie_map, show_map)["type"] == "TV"
     assert channel_engine.resolve_title("Nope", movie_map, show_map) is None
+
+
+# Issue #39: the 2017 "Wonder Woman" film vs the 1975 series. The tie-break picks the
+# series; a typed ref must be able to pin either one.
+
+def test_typed_ref_overrides_tiebreak():
+    movie_map = {"wonder woman": _movie("Wonder Woman")}
+    show_map = {"wonder woman": _show("Wonder Woman", 60)}
+    assert channel_engine.resolve_title("Wonder Woman", movie_map, show_map, kind="movie")["type"] == "Movie"
+    assert channel_engine.resolve_title("Wonder Woman", movie_map, show_map, kind="show")["type"] == "TV"
+    assert channel_engine.resolve_title("Wonder Woman", {}, show_map, kind="movie") is None
+
+
+def test_resolve_content_typed_refs_in_order():
+    movie_map = {"wonder woman": _movie("Wonder Woman"), "big movie": _movie("Big Movie")}
+    show_map = {"wonder woman": _show("Wonder Woman", 60)}
+    resolved, missing = channel_engine.resolve_content(
+        [{"movie": "Wonder Woman"}, "Big Movie", {"show": "Wonder Woman"}, {"movie": "Nope"}],
+        movie_map, show_map)
+    assert [(r["type"], r["title"]) for r in resolved] == [
+        ("Movie", "Wonder Woman"), ("Movie", "Big Movie"), ("TV", "Wonder Woman")]
+    assert missing == ["Nope"]

@@ -237,7 +237,7 @@ def probe_and_deploy(extra_args=None):
 
 
 def is_collection_channel(ch):
-    return any(isinstance(item, dict) for item in ch.get("content", []))
+    return any(isinstance(item, dict) and "collection" in item for item in ch.get("content", []))
 
 
 def offer_collections_pipeline():

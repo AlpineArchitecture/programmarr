@@ -315,14 +315,15 @@ def _playable_count(programs):
     return sum(1 for p in programs if p.get("program", {}).get("state") != "missing")
 
 
-def resolve_title(title, movie_map, show_map):
+def resolve_title(title, movie_map, show_map, kind=None):
     key = title.lower().strip()
-    movie = movie_map.get(key)
-    show = show_map.get(key)
+    movie = movie_map.get(key) if kind != "show" else None
+    show = show_map.get(key) if kind != "movie" else None
     # Same exact title for a movie AND a series (e.g. the 2017 "Baywatch" film vs the
     # 1989 series). A plain title can't disambiguate, so prefer whichever has more
     # PLAYABLE programs — the same tie-break build_library_index uses for dupes. A real
     # series (many episodes) beats a lone movie; an all-missing series yields to it.
+    # A typed ref ({"movie": t} / {"show": t}, passed as `kind`) skips the tie-break.
     if movie and show:
         if _playable_count(show["programs"]) >= _playable_count([movie]):
             movie = None
@@ -544,6 +545,8 @@ def resolve_content(content_list, movie_map, show_map,
 
     Each entry is one of:
     - A plain title string — matched against the Tunarr library index by exact title.
+    - A {"movie": "Title"} or {"show": "Title"} ref — exact title, restricted to that
+      media type (disambiguates a movie and a show that share a title).
     - A {"collection": "Name"} ref — expanded to member titles via Plex, then each
       title is matched against the library index.
     - A {"match": "title_contains", "value": "..."} ref — word-boundary scan of the
@@ -564,7 +567,10 @@ def resolve_content(content_list, movie_map, show_map,
     matched_items = []
     missing = []
     for entry in content_list:
-        if isinstance(entry, dict) and "collection" in entry:
+        if isinstance(entry, dict) and ("movie" in entry or "show" in entry):
+            kind = "movie" if "movie" in entry else "show"
+            expanded_titles.append((entry[kind], kind))  # resolved in order below
+        elif isinstance(entry, dict) and "collection" in entry:
             col_name = entry["collection"]
             col_titles = resolve_collection(plex_url, plex_token, col_name, plex_sections, collection_cache)
             if col_titles:
@@ -602,8 +608,9 @@ def resolve_content(content_list, movie_map, show_map,
             expanded_titles.append(entry)
 
     resolved = []
-    for title in expanded_titles:
-        item = resolve_title(title, movie_map, show_map)
+    for entry in expanded_titles:
+        title, kind = entry if isinstance(entry, tuple) else (entry, None)
+        item = resolve_title(title, movie_map, show_map, kind=kind)
         if item:
             resolved.append(item)
         else:

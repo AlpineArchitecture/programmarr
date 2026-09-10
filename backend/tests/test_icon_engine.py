@@ -121,6 +121,14 @@ def test_network_and_studio_search_company():
     assert icon_engine.icon_attempts(ch2, "studio") == [("company", "A24")]
 
 
+def test_typed_title_ref_searches_only_its_kind():
+    # Issue #39: a pinned movie must not pick up the same-named series' logo.
+    assert icon_engine.icon_attempts({"name": "WW", "content": [{"movie": "Wonder Woman"}]}, None) == [
+        ("movie", "Wonder Woman")]
+    assert icon_engine.icon_attempts({"name": "WW", "content": [{"show": "Wonder Woman"}]}, "marathon") == [
+        ("tv", "Wonder Woman")]
+
+
 def test_collection_ref_content_is_not_solo():
     ch = {"name": "Kometa Picks", "content": [{"collection": "Picks"}]}
     assert icon_engine.icon_attempts(ch, None) == []

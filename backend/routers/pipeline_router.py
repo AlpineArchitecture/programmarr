@@ -1879,8 +1879,18 @@ def _load_library():
     return movies, shows
 
 
-def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) -> list[str]:
-    """Return the sorted, de-duplicated title list a candidate spec selects."""
+def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) -> list:
+    """Return the sorted, de-duplicated content list a candidate spec selects.
+
+    Titles are plain strings, except a title that is BOTH a movie and a show in the
+    library: that one becomes a typed ref ({"movie": t} / {"show": t}) so deploy can't
+    resolve it to the wrong media type (issue #39).
+    """
+    collide = {m["Title"].lower() for m in movies} & {s["Title"].lower() for s in shows}
+
+    def tag(t, typ):
+        return {typ: t} if t.lower() in collide else t
+
     def has_genre(row, g):
         gl = g.lower()
         return any(x.lower() == gl for x in _multi(row.get("Genres")))
@@ -1908,9 +1918,10 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
         titles = [s["Title"] for s in shows if s["Title"] == spec.value]
     elif spec.kind == "tv_movie_mix" and spec.genre:
         # Mixed channel: both TV shows AND movies that share this genre, shuffled together.
-        movie_titles = [m["Title"] for m in movies if has_genre(m, spec.genre)]
-        show_titles = [s["Title"] for s in shows if has_genre(s, spec.genre)]
-        titles = movie_titles + show_titles
+        # A shared title keeps both copies (one per media type) — both match the genre.
+        pairs = {(m["Title"], "movie") for m in movies if m["Title"] and has_genre(m, spec.genre)}
+        pairs |= {(s["Title"], "show") for s in shows if s["Title"] and has_genre(s, spec.genre)}
+        return [tag(t, typ) for t, typ in sorted(pairs)]
     elif spec.kind == "network" and spec.value:
         # Resolve TV shows whose TVmaze network matches the value (case-insensitive).
         # Load the TVmaze cache once; fall back to Studio column if cache is absent.
@@ -1948,17 +1959,19 @@ def _resolve_spec(spec: CandidateSpec, movies: list[dict], shows: list[dict]) ->
     elif spec.kind == "franchise" and spec.titles:
         # Franchise: intersect the checked member titles against both movies AND TV shows,
         # then sort by year ascending (so content plays in release order).
-        all_rows: list[dict] = movies + shows
+        # A title that is both a movie and a show resolves to the movie (movies are
+        # indexed last so they win) — the same default as channel_engine.match_franchise.
         row_by_title = {}
-        for row in all_rows:
-            t = row.get("Title", "")
-            if t:
-                row_by_title[t.lower()] = row
-        matched: list[dict] = [row_by_title[t.lower()] for t in spec.titles if t.lower() in row_by_title]
+        for typ, rows in (("show", shows), ("movie", movies)):
+            for row in rows:
+                if row.get("Title"):
+                    row_by_title[row["Title"].lower()] = (row, typ)
+        matched = [row_by_title[t.lower()] for t in spec.titles if t.lower() in row_by_title]
         # Sort by Year ascending; rows without a year go to the end.
-        matched.sort(key=lambda r: (_safe_int(r.get("Year")) or 9999, r.get("Title", "")))
-        return [r["Title"] for r in matched if r.get("Title")]
-    return sorted({t for t in titles if t})
+        matched.sort(key=lambda rt: (_safe_int(rt[0].get("Year")) or 9999, rt[0]["Title"]))
+        return [tag(r["Title"], typ) for r, typ in matched]
+    typ = "show" if spec.kind in ("marathon", "tv_genre", "network", "programming_block") else "movie"
+    return [tag(t, typ) for t in sorted({t for t in titles if t})]
 
 
 def _auto_name(spec: CandidateSpec) -> str:

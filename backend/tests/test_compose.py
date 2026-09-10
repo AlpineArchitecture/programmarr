@@ -600,6 +600,27 @@ def test_compose_non_live_franchise_unchanged(pr, seed):
     assert all(isinstance(item, str) for item in ch["content"])
 
 
+def test_compose_types_colliding_titles(pr, seed):
+    """Issue #39: a title that is both a movie and a show gets a typed ref; others stay plain."""
+    seed([
+        movie("Wonder Woman", year=2017, genres="Action"),
+        movie("Other Film", genres="Action"),
+        show("Wonder Woman", genres="Action", episodes=60),
+    ])
+    _compose(pr, [
+        {"kind": "genre", "genre": "Action"},
+        {"kind": "marathon", "value": "Wonder Woman"},
+        {"kind": "tv_movie_mix", "genre": "Action"},
+        {"kind": "franchise", "name": "Wonder Woman Collection", "titles": ["Wonder Woman"]},
+    ])
+    draft = json.loads((pr._test_data_dir / "channels.draft.json").read_text(encoding="utf-8"))
+    by_name = {c["name"]: c["content"] for c in draft["channels"]}
+    assert by_name["Action Movies"] == ["Other Film", {"movie": "Wonder Woman"}]
+    assert by_name["Wonder Woman 24/7"] == [{"show": "Wonder Woman"}]
+    assert by_name["Action"] == ["Other Film", {"movie": "Wonder Woman"}, {"show": "Wonder Woman"}]
+    assert by_name["Wonder Woman Collection"] == [{"movie": "Wonder Woman"}]
+
+
 # ── F12: country / mood / style compose kinds ──────────────────────────────────
 
 def test_country_spec_resolves_titles(pr, seed):

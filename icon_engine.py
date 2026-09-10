@@ -152,6 +152,12 @@ def icon_attempts(ch_def, kind):
 
     if solo:
         return [("tv", strings[0]), ("movie", strings[0])]
+    if len(content) == 1 and isinstance(content[0], dict):
+        # Typed title ref ({"movie": t} / {"show": t}): search only its own kind.
+        if "movie" in content[0]:
+            return [("movie", content[0]["movie"])]
+        if "show" in content[0]:
+            return [("tv", content[0]["show"])]
     if kind in BADGE_ONLY_KINDS:
         return []
     if kind == "marathon":
